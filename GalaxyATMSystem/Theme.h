@@ -1,0 +1,355 @@
+#pragma once
+
+#include <windows.h>
+#include <string>
+
+// -----------------------------------------------------------------------------
+// Visual theme + small GDI helpers shared by every block of the control panel.
+//
+// Matches the "КСА УВД ГАЛАКТИКА" reference export (KSA UVD GALAKTIKA.svg):
+// a dark olive card, white text and thin light-grey outlines throughout, with
+// every plate barely rounded. An inactive control is a near-black plate inside
+// that outline; anything "selected" - a ticked checkbox, a pressed button, a
+// live readout such as QNH or the transition level - is a flat #868E96 block
+// with white text on it instead.
+//
+// Colours are centralised here so the whole panel can be retuned in one place.
+// -----------------------------------------------------------------------------
+namespace Theme
+{
+    // Card
+    const COLORREF Background   = RGB(0x21, 0x27, 0x1C);  // #21271C - the card itself
+    const COLORREF Border       = RGB(0xC4, 0xC4, 0xC4);  // #C4C4C4 - group frames
+
+    // Controls take the same outline as the frames in the reference; only the
+    // square checkboxes of "Векторы" and "ОС" are drawn a step brighter.
+    const COLORREF BorderStrong = RGB(0xC4, 0xC4, 0xC4);  // #C4C4C4 - buttons and fields
+    const COLORREF BorderCheck  = RGB(0xFF, 0xFF, 0xFF);  // #FFFFFF - square checkboxes
+
+    // Control interiors. Plates (buttons, entry fields, unticked checkboxes)
+    // are near-black; a sunken list or a narrow inline input is a shade lighter.
+    const COLORREF ControlFill  = RGB(0x15, 0x15, 0x15);  // #151515
+    const COLORREF InsetFill    = RGB(0x1E, 0x1E, 0x1E);  // #1E1E1E
+
+    // Text
+    const COLORREF Text         = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF TextDim      = RGB(0xCF, 0xDA, 0xCF);
+
+    // Selected / live-value blocks: #868E96 with white text on top.
+    const COLORREF Active       = RGB(0x86, 0x8E, 0x96);
+    const COLORREF ActiveText   = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF Disabled     = RGB(0x3A, 0x55, 0x35);
+
+    // The two lighter greys the code block's "ВСЕ" and "БП" buttons carry.
+    const COLORREF ButtonLight  = RGB(0x69, 0x6F, 0x76);  // #696F76
+    const COLORREF ButtonMid    = RGB(0x49, 0x4D, 0x52);  // #494D52
+
+    // Vertical brightness slider of the code block.
+    const COLORREF SliderTrack  = RGB(0x16, 0x1A, 0x13);  // #161A13
+    const COLORREF SliderFill   = RGB(0x71, 0xFF, 0xF3);  // #71FFF3
+    const COLORREF SliderThumb  = RGB(0xD9, 0xD9, 0xD9);  // #D9D9D9
+
+    // Mode label (БЛОК 1) - the reference prints it in the same white as the
+    // date it sits next to, so only the offline state is dimmed.
+    const COLORREF ModeSim      = Text;
+    const COLORREF ModeOps      = Text;
+    const COLORREF ModeSup      = Text;
+    const COLORREF ModeOffline  = TextDim;
+
+    // The code block's two live readouts. Both are alarms rather than
+    // readings - they are empty whenever nothing is wrong - so they are read
+    // by their colour before they are read as text: a distress squawk in
+    // bright red, a code two aircraft are carrying at once in amber.
+    const COLORREF DistressText  = RGB(0xFF, 0x3B, 0x30);
+    const COLORREF DuplicateText = RGB(0xFF, 0xD6, 0x00);
+
+    // The index letter on the INDEX АТИС strip. The one lit thing on it: the
+    // label beside it is ordinary white, the letter is the value the strip
+    // exists to show, so it is picked out in lime the way the real system
+    // lights it up.
+    const COLORREF AtisIndexText = RGB(0x9E, 0xFF, 0x3D);
+
+    // "Список РЦ" - the sector list. Every colour here is "SPISKIRC.svg"'s own:
+    // a white card with the panel's dark ground inset in it, two near-black
+    // panes ruled in white, a grey heading row, and rows whose ground says
+    // whose flight it is - orange for the ones I am tracking, lavender for
+    // everyone else's. Only the callsign and the coordination flag are
+    // coloured on top of that.
+    const COLORREF ListCard      = RGB(0xFE, 0xFA, 0xFB);  // #FEFAFB - the card
+    const COLORREF ListTitleText = RGB(0x8E, 0x8E, 0x8E);  // its caption
+    const COLORREF ListPaneFill  = RGB(0x10, 0x10, 0x11);  // #101011 - a pane, and the filter field
+    const COLORREF ListHeadFill  = RGB(0x3C, 0x3C, 0x3C);  // #3C3C3C - heading row, and the scroll thumb
+    const COLORREF ListThumb     = RGB(0x3C, 0x3C, 0x3C);
+    const COLORREF ListRule      = RGB(0xFF, 0xFF, 0xFF);  // every white rule, frame and control edge
+    const COLORREF ListHeadText  = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF ListRowMine   = RGB(0xE5, 0xB4, 0x6F);  // #E5B46F - tracked by me
+    const COLORREF ListRowOther  = RGB(0xA7, 0xA8, 0xE0);  // #A7A8E0 - someone else's
+    const COLORREF ListRowRule   = RGB(0x1E, 0x1E, 0x1E);  // #1E1E1E - between two rows
+    const COLORREF ListText      = RGB(0x11, 0x11, 0x11);
+    const COLORREF ListCsMine    = RGB(0xFF, 0xFF, 0xFF);  // callsign, tracked by me
+    const COLORREF ListCsOther   = RGB(0x11, 0x53, 0xC0);  // callsign, anyone else
+    const COLORREF ListCrdReq    = RGB(0xD8, 0x1B, 0x14);  // coordination asked for, not answered
+    const COLORREF ListCrdOk     = RGB(0x0C, 0x9E, 0x2E);  // coordination agreed
+
+    // Ruler (distance/bearing/time measuring line drawn on the radar).
+    const COLORREF Ruler        = RGB(0xE0, 0xC9, 0x9A);  // beige
+
+    // Сигметы. The area is an outline in dark blue with nothing behind it,
+    // so the traffic and the map inside it stay fully readable. Pure #00008B
+    // disappears against the radar's black, so the blue is lifted just enough
+    // to read while staying unmistakably dark - retune here, in one place.
+    const COLORREF SigmetLine   = RGB(0x1C, 0x3C, 0xA0);
+    const int      SigmetWidth  = 2;    // pen width of that outline
+
+    // Its info window: black at half opacity with white text on it, so the
+    // radar underneath stays visible through the report. No border colour -
+    // the window carries no frame and no rules, only the text and the shade.
+    const COLORREF SigmetInfoBg   = RGB(0x00, 0x00, 0x00);
+    const BYTE     SigmetInfoAlpha = 128;   // 50%
+    const COLORREF SigmetInfoText = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF SigmetInfoEdge = RGB(0xFF, 0xFF, 0xFF);   // same white as the text
+
+    // АТИС window. Taken from the photograph of the real system: an
+    // olive card inside a light two-pixel frame, a grey title bar shading from
+    // light to dark with a white caption on it, and the message itself on a
+    // mid-grey panel in *white* monospace - the panel is a shade the text sits
+    // lightly on, not paper with dark ink. The scrollbar beside it runs in a
+    // black trough with a light thumb and a black square at either end.
+    const COLORREF WinBody      = RGB(0x33, 0x3D, 0x2E);  // the window's card
+    const COLORREF WinFrame     = RGB(0xD4, 0xD8, 0xCE);  // every light edge in the window
+    const COLORREF WinTitleTop  = RGB(0x71, 0x71, 0x6D);  // title bar, top of the shade
+    const COLORREF WinTitleBot  = RGB(0x49, 0x49, 0x45);  // title bar, bottom of the shade
+    const COLORREF WinTitleText = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF Paper        = RGB(0x9C, 0x9C, 0x98);  // the message panel
+    const COLORREF PaperInk     = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF ButtonFace   = RGB(0x8B, 0x8B, 0x87);  // OK
+    const COLORREF ButtonText   = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF ScrollTrough = RGB(0x08, 0x08, 0x08);
+    const COLORREF ScrollThumb  = RGB(0x9C, 0x9C, 0x98);
+    const COLORREF ScrollEdge   = RGB(0x5C, 0x5C, 0x58);
+
+    // Fonts. One plain sans-serif size carries the whole panel; the header
+    // clock is the single exception, set a couple of steps larger so the time
+    // can be read from across the desk rather than only up close.
+    struct FontSet
+    {
+        HFONT Body   = NULL;   // everything on the panel
+        HFONT Clock  = NULL;   // the header clock, the one oversized item
+        HFONT List   = NULL;   // "Список РЦ" - its headings and callsigns
+        HFONT Small  = NULL;   // ATIS body text; fallback for over-long field values
+        HFONT Tiny   = NULL;   // last-resort size for an unusually long callsign/name
+        HFONT Large  = NULL;   // ATIS index letter
+        HFONT Ruler  = NULL;   // ruler bearing/distance/time label
+        HFONT Mono   = NULL;   // ATIS message body - the real system prints it monospaced
+        HFONT MonoBig= NULL;   // ATIS index line, a size up from the message
+        HFONT MonoHuge = NULL; // the АТИС literal in its own little window
+        HFONT WinTitle = NULL; // ATIS window caption - bold, unlike the panel's labels
+        HFONT WinTitleSmall = NULL; // the same, for the small letter window's bar
+
+        void EnsureCreated()
+        {
+            if (Body != NULL)
+                return;
+            const wchar_t* face = L"Arial";
+            auto mk = [&](int h, int weight)
+            {
+                return CreateFontW(h, 0, 0, 0, weight, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, face);
+            };
+            // A step down from the reference export's own sizes: the panel is
+            // read at a glance beside the radar picture, and at the export's
+            // size it dominated the screen. Every vertical metric in
+            // namespace L is scaled to match (see GalaxyATMSystem.cpp).
+            Body  = mk(-14, FW_NORMAL);
+            Clock = mk(-20, FW_NORMAL);
+            // The export's heading text brought down to the two fifths the
+            // whole "Список РЦ" window is drawn at.
+            List  = mk(-14, FW_BOLD);
+            Small = mk(-12, FW_NORMAL);
+            Tiny  = mk(-11, FW_NORMAL);
+            Large = mk(-19, FW_SEMIBOLD);
+            Ruler = mk(-13, FW_SEMIBOLD);
+            WinTitle = mk(-15, FW_BOLD);
+            WinTitleSmall = mk(-12, FW_BOLD);
+
+            auto mkMono = [](int h)
+            {
+                return CreateFontW(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+            };
+            Mono     = mkMono(-15);
+            MonoBig  = mkMono(-19);
+            MonoHuge = mkMono(-30);
+        }
+
+        void Destroy()
+        {
+            for (HFONT* f : { &Body, &Clock, &List, &Small, &Tiny, &Large, &Ruler,
+                              &Mono, &MonoBig, &MonoHuge, &WinTitle, &WinTitleSmall })
+            {
+                if (*f) { DeleteObject(*f); *f = NULL; }
+            }
+        }
+    };
+
+    // Every plate on the panel - the panel edge, the group boxes and each
+    // control alike - is a rectangle with a 2 px corner radius. GDI's RoundRect
+    // takes the corner ellipse's diameter, hence the doubling.
+    const int CornerRadius = 2;
+
+    inline void OutlineBox(HDC hDC, const RECT& r, COLORREF fill, COLORREF stroke)
+    {
+        HBRUSH br = CreateSolidBrush(fill);
+        HBRUSH oldBr = (HBRUSH)SelectObject(hDC, br);
+        HPEN pen = CreatePen(PS_SOLID, 1, stroke);
+        HPEN oldPen = (HPEN)SelectObject(hDC, pen);
+        RoundRect(hDC, r.left, r.top, r.right, r.bottom, CornerRadius * 2, CornerRadius * 2);
+        SelectObject(hDC, oldPen);
+        DeleteObject(pen);
+        SelectObject(hDC, oldBr);
+        DeleteObject(br);
+    }
+
+    // Same shape, filled flat with no outline.
+    inline void FillBox(HDC hDC, const RECT& r, COLORREF fill)
+    {
+        OutlineBox(hDC, r, fill, fill);
+    }
+
+    // Draw a single line of (wide) text inside a rect with the given font/colour.
+    inline void DrawLine(HDC hDC, const RECT& r, const std::wstring& text,
+        HFONT font, COLORREF color, UINT format)
+    {
+        HFONT oldFont = (HFONT)SelectObject(hDC, font);
+        SetTextColor(hDC, color);
+        RECT rc = r;
+        DrawTextW(hDC, text.c_str(), -1, &rc, format | DT_SINGLELINE);
+        SelectObject(hDC, oldFont);
+    }
+
+    inline SIZE MeasureText(HDC hDC, HFONT font, const std::wstring& text)
+    {
+        HFONT old = (HFONT)SelectObject(hDC, font);
+        SIZE sz{ 0, 0 };
+        GetTextExtentPoint32W(hDC, text.c_str(), (int)text.size(), &sz);
+        SelectObject(hDC, old);
+        return sz;
+    }
+
+    // A plain control: near-black interior, bright outline, white text.
+    inline void DrawControl(HDC hDC, const RECT& r, const std::wstring& text,
+        HFONT font, UINT format = DT_CENTER | DT_VCENTER)
+    {
+        OutlineBox(hDC, r, ControlFill, BorderStrong);
+        DrawLine(hDC, r, text, font, Text, format);
+    }
+
+    // A selected / live-value block: flat #868E96 with white text. Both the
+    // read-only readouts (QNH, transition level) and the pressed buttons carry
+    // the frame outline in the reference, so it is on by default here.
+    inline void DrawValueField(HDC hDC, const RECT& r, const std::wstring& text, HFONT font,
+        bool outlined = true, UINT format = DT_CENTER | DT_VCENTER)
+    {
+        OutlineBox(hDC, r, Active, outlined ? BorderStrong : Active);
+        // Left-aligned values are inset from the plate's edge by the same
+        // margin every other left-aligned readout on the panel carries.
+        RECT inner = r;
+        if ((format & DT_CENTER) == 0)
+            inner.left += 5;
+        DrawLine(hDC, inner, text, font, ActiveText, format);
+    }
+
+    // The аэродром block's buttons (ДАВЛ / Э/П / АТИС) are outlines with no
+    // plate behind them - the card shows straight through.
+    inline void DrawGhostControl(HDC hDC, const RECT& r, const std::wstring& text, HFONT font)
+    {
+        OutlineBox(hDC, r, Background, BorderStrong);
+        DrawLine(hDC, r, text, font, Text, DT_CENTER | DT_VCENTER);
+    }
+
+    // "Ед. изм." uses pill-shaped selectors rather than the square checkboxes
+    // the other blocks use. The corner ellipse is taken from the box's own side
+    // rather than fixed, so the pill still reads as a circle at any size.
+    inline void DrawRadio(HDC hDC, const RECT& r, bool selected)
+    {
+        HBRUSH br = CreateSolidBrush(selected ? Active : ControlFill);
+        HBRUSH oldBr = (HBRUSH)SelectObject(hDC, br);
+        HPEN pen = CreatePen(PS_SOLID, 1, BorderStrong);
+        HPEN oldPen = (HPEN)SelectObject(hDC, pen);
+        int d = (r.right - r.left) * 7 / 10;
+        RoundRect(hDC, r.left, r.top, r.right, r.bottom, d, d);
+        SelectObject(hDC, oldPen);
+        DeleteObject(pen);
+        SelectObject(hDC, oldBr);
+        DeleteObject(br);
+    }
+
+    // The АТИС window's own corner radius. Everything inside it is still
+    // square - only the card and the light edge round it are rounded, and the
+    // parts that reach the corners (the title bar) are clipped to this shape.
+    const int WinCornerRadius = 8;
+
+    inline HRGN WinRegion(const RECT& r)
+    {
+        return CreateRoundRectRgn(r.left, r.top, r.right, r.bottom,
+            WinCornerRadius * 2, WinCornerRadius * 2);
+    }
+
+    // The light edge round that card, drawn last and on top of everything the
+    // clip region let through, so the rounded corners come out clean.
+    inline void WinBorder(HDC hDC, const RECT& r, int width, COLORREF color)
+    {
+        HPEN pen = CreatePen(PS_INSIDEFRAME, width, color);
+        HPEN oldPen = (HPEN)SelectObject(hDC, pen);
+        HBRUSH oldBr = (HBRUSH)SelectObject(hDC, GetStockObject(NULL_BRUSH));
+        RoundRect(hDC, r.left, r.top, r.right, r.bottom,
+            WinCornerRadius * 2, WinCornerRadius * 2);
+        SelectObject(hDC, oldBr);
+        SelectObject(hDC, oldPen);
+        DeleteObject(pen);
+    }
+
+    // Everything inside the window is square-cornered chrome rather than one
+    // of the panel's rounded plates, so it draws through its own flat helpers.
+    inline void FlatFill(HDC hDC, const RECT& r, COLORREF fill)
+    {
+        HBRUSH br = CreateSolidBrush(fill);
+        RECT rc = r;
+        FillRect(hDC, &rc, br);
+        DeleteObject(br);
+    }
+
+    // A border of the given width drawn *inside* the rect, as the window's own
+    // light edge and the frame round the message panel both are.
+    inline void FlatFrame(HDC hDC, const RECT& r, int width, COLORREF color)
+    {
+        HBRUSH br = CreateSolidBrush(color);
+        RECT top    = { r.left, r.top, r.right, r.top + width };
+        RECT bottom = { r.left, r.bottom - width, r.right, r.bottom };
+        RECT left   = { r.left, r.top, r.left + width, r.bottom };
+        RECT right  = { r.right - width, r.top, r.right, r.bottom };
+        for (RECT* side : { &top, &bottom, &left, &right })
+            FillRect(hDC, side, br);
+        DeleteObject(br);
+    }
+
+    // The title bar's shade, a row of 1 px bands - too few rows to be worth a
+    // GradientFill and its msimg32 dependency.
+    inline void VGradient(HDC hDC, const RECT& r, COLORREF top, COLORREF bottom)
+    {
+        int h = r.bottom - r.top;
+        if (h <= 0)
+            return;
+
+        for (int y = 0; y < h; y++)
+        {
+            int R = GetRValue(top) + (GetRValue(bottom) - GetRValue(top)) * y / h;
+            int G = GetGValue(top) + (GetGValue(bottom) - GetGValue(top)) * y / h;
+            int B = GetBValue(top) + (GetBValue(bottom) - GetBValue(top)) * y / h;
+            RECT band = { r.left, r.top + y, r.right, r.top + y + 1 };
+            FlatFill(hDC, band, RGB(R, G, B));
+        }
+    }
+}

@@ -1,0 +1,38 @@
+{
+  "Airport": "ULLI",
+
+  "QnhMmHg": "760",
+  "QnhHpa": "1013",
+
+  "Positions": {
+    "ULLL_CTR":    { "Designation": "R1",    "Role": "R1 ДРУ + ДПК" },
+    "ULLL_R2_CTR": { "Designation": "R2",    "Role": "R2 ДРУ + ДПК" },
+    "ULLL_R3_CTR": { "Designation": "R3",    "Role": "R3 ДРУ + ДПК" },
+    "ULLL_R5_CTR": { "Designation": "R5",    "Role": "R5 ДРУ + ДПК" },
+    "ULLL_R6_CTR": { "Designation": "R6",    "Role": "R6 ДРУ + ДПК" },
+    "ULLL_SW_CTR": { "Designation": "R3+R4", "Role": "R3+R4 ДРУ + ДПК" },
+    "ULLL_R4_CTR": { "Designation": "R4",    "Role": "R4 ДРУ + ДПК" },
+    "ULLL_AM_CTR": { "Designation": "AM",    "Role": "AM ДРУ + ДПК" },
+    "ULLL_AR_CTR": { "Designation": "AR",    "Role": "AR ДРУ + ДПК" },
+    "ULLL_MR_CTR": { "Designation": "MR",    "Role": "MR ДРУ + ДПК" },
+    "ULLL_NM_CTR": { "Designation": "NM",    "Role": "NM ДРУ + ДПК" },
+    "ULLL_KT_CTR": { "Designation": "KT",    "Role": "KT ДРУ + ДПК" },
+    "ULLL_R_CTR":  { "Designation": "R",     "Role": "R ДРУ + ДПК" },
+    "ULLL_W_CTR":  { "Designation": "W",     "Role": "W ДРУ + ДПК" },
+    "ULLL_WK_CTR": { "Designation": "WK",    "Role": "WK ДРУ + ДПК" },
+    "ULLL_S_CTR":  { "Designation": "S",     "Role": "S ДРУ + ДПК" },
+    "ULLL_SK_CTR": { "Designation": "SK",    "Role": "SK ДРУ + ДПК" }
+  },
+
+  "Sigmets": {
+    "Enabled": true,
+    "RefreshMinutes": 10,
+    "Firs": ["ULLL"]
+  },
+
+  "Atis": {
+    "Index": "Z",
+    "TextRu": "ПУЛКОВО АТИС. ИНФОРМАЦИЯ ЗУЛУ, 20:00. ЗАХОД ПО ИЛС ПОЛОСА 28 ЛЕВАЯ. ПОКРЫТА МОКРЫМ СНЕГОМ МЕНЕЕ 10% 5 МИЛЛИМЕТРОВ. РАСЧЁТНОЕ СЦЕПЛЕНИЕ ХОРОШЕЕ. ДЛЯ ВЫЛЕТА ПОЛОСА 28 ПРАВАЯ, ПОКРЫТА МОКРЫМ СНЕГОМ МЕНЕЕ 10% 5 МИЛЛИМЕТРОВ. РАСЧЁТНОЕ СЦЕПЛЕНИЕ ХОРОШЕЕ. ЭШЕЛОН ПЕРЕХОДА 50. ПЕРРОН И РУЛЁЖНЫЕ ДОРОЖКИ СКОЛЬЗКИЕ. РУЛЕНИЕ С ОСТОРОЖНОСТЬЮ. ОПАСНОСТЬ СТОЛКНОВЕНИЯ С ПТИЦАМИ В РАЙОНЕ АЭРОДРОМА И НА ПРЯМОЙ",
+    "TextEn": "ST PETERSBURG PULKOVO ATIS. INFORMATION ZULU, 20:00. EXPECT ILS APPROACH Z RUNWAY 28 LEFT. COVERED WITH WET SNOW LESS 10% 5 MILLIMETERS. ESTIMATED SURFACE FRICTION GOOD FOR DEPARTURE RUNWAY 28 RIGHT COVERED WITH WET SNOW LESS 10% 5 MILLIMETERS. ESTIMATED SURFACE FRICTION GOOD. TRANSITION LEVEL 50. APRON AND TAXIWAYS ARE SLIPPERY. TAXI WITH CAUTION. BIRD STRIKE HAZARD IN VICINITY OF AERODROME AND ON FINAL"
+  }
+}
