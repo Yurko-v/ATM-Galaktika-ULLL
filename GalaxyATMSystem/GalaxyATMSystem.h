@@ -65,11 +65,33 @@ public:
     // thread and to re-fetch periodically.
     virtual void OnTimer(int Counter);
 
-    // Squawks from the shared server (see Squawk.h): the "ULLL Squawk" column's
-    // clicks and menu, and a code changed some other way reported back to it.
-    virtual void OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area);
+    // Squawks from the shared server (see Squawk.h). The "ULLL Squawk" column's
+    // clicks land on the radar screen, not here - see CGalaxyATMSystemRadarScreen
+    // ::OnFunctionCall: EuroScope routes a TAG item function to whichever screen
+    // the tag belongs to, not to the plugin. This is only the plugin's own share
+    // of it: a code changed some other way is reported back to the server.
     virtual void OnFlightPlanControllerAssignedDataUpdate(
         EuroScopePlugIn::CFlightPlan FlightPlan, int DataType);
+
+    // Configured, and connected to the live network - a sweatbox session must
+    // not take codes out of the real pool. With 'tell', says why not.
+    bool SquawkReady(bool tell);
+    std::string MyPosition() const;
+
+    // Thin forwarders so the radar screen's OnFunctionCall can drive the squawk
+    // client and the "set by us" map without reaching into private state.
+    void SquawkAssign(const std::string& callsign, const std::string& position, bool fresh, bool byUser)
+    {
+        m_squawk.Assign(callsign, position, fresh, byUser);
+    }
+    void SquawkReport(const std::string& callsign, const std::string& code, const std::string& position, bool byUser)
+    {
+        m_squawk.Report(callsign, code, position, byUser);
+    }
+    void NoteSquawkSetByUs(const std::string& callsign, const std::string& code)
+    {
+        m_squawkSetByUs[callsign] = code;
+    }
 
     const Config& GetConfig() const { return m_config; }
 
@@ -200,16 +222,7 @@ private:
     // EuroScope raises for them is not reported back as one typed by hand.
     std::map<std::string, std::string> m_squawkSetByUs;
 
-    // The aircraft and the cell the menu was opened on, for the item picked in
-    // it and for the edit box "Ввести вручную" opens in the same place.
-    std::string m_squawkMenuCallsign;
-    RECT m_squawkMenuArea = { 0, 0, 0, 0 };
-
     void ConfigureSquawk();
-    // Configured, and connected to the live network - a sweatbox session must
-    // not take codes out of the real pool. With 'tell', says why not.
-    bool SquawkReady(bool tell);
-    std::string MyPosition() const;
     // The answers that have come back: codes set on their flight plans, and
     // what went wrong with a request a controller clicked for.
     void ApplySquawkAnswers();
@@ -559,6 +572,12 @@ private:
     int  m_rcSortKey;       // index into kRcSortKeys
     bool m_rcSortAsc;
     std::wstring m_rcFilter;   // substring match on the callsign, empty = everything
+
+    // "ULLL Squawk" menu (see OnFunctionCall): the aircraft and the cell it was
+    // opened on, for the item picked in it and for the edit box "Ввести вручную"
+    // opens in the same place.
+    std::string m_squawkMenuCallsign;
+    RECT m_squawkMenuArea = { 0, 0, 0, 0 };
 
     bool m_atisOpen;
     int  m_atisScrollPx;
