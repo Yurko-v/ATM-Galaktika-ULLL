@@ -95,6 +95,13 @@
    - На вопрос `Are you sure you want to continue connecting (yes/no)?` введите `yes`.
    - Введите пароль от панели Beget. **При вводе пароля на экране ничего не
      отображается** — это нормально, просто наберите и нажмите Enter.
+
+   > **Если пароль не подходит** (`Permission denied`), убедитесь, что раскладка
+   > английская и Caps Lock выключен, и что это именно пароль от панели Beget, а не
+   > от FTP или от MySQL. Не помогло — в панели раздел **«SSH доступ»** умеет сам
+   > сгенерировать пару ключей кнопкой **«Создать ключ»** и сразу разрешить по ней
+   > вход, без пароля вообще; используйте эту пару с `ssh -i путь_к_приватному_ключу
+   > ЛОГИН@СЕРВЕР`.
 4. Проверка: появилось приглашение командной строки Beget. Выполните:
    ```bash
    git --version
@@ -109,39 +116,13 @@
 Все команды следующих шагов вводятся **в этом окне SSH**. Каждую команду можно
 скопировать и вставить (в PowerShell вставка — правой кнопкой мыши).
 
-### Шаг 6. Ключ, чтобы Beget мог читать репозиторий
+### Шаг 6. Скачать репозиторий и подключить папку сайта
 
-Репозиторий на GitHub приватный, поэтому серверу нужен свой ключ «только на чтение».
-
-1. Создать ключ (на Beget, в окне SSH):
-   ```bash
-   mkdir -p ~/.ssh && chmod 711 ~/.ssh
-   ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N "" -C beget-squawk
-   printf "Host github.com\n  IdentityFile ~/.ssh/github_deploy\n  IdentitiesOnly yes\n" >> ~/.ssh/config
-   chmod 600 ~/.ssh/config
-   cat ~/.ssh/github_deploy.pub
-   ```
-   Последняя команда выведет одну строку вида `ssh-ed25519 AAAA... beget-squawk` —
-   скопируйте её **целиком**.
-2. На GitHub: откройте репозиторий `Yurko-v/ATM-Galaktika-ULLL` → **Settings** →
-   слева **Deploy keys** → **Add deploy key**:
-   - **Title:** `Beget squawk`
-   - **Key:** вставить скопированную строку
-   - галочку **Allow write access НЕ ставить**
-   - **Add key**.
-3. Проверка (на Beget):
-   ```bash
-   ssh -T git@github.com
-   ```
-   На вопрос про `yes/no` ответить `yes`. Правильный ответ:
-   `Hi Yurko-v/ATM-Galaktika-ULLL! You've successfully authenticated, but GitHub does not provide shell access.`
-   Если `Permission denied (publickey)` — ключ на GitHub не добавлен или скопирован
-   не полностью.
-
-### Шаг 7. Скачать репозиторий и подключить папку сайта
+Репозиторий на GitHub публичный, поэтому отдельный ключ для чтения не нужен —
+клонируется обычной HTTPS-ссылкой:
 
 ```bash
-git clone git@github.com:Yurko-v/ATM-Galaktika-ULLL.git ~/squawk/repo
+git clone https://github.com/Yurko-v/ATM-Galaktika-ULLL.git ~/squawk/repo
 rm -rf ~/squawk/public_html
 ln -s ~/squawk/repo/server/public ~/squawk/public_html
 ls -l ~/squawk
@@ -153,7 +134,7 @@ ls -l ~/squawk
   теперь сайт `squawk.ДОМЕН` показывает именно её.
 - Проверка: `ls -l` показывает строку `public_html -> /home/.../squawk/repo/server/public`.
 
-### Шаг 8. Настройки сервера (config.php)
+### Шаг 7. Настройки сервера (config.php)
 
 1. Создать файл настроек из примера и сгенерировать ключ API:
    ```bash
@@ -182,14 +163,14 @@ ls -l ~/squawk
    ```json
    {"ok":true,"network_updated":null,"network_fresh":false,"active":0}
    ```
-   - `network_fresh: false` пока нормально — данные VATSIM появятся после шага 9.
+   - `network_fresh: false` пока нормально — данные VATSIM появятся после шага 8.
    - `{"error":"server_error"}` — неверные данные базы в `config.php` (имя, пароль).
-   - Ошибка 404 — не сработала ссылка из шага 7 или поддомен смотрит не на сайт `squawk`.
+   - Ошибка 404 — не сработала ссылка из шага 6 или поддомен смотрит не на сайт `squawk`.
 
 `config.php` указан в `.gitignore`: git его не видит, и обновления с GitHub его не
 перезапишут.
 
-### Шаг 9. Синхронизация с VATSIM (cron)
+### Шаг 8. Синхронизация с VATSIM (cron)
 
 1. Сначала запустить задачу вручную (подставьте свою версию PHP из шага 3):
    ```bash
@@ -211,7 +192,7 @@ ls -l ~/squawk
    - `https://squawk.ДОМЕН/api/health.php` → `"network_fresh": true`;
    - на Beget `tail ~/squawk/cron.log` → по строке `pilots=...` на каждую минуту.
 
-### Шаг 10. Проверить выдачу кодов
+### Шаг 9. Проверить выдачу кодов
 
 Эти команды можно выполнять прямо на Beget в окне SSH (подставьте домен и ключ API):
 
@@ -239,7 +220,7 @@ curl -s $URL/state.php -H "X-Api-Key: $KEY"
 - `TEST1` в сети VATSIM нет, поэтому примерно через 10 минут cron сам освободит его
   код и он пропадёт из `state.php` — так заодно проверяется освобождение.
 
-### Шаг 11. Подключить плагин
+### Шаг 10. Подключить плагин
 
 У каждого диспетчера в `Documents\Galaxy ATM System\GalaxyATMSystem.json`:
 
@@ -263,8 +244,8 @@ Departure list.
 менялось что-то в `server/`, GitHub сам заходит на Beget по SSH и выполняет
 `git pull` в `~/squawk/repo`. Сайт сразу работает на новом коде.
 
-Для этого GitHub нужен **свой** ключ входа на Beget (не тот, что в шаге 6 — тот
-только читает репозиторий).
+Для этого GitHub нужен свой ключ входа на Beget — отдельный от чтения репозитория,
+которое теперь идёт без ключа вообще (репозиторий публичный).
 
 ### 1. Ключ для GitHub Actions (на Beget, в окне SSH)
 
