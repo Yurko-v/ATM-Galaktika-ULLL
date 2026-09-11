@@ -111,12 +111,13 @@ namespace Theme
     // read as the wake the aircraft leaves. The vector's colour, a touch
     // heavier than it.
     //
-    // Every distance grows with the square root of the zoom (pixels per
-    // nautical mile): zoom in four times and the arcs are twice as big. A
-    // plain ground distance is lost at an area-control zoom, where half a mile
-    // is a pixel or two and the wheel would hardly move the arcs; the square
-    // root keeps them working-size there, still grows them visibly on every
-    // turn of the wheel, and reaches TrackArrow's size at an approach zoom.
+    // Every distance grows with a power of the zoom (pixels per nautical mile)
+    // a little under a square root. A plain ground distance is lost at an
+    // area-control zoom, where half a mile is a pixel or two and the wheel
+    // would hardly move the arcs; a power this size keeps them working-size
+    // there and still grows them visibly on every turn of the wheel, but more
+    // gently than a square root did - that made them too big zoomed right in.
+    // The scales are set so an area-control zoom (~10 px/NM) looks as before.
     // Floored, so zoomed right out they never fold into the symbol.
     //
     // How far an arc stands off and how big it is are separate: the arc is a
@@ -124,10 +125,11 @@ namespace Theme
     // stand well clear and still be short. Its size is a share of its
     // distance, so it keeps the same shape at every zoom.
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcDistScale = 7.0;    // target to the middle of the inner arc, x sqrt(px/NM)
+    const double   WakeArcZoomPower = 0.45;   // 0.5 would be a square root: bigger when zoomed in
+    const double   WakeArcDistScale = 7.85;   // target to the middle of the inner arc, x (px/NM)^power
     const double   WakeArcDistMin   = 10.0;   // ...but never less, px
     const double   WakeArcSize      = 0.8;    // the arc's own radius, as a share of that
-    const double   WakeArcStepScale = 1.75;   // out to a super's second arc, x sqrt(px/NM)
+    const double   WakeArcStepScale = 1.96;   // out to a super's second arc, x (px/NM)^power
     const double   WakeArcStepMin   = 4.0;    // ...but never less, px
     const double   WakeArcSweep     = 90.0;   // degrees, centred behind
 

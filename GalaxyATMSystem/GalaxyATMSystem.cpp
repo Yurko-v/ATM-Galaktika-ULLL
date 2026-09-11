@@ -4565,10 +4565,11 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
             continue;
         double pxPerNM = aheadPx / kAheadNM;
 
-        // With the square root of the zoom, so the wheel visibly grows and
-        // shrinks the arcs at every scale (see Theme) - floored, so they stay
+        // With a power of the zoom a little under a square root, so the wheel
+        // visibly grows and shrinks the arcs at every scale without them
+        // ballooning when zoomed right in (see Theme) - floored, so they stay
         // clear of the symbol however far out.
-        double zoom = sqrt(pxPerNM);
+        double zoom = pow(pxPerNM, Theme::WakeArcZoomPower);
         double dist = max(Theme::WakeArcDistMin, Theme::WakeArcDistScale * zoom);
         double step = max(Theme::WakeArcStepMin, Theme::WakeArcStepScale * zoom);
 
