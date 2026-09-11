@@ -49,7 +49,15 @@ public:
     // The folder the endpoints are in ("https://squawk.example.ru/api"), the
     // key the server wants, and how often to poll it. An empty URL switches
     // the client off. Called again on ".reload".
-    void Configure(const std::string& baseUrl, const std::string& apiKey, int pollSeconds);
+    //
+    // 'logPath', when it is not empty, is a file every request and answer is
+    // appended to - the only way to see what the worker thread is doing, since
+    // it cannot put anything on the screen itself. See Config::SquawkDebug.
+    void Configure(const std::string& baseUrl, const std::string& apiKey, int pollSeconds,
+        const std::wstring& logPath = std::wstring());
+
+    // One timestamped line into that file; does nothing without one.
+    void Log(const std::string& line);
     void Stop();
     bool Enabled() const;
 
@@ -91,6 +99,8 @@ private:
     void Poll(const std::string& url, const std::string& key);
 
     mutable std::mutex m_mutex;
+    mutable std::mutex m_logMutex;
+    std::wstring m_logPath;
     std::condition_variable m_wake;
     std::thread m_worker;
     bool m_stop = false;

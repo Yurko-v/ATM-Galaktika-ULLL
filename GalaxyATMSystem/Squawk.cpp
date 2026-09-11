@@ -5,6 +5,8 @@
 
 #include <cctype>
 #include <chrono>
+#include <ctime>
+#include <fstream>
 
 namespace
 {
@@ -41,7 +43,32 @@ SquawkClient::~SquawkClient()
     Stop();
 }
 
-void SquawkClient::Configure(const std::string& baseUrl, const std::string& apiKey, int pollSeconds)
+void SquawkClient::Log(const std::string& line)
+{
+    std::wstring path;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        path = m_logPath;
+    }
+    if (path.empty())
+        return;
+
+    // The worker thread and EuroScope's own both write here.
+    std::lock_guard<std::mutex> lock(m_logMutex);
+    std::ofstream file(path, std::ios::app);
+    if (!file)
+        return;
+
+    time_t now = time(NULL);
+    tm utc = {};
+    char stamp[32] = "";
+    if (gmtime_s(&utc, &now) == 0)
+        strftime(stamp, sizeof(stamp), "%H:%M:%S", &utc);
+    file << stamp << "  " << line << "\n";
+}
+
+void SquawkClient::Configure(const std::string& baseUrl, const std::string& apiKey, int pollSeconds,
+    const std::wstring& logPath)
 {
     std::string url = baseUrl;
     while (!url.empty() && (url.back() == '/' || url.back() == ' '))
@@ -49,6 +76,7 @@ void SquawkClient::Configure(const std::string& baseUrl, const std::string& apiK
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_logPath = logPath;
         m_url = url;
         m_key = apiKey;
         m_pollSeconds = max(5, min(300, pollSeconds));
@@ -61,6 +89,9 @@ void SquawkClient::Configure(const std::string& baseUrl, const std::string& apiK
             m_assignments = std::make_shared<const std::map<std::string, std::string>>();
         }
     }
+
+    Log("configured: url=" + (url.empty() ? std::string("(none - client off)") : url)
+        + " key=" + std::to_string(apiKey.size()) + " chars poll=" + std::to_string(pollSeconds) + "s");
 
     if (url.empty())
     {
@@ -261,12 +292,17 @@ SquawkAnswer SquawkClient::Send(const Request& request, const std::string& url, 
 
     std::string headers = "Content-Type: application/json\r\nX-Api-Key: " + Token(key, 128, false) + "\r\n";
 
+    Log("POST " + url + endpoint + " " + body);
+
     Net::HttpResponse response;
     if (!Net::HttpRequest("POST", url + endpoint, headers, body, response))
     {
+        Log("  -> no answer at all (network, DNS or timeout)");
         answer.error = "network";
         return answer;
     }
+
+    Log("  -> " + std::to_string(response.status) + " " + response.body.substr(0, 300));
 
     Json::Value parsed;
     bool isObject = Json::ParseUtf8(response.body, parsed) && parsed.kind == Json::Value::Kind::Object;
@@ -312,9 +348,16 @@ void SquawkClient::Poll(const std::string& url, const std::string& key)
     Net::HttpResponse response;
     std::string headers = "X-Api-Key: " + Token(key, 128, false) + "\r\n";
     if (!Net::HttpRequest("GET", url + "/state.php", headers, std::string(), response, 1024 * 1024))
+    {
+        Log("GET " + url + "/state.php -> no answer at all (network, DNS or timeout)");
         return;
+    }
     if (response.status != 200)
+    {
+        Log("GET " + url + "/state.php -> " + std::to_string(response.status)
+            + " " + response.body.substr(0, 200));
         return;
+    }
 
     Json::Value parsed;
     if (!Json::ParseUtf8(response.body, parsed))
@@ -331,6 +374,8 @@ void SquawkClient::Poll(const std::string& url, const std::string& key)
         if (!callsign.empty() && IsSquawkCode(code))
             (*held)[callsign] = code;
     }
+
+    Log("state: " + std::to_string(held->size()) + " codes out");
 
     std::lock_guard<std::mutex> lock(m_mutex);
     m_assignments = held;

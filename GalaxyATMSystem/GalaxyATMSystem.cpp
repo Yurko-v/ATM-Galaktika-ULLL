@@ -1019,7 +1019,22 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
 // "ULLL Squawk menu" opens the menu with the rest.
 void CGalaxyATMSystemPlugin::ConfigureSquawk()
 {
-    m_squawk.Configure(m_config.SquawkServerUrl(), m_config.SquawkApiKey(), m_config.SquawkPollSeconds());
+    // With Squawk.Debug on, everything the client does is appended to
+    // squawk-debug.log beside the plug-in - the worker thread has nowhere else
+    // to say what the server answered.
+    std::wstring log;
+    if (m_config.SquawkDebug())
+    {
+        wchar_t path[MAX_PATH] = { 0 };
+        GetModuleFileNameW(g_hModule, path, MAX_PATH);
+        std::wstring p(path);
+        size_t slash = p.find_last_of(L"\\/");
+        if (slash != std::wstring::npos)
+            log = p.substr(0, slash + 1) + L"squawk-debug.log";
+    }
+
+    m_squawk.Configure(m_config.SquawkServerUrl(), m_config.SquawkApiKey(),
+        m_config.SquawkPollSeconds(), log);
 }
 
 // Everything that goes into EuroScope's own windows - popup lists, popup edits
@@ -1031,11 +1046,13 @@ void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::string& text)
     if (!m_config.SquawkDebug())
         return;
     DisplayUserMessage("ULLL Squawk", "debug", text.c_str(), true, true, true, true, false);
+    m_squawk.Log(text);
 }
 
 void CGalaxyATMSystemPlugin::SquawkMessage(const std::string& text)
 {
     DisplayUserMessage("ULLL Squawk", "squawk", text.c_str(), true, true, false, false, false);
+    m_squawk.Log("message: " + text);
 }
 
 bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
