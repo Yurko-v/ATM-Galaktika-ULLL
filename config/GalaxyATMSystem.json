@@ -58,7 +58,7 @@
   "Squawk": {
     "Enabled": true,
     "ServerUrl": "",
-    "ApiKey": "",
+    "ApiKeyFile": "squawk-key.txt",
     "PollSeconds": 15,
     "AllowSweatbox": false,
     "Debug": false

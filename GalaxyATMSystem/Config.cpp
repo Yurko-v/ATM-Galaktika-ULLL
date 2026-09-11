@@ -377,6 +377,39 @@ void Config::Load(HINSTANCE hModule)
                 m_SquawkServerUrl = Json::WideToUtf8(v->AsString());
             if (const Json::Value* v = sq->Find(L"ApiKey"))
                 m_SquawkApiKey = Json::WideToUtf8(v->AsString());
+
+            // The key kept out of the config file itself, so the config can be
+            // handed to another controller, or committed, without the key
+            // riding along with it. Read after "ApiKey" and overrides it; a
+            // relative name is taken from the folder the plug-in sits in.
+            if (const Json::Value* v = sq->Find(L"ApiKeyFile"))
+            {
+                std::wstring name = v->AsString();
+                if (!name.empty())
+                {
+                    std::wstring path = ResolvePath(hModule, name);
+                    std::ifstream keyFile(path, std::ios::binary);
+                    if (!keyFile)
+                    {
+                        m_LoadError = L"squawk: cannot open " + path;
+                    }
+                    else
+                    {
+                        std::string raw((std::istreambuf_iterator<char>(keyFile)),
+                            std::istreambuf_iterator<char>());
+
+                        // The first line of it, however the file ends its lines
+                        // and whatever spacing someone left around the key.
+                        size_t line = raw.find_first_of("\r\n");
+                        if (line != std::string::npos)
+                            raw.erase(line);
+                        size_t from = raw.find_first_not_of(" \t");
+                        size_t to = raw.find_last_not_of(" \t");
+                        m_SquawkApiKey = (from == std::string::npos)
+                            ? std::string() : raw.substr(from, to - from + 1);
+                    }
+                }
+            }
             if (const Json::Value* v = sq->Find(L"PollSeconds"))
                 m_SquawkPollSeconds = (int)max(5LL, min(300LL, v->AsInt(m_SquawkPollSeconds)));
             if (const Json::Value* v = sq->Find(L"AllowSweatbox"))
