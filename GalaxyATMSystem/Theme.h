@@ -111,26 +111,27 @@ namespace Theme
     // read as the wake the aircraft leaves. The vector's colour, a touch
     // heavier than it.
     //
-    // Every distance grows with a power of the zoom (pixels per nautical mile)
-    // a little under a square root. A plain ground distance is lost at an
-    // area-control zoom, where half a mile is a pixel or two and the wheel
-    // would hardly move the arcs; a power this size keeps them working-size
-    // there and still grows them visibly on every turn of the wheel, but more
-    // gently than a square root did - that made them too big zoomed right in.
-    // The scales are set so an area-control zoom (~10 px/NM) looks as before.
-    // Floored, so zoomed right out they never fold into the symbol.
+    // Every distance grows only gently with the zoom (pixels per nautical
+    // mile) and stops growing at a ceiling. The size that works is the one at
+    // an area-control zoom (~10 px/NM); an approach controller zooms in a long
+    // way further, and arcs that kept growing with the picture - even with a
+    // square root of it - came out huge there. So a low power keeps a little
+    // life in the wheel, the ceiling caps it, and the floor keeps them clear
+    // of the symbol when zoomed right out.
     //
     // How far an arc stands off and how big it is are separate: the arc is a
     // piece of a smaller circle whose centre sits behind the target, so it can
     // stand well clear and still be short. Its size is a share of its
     // distance, so it keeps the same shape at every zoom.
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcZoomPower = 0.45;   // 0.5 would be a square root: bigger when zoomed in
-    const double   WakeArcDistScale = 7.85;   // target to the middle of the inner arc, x (px/NM)^power
+    const double   WakeArcZoomPower = 0.25;   // how much the wheel still grows them; 0 = fixed size
+    const double   WakeArcDistScale = 12.4;   // target to the middle of the inner arc, x (px/NM)^power
     const double   WakeArcDistMin   = 10.0;   // ...but never less, px
+    const double   WakeArcDistMax   = 28.0;   // ...and never more, px - the approach-zoom ceiling
     const double   WakeArcSize      = 0.8;    // the arc's own radius, as a share of that
-    const double   WakeArcStepScale = 1.96;   // out to a super's second arc, x (px/NM)^power
+    const double   WakeArcStepScale = 3.1;    // out to a super's second arc, x (px/NM)^power
     const double   WakeArcStepMin   = 4.0;    // ...but never less, px
+    const double   WakeArcStepMax   = 7.0;    // ...and never more, px
     const double   WakeArcSweep     = 90.0;   // degrees, centred behind
 
     // Сигметы. The area is an outline in dark blue with nothing behind it,
