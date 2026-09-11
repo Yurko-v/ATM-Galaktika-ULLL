@@ -18,106 +18,319 @@
 
 Наружу смотрит только `public/`; `lib`, `cron` и `config.php` из интернета недоступны.
 
+---
+
 ## Установка на Beget (один раз)
 
-Сайт, который уже есть на аккаунте, не затрагивается: сервис ставится отдельным сайтом
-на поддомен, а файлы берутся прямо из репозитория на GitHub.
+Сайт, который уже есть на аккаунте, не затрагивается: сервис ставится **отдельным
+сайтом** на поддомен, а файлы берутся прямо из репозитория на GitHub.
 
-### 1. Сайт, поддомен, SSL, PHP
+В примерах ниже:
 
-- Панель → «Сайты» → создать сайт `squawk` (папка `~/squawk/public_html`).
-- «Домены и поддомены» → поддомен `squawk.<домен>` → привязать к сайту `squawk`.
-- «SSL сертификаты» → бесплатный сертификат для `squawk.<домен>`.
-- В настройках сайта выбрать PHP 8.x.
+- `ЛОГИН` — логин от панели Beget;
+- `СЕРВЕР` — имя сервера из панели (вида `имя.beget.tech`, см. шаг 3);
+- `ДОМЕН` — домен вашего сайта, например `example.ru`;
+- названия пунктов меню панели могут чуть отличаться — ищите по смыслу.
 
-### 2. База
+Итог после всех шагов:
 
-Панель → «MySQL» → создать базу (на Beget пользователь = имя базы, хост `localhost`).
-phpMyAdmin → «Импорт» → `server/schema.sql`.
-
-### 3. SSH
-
-Главная страница панели → включить SSH. Адрес там же; логин и пароль — от панели.
-
-### 4. Ключ, чтобы Beget мог читать приватный репозиторий
-
-На Beget по SSH:
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N ""
-printf "Host github.com\n  IdentityFile ~/.ssh/github_deploy\n" >> ~/.ssh/config
-cat ~/.ssh/github_deploy.pub
 ```
-Строку из `cat` добавить на GitHub: репозиторий → Settings → Deploy keys → Add deploy key
-(без галочки «Allow write access»).
+~/squawk/
+├── repo/                    ← клон репозитория с GitHub
+│   └── server/
+│       ├── config.php       ← создаёте вы, в git не попадает
+│       ├── lib/  cron/  public/ ...
+└── public_html  →  repo/server/public   (ссылка: это и есть сайт squawk.ДОМЕН)
+```
 
-### 5. Клон и папка сайта
+---
+
+### Шаг 1. Сайт и поддомен
+
+1. Панель → **«Сайты»** → создать новый сайт. Имя папки: `squawk`.
+   Beget создаст папку `~/squawk/public_html` с заглушкой `index.php` — это нормально,
+   на шаге 5 мы её заменим.
+2. Панель → **«Управление доменами и поддоменами»** → вкладка **«Поддомены»** →
+   создать поддомен `squawk` для вашего домена и **направить его на сайт `squawk`**
+   (не на основной сайт!).
+3. Проверка: через несколько минут `http://squawk.ДОМЕН` открывается и показывает
+   заглушку Beget.
+
+### Шаг 2. SSL (https)
+
+1. Панель → **«SSL сертификаты»** → выпустить **бесплатный** сертификат для
+   `squawk.ДОМЕН`.
+2. Если Beget пишет, что домен не найден или не указывает на сервер — подождите
+   15–30 минут после шага 1 (поддомен ещё расходится по DNS) и повторите.
+3. Проверка: `https://squawk.ДОМЕН` открывается с замком в браузере.
+
+### Шаг 3. Версия PHP
+
+1. Панель → **«Управление доменами и поддоменами»** → у `squawk.ДОМЕН` значок
+   настроек (шестерёнка) → версия PHP **8.1 или новее** (лучше самая новая 8.x).
+2. Запомните выбранную версию, например `8.2` — она понадобится в шаге 8.
+
+### Шаг 4. База данных
+
+1. Панель → **«MySQL»** → создать базу. Beget предложит имя вида `ЛОГИН_squawk`
+   и пароль. **Запишите оба.** На Beget имя пользователя базы совпадает с именем
+   базы, сервер базы — `localhost`.
+2. В списке баз у новой базы нажмите вход в **phpMyAdmin**.
+3. В phpMyAdmin слева выберите базу → сверху вкладка **«Импорт»** → «Выберите файл» →
+   `server/schema.sql` из репозитория (на компьютере: `C:\Galaxy ATM System\server\schema.sql`)
+   → **«Вперёд»** / «Импорт» внизу страницы.
+4. Проверка: слева у базы появились таблицы `assignments`, `network_pilots`,
+   `sync_state`.
+
+### Шаг 5. SSH — подключение к серверу
+
+1. Панель → главная страница → в меню слева **включить SSH**.
+2. Там же, в блоке **«Тех. информация»**, найдите **имя сервера** — это `СЕРВЕР`
+   (вида `имя.beget.tech`).
+3. На компьютере откройте **PowerShell** (Пуск → PowerShell; SSH в Windows 10/11 уже
+   встроен) и подключитесь:
+   ```
+   ssh ЛОГИН@СЕРВЕР
+   ```
+   - На вопрос `Are you sure you want to continue connecting (yes/no)?` введите `yes`.
+   - Введите пароль от панели Beget. **При вводе пароля на экране ничего не
+     отображается** — это нормально, просто наберите и нажмите Enter.
+4. Проверка: появилось приглашение командной строки Beget. Выполните:
+   ```bash
+   git --version
+   ls /usr/local/bin/php*
+   ```
+   Первая команда покажет версию git, вторая — доступные версии PHP (среди них должна
+   быть та, что выбрана в шаге 3, например `/usr/local/bin/php8.2`).
+
+   > Если `git` пишет `command not found`, выполните `ssh localhost -p222` — это
+   > окружение Beget с дополнительными программами — и продолжайте там.
+
+Все команды следующих шагов вводятся **в этом окне SSH**. Каждую команду можно
+скопировать и вставить (в PowerShell вставка — правой кнопкой мыши).
+
+### Шаг 6. Ключ, чтобы Beget мог читать репозиторий
+
+Репозиторий на GitHub приватный, поэтому серверу нужен свой ключ «только на чтение».
+
+1. Создать ключ (на Beget, в окне SSH):
+   ```bash
+   mkdir -p ~/.ssh && chmod 711 ~/.ssh
+   ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N "" -C beget-squawk
+   printf "Host github.com\n  IdentityFile ~/.ssh/github_deploy\n  IdentitiesOnly yes\n" >> ~/.ssh/config
+   chmod 600 ~/.ssh/config
+   cat ~/.ssh/github_deploy.pub
+   ```
+   Последняя команда выведет одну строку вида `ssh-ed25519 AAAA... beget-squawk` —
+   скопируйте её **целиком**.
+2. На GitHub: откройте репозиторий `Yurko-v/ATM-Galaktika-ULLL` → **Settings** →
+   слева **Deploy keys** → **Add deploy key**:
+   - **Title:** `Beget squawk`
+   - **Key:** вставить скопированную строку
+   - галочку **Allow write access НЕ ставить**
+   - **Add key**.
+3. Проверка (на Beget):
+   ```bash
+   ssh -T git@github.com
+   ```
+   На вопрос про `yes/no` ответить `yes`. Правильный ответ:
+   `Hi Yurko-v/ATM-Galaktika-ULLL! You've successfully authenticated, but GitHub does not provide shell access.`
+   Если `Permission denied (publickey)` — ключ на GitHub не добавлен или скопирован
+   не полностью.
+
+### Шаг 7. Скачать репозиторий и подключить папку сайта
 
 ```bash
 git clone git@github.com:Yurko-v/ATM-Galaktika-ULLL.git ~/squawk/repo
-rm -rf ~/squawk/public_html && ln -s ~/squawk/repo/server/public ~/squawk/public_html
+rm -rf ~/squawk/public_html
+ln -s ~/squawk/repo/server/public ~/squawk/public_html
+ls -l ~/squawk
 ```
 
-### 6. config.php
+- Первая команда скачает репозиторий в `~/squawk/repo`.
+- Вторая удаляет заглушку Beget.
+- Третья делает `public_html` ссылкой на папку `server/public` из репозитория —
+  теперь сайт `squawk.ДОМЕН` показывает именно её.
+- Проверка: `ls -l` показывает строку `public_html -> /home/.../squawk/repo/server/public`.
+
+### Шаг 8. Настройки сервера (config.php)
+
+1. Создать файл настроек из примера и сгенерировать ключ API:
+   ```bash
+   cp ~/squawk/repo/server/config.sample.php ~/squawk/repo/server/config.php
+   openssl rand -hex 32
+   ```
+   `openssl` выведет строку из 64 символов — это **ключ API**. Скопируйте и
+   сохраните его: он же понадобится в плагине у каждого диспетчера.
+2. Открыть файл в редакторе:
+   ```bash
+   nano ~/squawk/repo/server/config.php
+   ```
+3. Заменить `CHANGE_ME` в начале файла (стрелки — перемещение курсора):
+   ```php
+   'db' => [
+       'dsn'  => 'mysql:host=localhost;dbname=ЛОГИН_squawk;charset=utf8mb4',
+       'user' => 'ЛОГИН_squawk',
+       'pass' => 'ПАРОЛЬ_БАЗЫ_ИЗ_ШАГА_4',
+   ],
+
+   'api_key' => 'СТРОКА_ИЗ_OPENSSL',
+   ```
+   Остальное (диапазоны кодов, радиус, таймауты) менять не нужно.
+4. Сохранить и выйти: **Ctrl+O**, **Enter**, затем **Ctrl+X**.
+5. Проверка — открыть в браузере `https://squawk.ДОМЕН/api/health.php`. Должно быть:
+   ```json
+   {"ok":true,"network_updated":null,"network_fresh":false,"active":0}
+   ```
+   - `network_fresh: false` пока нормально — данные VATSIM появятся после шага 9.
+   - `{"error":"server_error"}` — неверные данные базы в `config.php` (имя, пароль).
+   - Ошибка 404 — не сработала ссылка из шага 7 или поддомен смотрит не на сайт `squawk`.
+
+`config.php` указан в `.gitignore`: git его не видит, и обновления с GitHub его не
+перезапишут.
+
+### Шаг 9. Синхронизация с VATSIM (cron)
+
+1. Сначала запустить задачу вручную (подставьте свою версию PHP из шага 3):
+   ```bash
+   /usr/local/bin/php8.2 ~/squawk/repo/server/cron/vatsim_sync.php
+   ```
+   Правильный ответ — строка вида:
+   ```
+   2026-09-11 18:30:00 vatsim_sync: pilots=1234 held=0 released=0
+   ```
+   Если ошибка — пришлите её текст.
+2. Панель → **«CronTab»** → вкладка **«Составить задание вручную»**:
+   - время: **каждую минуту** (`*/1 * * * *`);
+   - команда (та же, что проверили, плюс запись в лог):
+     ```
+     /usr/local/bin/php8.2 ~/squawk/repo/server/cron/vatsim_sync.php >> ~/squawk/cron.log 2>&1
+     ```
+   - **Добавить задание**.
+3. Проверка через 2–3 минуты:
+   - `https://squawk.ДОМЕН/api/health.php` → `"network_fresh": true`;
+   - на Beget `tail ~/squawk/cron.log` → по строке `pilots=...` на каждую минуту.
+
+### Шаг 10. Проверить выдачу кодов
+
+Эти команды можно выполнять прямо на Beget в окне SSH (подставьте домен и ключ API):
 
 ```bash
-cp ~/squawk/repo/server/config.sample.php ~/squawk/repo/server/config.php
-openssl rand -hex 32
-nano ~/squawk/repo/server/config.php
+KEY=СТРОКА_ИЗ_OPENSSL
+URL=https://squawk.ДОМЕН/api
+
+# выдать код тестовому борту
+curl -s -X POST $URL/assign.php -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"callsign":"TEST1","position":"ULLI_DEL"}'
+
+# с другой позиции тот же борт -> тот же код, "existing":true
+curl -s -X POST $URL/assign.php -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"callsign":"TEST1","position":"ULLL_APP"}'
+
+# новый код тому же борту
+curl -s -X POST $URL/assign.php -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"callsign":"TEST1","position":"ULLL_APP","new":true}'
+
+# все выданные коды
+curl -s $URL/state.php -H "X-Api-Key: $KEY"
 ```
-Вписать базу из шага 2, в `api_key` — строку из `openssl`. Тот же ключ потом идёт в
-`GalaxyATMSystem.json` каждого диспетчера (`Squawk.ApiKey`). `config.php` в `.gitignore`,
-`git pull` его не трогает.
 
-### 7. Cron
+- `{"error":"unauthorized"}` — ключ в команде не совпадает с `api_key` в `config.php`.
+- `TEST1` в сети VATSIM нет, поэтому примерно через 10 минут cron сам освободит его
+  код и он пропадёт из `state.php` — так заодно проверяется освобождение.
 
-Узнать домашнюю папку: `echo $HOME`. Панель → «CronTab» → каждую минуту:
+### Шаг 11. Подключить плагин
+
+У каждого диспетчера в `Documents\Galaxy ATM System\GalaxyATMSystem.json`:
+
+```json
+"Squawk": {
+  "Enabled": true,
+  "ServerUrl": "https://squawk.ДОМЕН/api",
+  "ApiKey": "СТРОКА_ИЗ_OPENSSL",
+  "PollSeconds": 15
+},
 ```
-/usr/local/php-cgi/8.2/bin/php ДОМАШНЯЯ_ПАПКА/squawk/repo/server/cron/vatsim_sync.php >> ДОМАШНЯЯ_ПАПКА/squawk/cron.log 2>&1
-```
-`8.2` — версия PHP сайта.
 
-### 8. Проверка
+Затем в EuroScope команда `.reload` (или перезапуск) и колонка «ULLL Squawk» в
+Departure list.
 
-- `https://squawk.<домен>/api/health.php` → `"ok": true`; через минуту после cron —
-  `"network_fresh": true`. В `~/squawk/cron.log` каждую минуту строка
-  `pilots=... held=... released=...`.
-- Выдать код:
-  ```
-  curl -X POST https://squawk.<домен>/api/assign.php -H "X-Api-Key: КЛЮЧ" -H "Content-Type: application/json" -d "{\"callsign\":\"TEST1\",\"position\":\"ULLI_DEL\"}"
-  ```
-  Повтор с другой `position` → тот же код (`"existing": true`); `"new": true` → другой.
-- `curl https://squawk.<домен>/api/state.php -H "X-Api-Key: КЛЮЧ"` → все выданные коды.
-  `TEST1` не в сети, так что через 10 минут cron его освободит.
+---
 
 ## Автодеплой с GitHub
 
-`.github/workflows/deploy-server.yml`: при push в `main`, если менялось что-то в
-`server/`, GitHub заходит на Beget по SSH и делает `git pull`. Запустить вручную:
-GitHub → Actions → «Deploy squawk server» → «Run workflow».
+Файл `.github/workflows/deploy-server.yml`: при каждом push в `main`, в котором
+менялось что-то в `server/`, GitHub сам заходит на Beget по SSH и выполняет
+`git pull` в `~/squawk/repo`. Сайт сразу работает на новом коде.
 
-Настройка (один раз):
+Для этого GitHub нужен **свой** ключ входа на Beget (не тот, что в шаге 6 — тот
+только читает репозиторий).
 
-1. Ключ для GitHub Actions — на своём компьютере или на Beget:
-   ```bash
-   ssh-keygen -t ed25519 -f beget_actions -N "" -C github-actions
-   ```
-2. Публичную часть — на Beget в `~/.ssh/authorized_keys`:
-   ```bash
-   cat beget_actions.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-   ```
-3. GitHub → репозиторий → Settings → Secrets and variables → Actions:
-   - **Secrets:** `BEGET_HOST` (адрес SSH из панели), `BEGET_USER` (логин Beget),
-     `BEGET_SSH_KEY` (всё содержимое файла `beget_actions`, приватного).
-   - **Variables** (необязательно): `BEGET_REPO_DIR`, если клон не в `squawk/repo`;
-     `SQUAWK_HEALTH_URL` = `https://squawk.<домен>/api/health.php` — после деплоя
-     workflow проверит, что сервер отвечает.
-4. Файл `beget_actions` после этого удалить.
+### 1. Ключ для GitHub Actions (на Beget, в окне SSH)
 
-Изменения `schema.sql` автодеплой не применяет — новую структуру базы накатывать
-вручную через phpMyAdmin.
+```bash
+ssh-keygen -t ed25519 -f ~/beget_actions -N "" -C github-actions
+cat ~/beget_actions.pub >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys && chmod 711 ~/.ssh
+cat ~/beget_actions
+```
 
-Если на Beget по SSH `git` не находится, команды выполняются в окружении с
-программами: `ssh localhost -p222`.
+Последняя команда выведет **приватный** ключ — несколько строк от
+`-----BEGIN OPENSSH PRIVATE KEY-----` до `-----END OPENSSH PRIVATE KEY-----`.
+Скопируйте их **все, включая строки BEGIN и END**.
+
+### 2. Секреты на GitHub
+
+Репозиторий → **Settings** → слева **Secrets and variables** → **Actions**.
+
+Вкладка **Secrets** → **New repository secret**, три штуки:
+
+| Name | Secret |
+|---|---|
+| `BEGET_HOST` | `СЕРВЕР` (имя сервера из шага 5, например `имя.beget.tech`) |
+| `BEGET_USER` | `ЛОГИН` |
+| `BEGET_SSH_KEY` | приватный ключ из пункта 1 целиком |
+
+Вкладка **Variables** → **New repository variable** (необязательно, но полезно):
+
+| Name | Value |
+|---|---|
+| `SQUAWK_HEALTH_URL` | `https://squawk.ДОМЕН/api/health.php` — после деплоя проверит, что сервер отвечает |
+| `BEGET_REPO_DIR` | только если клон лежит не в `squawk/repo` |
+
+### 3. Удалить ключ с сервера
+
+После того как секрет сохранён, файл больше не нужен (вход по нему остаётся
+разрешён через `authorized_keys`):
+
+```bash
+rm ~/beget_actions ~/beget_actions.pub
+```
+
+### 4. Проверить
+
+GitHub → вкладка **Actions** → слева **«Deploy squawk server»** → справа
+**Run workflow** → **Run workflow**. Через полминуты запуск должен стать зелёным;
+внутри шага «Pull on Beget» — последний коммит.
+
+Частые ошибки в логе запуска:
+
+| Сообщение | Что не так |
+|---|---|
+| `secrets are required` | не заведены секреты из пункта 2 |
+| `Permission denied (publickey)` | в `BEGET_SSH_KEY` ключ не целиком, или пункт 1 не выполнен |
+| `Could not resolve hostname` | неверный `BEGET_HOST` |
+| `cd: squawk/repo: No such file or directory` | клон не в `~/squawk/repo` — задайте `BEGET_REPO_DIR` |
+| `git: command not found` | на Beget git доступен только в `ssh localhost -p222` — напишите, поправим workflow |
+| `Not possible to fast-forward` | файлы в `~/squawk/repo` правили руками на сервере — там `git status`, лишние правки убрать |
+
+Первый запуск сразу после появления workflow в репозитории упадёт с
+`secrets are required` — это ожидаемо, пока не сделан пункт 2.
+
+Автодеплой обновляет **только код**. Если когда-нибудь изменится `schema.sql`,
+новую структуру базы нужно применить вручную через phpMyAdmin.
+
+---
 
 ## Как выбирается код
 
