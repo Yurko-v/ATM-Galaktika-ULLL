@@ -1,12 +1,16 @@
-# Deploys the squawk server (server/) to Beget: logs in over SSH and pulls the
-# repository clone the site is served from. See server/README.md for the
-# one-time setup - the clone, the keys and the secrets below.
+# Deploys the squawk server (server/) to Beget: logs in over SSH, pulls the
+# repository clone, then runs server/deploy.sh to copy public/ and lib/ into
+# the site's own document root (a plain symlinked public_html returned 500 for
+# every request on at least one real Beget account - see server/deploy.sh and
+# server/README.md for why, and for the one-time setup this expects in place).
 #
 # Secrets:   BEGET_HOST     SSH address from the Beget panel
 #            BEGET_USER     Beget login
 #            BEGET_SSH_KEY  private key whose public half is in ~/.ssh/authorized_keys on Beget
 # Variables: BEGET_REPO_DIR   clone path relative to the home folder (default squawk/repo)
-#            SQUAWK_HEALTH_URL  optional, e.g. https://squawk.example.ru/api/health.php
+#            BEGET_WEB_ROOT   the site's own folder, relative to the home folder
+#                              (e.g. squawk.example.beget.tech) - holds public_html
+#            SQUAWK_HEALTH_URL  optional, e.g. http://squawk.example.beget.tech/api/health.php
 
 name: Deploy squawk server
 
@@ -26,16 +30,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Pull on Beget
+      - name: Pull and sync on Beget
         env:
           BEGET_HOST: ${{ secrets.BEGET_HOST }}
           BEGET_USER: ${{ secrets.BEGET_USER }}
           BEGET_SSH_KEY: ${{ secrets.BEGET_SSH_KEY }}
           REPO_DIR: ${{ vars.BEGET_REPO_DIR || 'squawk/repo' }}
+          WEB_ROOT: ${{ vars.BEGET_WEB_ROOT }}
         run: |
           set -euo pipefail
           if [ -z "$BEGET_HOST" ] || [ -z "$BEGET_USER" ] || [ -z "$BEGET_SSH_KEY" ]; then
             echo "::error::BEGET_HOST, BEGET_USER and BEGET_SSH_KEY secrets are required - see server/README.md"
+            exit 1
+          fi
+          if [ -z "$WEB_ROOT" ]; then
+            echo "::error::the BEGET_WEB_ROOT repository variable is required - see server/README.md"
             exit 1
           fi
 
@@ -45,7 +54,8 @@ jobs:
           ssh-keyscan -H "$BEGET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           ssh -i ~/.ssh/beget -o BatchMode=yes "$BEGET_USER@$BEGET_HOST" \
-            "cd '$REPO_DIR' && git pull --ff-only && git log -1 --oneline"
+            "cd '$REPO_DIR' && git pull --ff-only && git log -1 --oneline && \
+             sh server/deploy.sh server \"\$HOME/$WEB_ROOT\""
 
       - name: Check health
         if: ${{ vars.SQUAWK_HEALTH_URL != '' }}
