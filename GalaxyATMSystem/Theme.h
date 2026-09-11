@@ -127,11 +127,11 @@ namespace Theme
     const double   WakeArcZoomPower = 0.25;   // how much the wheel still grows them; 0 = fixed size
     const double   WakeArcDistScale = 12.4;   // target to the middle of the inner arc, x (px/NM)^power
     const double   WakeArcDistMin   = 10.0;   // ...but never less, px
-    const double   WakeArcDistMax   = 28.0;   // ...and never more, px - the approach-zoom ceiling
+    const double   WakeArcDistMax   = 22.0;   // ...and never more, px - no bigger than at area control
     const double   WakeArcSize      = 0.8;    // the arc's own radius, as a share of that
     const double   WakeArcStepScale = 3.1;    // out to a super's second arc, x (px/NM)^power
     const double   WakeArcStepMin   = 4.0;    // ...but never less, px
-    const double   WakeArcStepMax   = 7.0;    // ...and never more, px
+    const double   WakeArcStepMax   = 5.5;    // ...and never more, px
     const double   WakeArcSweep     = 90.0;   // degrees, centred behind
 
     // Сигметы. The area is an outline in dark blue with nothing behind it,
