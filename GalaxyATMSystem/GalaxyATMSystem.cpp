@@ -1081,6 +1081,10 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
 {
     for (const SquawkAnswer& answer : m_squawk.TakeAnswers())
     {
+        SquawkDebugLine("answer for " + answer.callsign
+            + ": code=" + (answer.code.empty() ? "-" : answer.code)
+            + " error=" + (answer.error.empty() ? "-" : answer.error));
+
         if (!answer.error.empty())
         {
             // A report made on the controller's behalf fails quietly: the
@@ -1110,13 +1114,50 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
 
         CFlightPlan fp = FlightPlanSelect(answer.callsign.c_str());
         if (!fp.IsValid())
+        {
+            SquawkMessage(answer.callsign + ": got " + answer.code
+                + " but the flight plan is gone");
             continue;
+        }
         if (answer.code == fp.GetControllerAssignedData().GetSquawk())
+        {
+            SquawkDebugLine(answer.callsign + ": " + answer.code + " already on the plan");
             continue;
+        }
 
+        // EuroScope refuses an amendment it does not consider ours to make -
+        // most often because the aircraft is not assumed. Saying so beats a
+        // code that silently never appears in the column.
         m_squawkSetByUs[answer.callsign] = answer.code;
-        fp.GetControllerAssignedData().SetSquawk(answer.code.c_str());
+        if (!fp.GetControllerAssignedData().SetSquawk(answer.code.c_str()))
+        {
+            m_squawkSetByUs.erase(answer.callsign);
+            SquawkMessage(answer.callsign + ": EuroScope refused to set " + answer.code
+                + " - assume the aircraft first");
+            continue;
+        }
+        SquawkDebugLine(answer.callsign + ": set to " + answer.code);
     }
+}
+
+// One request for a code, with the two things that would otherwise drop it
+// without a word said: nothing to ask on behalf of, and a client that quietly
+// discards a request with no position on it.
+void CGalaxyATMSystemPlugin::RequestSquawk(const std::string& callsign, bool fresh)
+{
+    if (!SquawkReady(true))
+        return;
+
+    std::string position = MyPosition();
+    if (position.empty())
+    {
+        SquawkMessage("no controller callsign of your own - log in as a controller first");
+        return;
+    }
+
+    SquawkDebugLine("asking for a code: " + callsign + " from " + position
+        + (fresh ? " (new one)" : ""));
+    m_squawk.Assign(callsign, position, fresh, true);
 }
 
 // The column's clicks and the menu they open. Reached from both OnFunctionCall
@@ -1162,7 +1203,7 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
 
         if (FunctionId == TAG_FUNC_SQUAWK_ASSIGN)
         {
-            m_squawk.Assign(fp.GetCallsign(), MyPosition(), false, true);
+            RequestSquawk(fp.GetCallsign(), false);
             return;
         }
 
@@ -1177,8 +1218,12 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
 
     case FN_SQUAWK_GET:
     case FN_SQUAWK_NEW:
-        if (!m_squawkMenuCallsign.empty() && SquawkReady(true))
-            m_squawk.Assign(m_squawkMenuCallsign, MyPosition(), FunctionId == FN_SQUAWK_NEW, true);
+        if (m_squawkMenuCallsign.empty())
+        {
+            SquawkMessage("the menu lost track of the aircraft - open it again");
+            return;
+        }
+        RequestSquawk(m_squawkMenuCallsign, FunctionId == FN_SQUAWK_NEW);
         return;
 
     case FN_SQUAWK_MANUAL:

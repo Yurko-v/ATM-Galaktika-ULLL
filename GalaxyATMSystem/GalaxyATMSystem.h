@@ -225,6 +225,8 @@ private:
     // one, or a sweatbox when the config allows it. With 'tell', says why not.
     bool SquawkReady(bool tell);
     std::string MyPosition() const;
+    // Ask the server for a code for this aircraft, saying why if it cannot.
+    void RequestSquawk(const std::string& callsign, bool fresh);
     // Into the "ULLL Squawk" message channel. ASCII only - see the note on
     // SquawkDebugLine's definition.
     void SquawkMessage(const std::string& text);
