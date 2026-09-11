@@ -93,6 +93,43 @@ namespace Theme
 
     // Ruler (distance/bearing/time measuring line drawn on the radar).
     const COLORREF Ruler        = RGB(0xE0, 0xC9, 0x9A);  // beige
+    const int      RulerWidth   = 2;    // the line, its midpoint tick and the cursor
+
+    // Вектор экстраполяции - the track vector and the plan-following line.
+    // Drawn with GDI+ (antialiased) rather than a GDI pen, so a fractional
+    // weight is available here too.
+    const float    VectorWidth       = 1.7f;
+    const double   VectorTickGap     = 3.0;    // px between one minute's tick and the next
+
+    // Its chevron: the same weight as the line - they are one mark - and
+    // short-winged so it stays compact.
+    const float    VectorHeadWidth   = VectorWidth;
+    const double   VectorHeadLength  = 7.0;    // wing length at most, px
+
+    // Категория турбулентности - arcs behind the target, one for a heavy and
+    // two for a super, opening across the reciprocal of the track so they
+    // read as the wake the aircraft leaves. The vector's colour, a touch
+    // heavier than it.
+    //
+    // Every distance grows with the square root of the zoom (pixels per
+    // nautical mile): zoom in four times and the arcs are twice as big. A
+    // plain ground distance is lost at an area-control zoom, where half a mile
+    // is a pixel or two and the wheel would hardly move the arcs; the square
+    // root keeps them working-size there, still grows them visibly on every
+    // turn of the wheel, and reaches TrackArrow's size at an approach zoom.
+    // Floored, so zoomed right out they never fold into the symbol.
+    //
+    // How far an arc stands off and how big it is are separate: the arc is a
+    // piece of a smaller circle whose centre sits behind the target, so it can
+    // stand well clear and still be short. Its size is a share of its
+    // distance, so it keeps the same shape at every zoom.
+    const float    WakeArcWidth     = 2.0f;
+    const double   WakeArcDistScale = 7.0;    // target to the middle of the inner arc, x sqrt(px/NM)
+    const double   WakeArcDistMin   = 10.0;   // ...but never less, px
+    const double   WakeArcSize      = 0.8;    // the arc's own radius, as a share of that
+    const double   WakeArcStepScale = 1.75;   // out to a super's second arc, x sqrt(px/NM)
+    const double   WakeArcStepMin   = 4.0;    // ...but never less, px
+    const double   WakeArcSweep     = 90.0;   // degrees, centred behind
 
     // Сигметы. The area is an outline in dark blue with nothing behind it,
     // so the traffic and the map inside it stay fully readable. Pure #00008B
@@ -101,13 +138,52 @@ namespace Theme
     const COLORREF SigmetLine   = RGB(0x1C, 0x3C, 0xA0);
     const int      SigmetWidth  = 2;    // pen width of that outline
 
-    // Its info window: black at half opacity with white text on it, so the
-    // radar underneath stays visible through the report. No border colour -
-    // the window carries no frame and no rules, only the text and the shade.
+    // Its info window - and the зона one, which shares the look: black at half
+    // opacity with white text on it, so the radar underneath stays visible
+    // through the report, and a white hairline round the edge.
     const COLORREF SigmetInfoBg   = RGB(0x00, 0x00, 0x00);
     const BYTE     SigmetInfoAlpha = 128;   // 50%
     const COLORREF SigmetInfoText = RGB(0xFF, 0xFF, 0xFF);
     const COLORREF SigmetInfoEdge = RGB(0xFF, 0xFF, 0xFF);   // same white as the text
+
+    // Зоны запретов и ограничений. A wash inside a darker outline of the same
+    // hue, so an area reads as a piece of airspace rather than as a boundary.
+    //
+    // Запретные и ограничительные зоны are the same red, and how densely each
+    // is washed in is what tells them apart: a запретная зона is airspace to
+    // stay out of and carries the heavy wash, an ограничительная one is
+    // airspace with conditions on it and is barely tinted. Опасные зоны keep
+    // their orange - they are neither, and hue is what says so.
+    const COLORREF ZoneFillProhibited = RGB(0xD2, 0x46, 0x3C);
+    const COLORREF ZoneLineProhibited = RGB(0x96, 0x2E, 0x28);
+    const COLORREF ZoneFillDanger     = RGB(0xCE, 0x7C, 0x3C);
+    const COLORREF ZoneLineDanger     = RGB(0x92, 0x56, 0x28);
+    const COLORREF ZoneFillRestricted = RGB(0xD2, 0x46, 0x3C);
+    const COLORREF ZoneLineRestricted = RGB(0x96, 0x2E, 0x28);
+    const int      ZoneWidth = 1;    // a hairline: the wash says where the area is
+
+    // The squawk column: amber while a code is being asked for, or when the
+    // flight plan carries a different code from the server's; red when the
+    // server said no - no free code left, or the code is someone else's.
+    const COLORREF SquawkPending = RGB(0xFF, 0xD6, 0x00);
+    const COLORREF SquawkError   = RGB(0xFF, 0x3B, 0x30);
+
+    // APW - the area proximity warning in the tag. Severity is carried by the
+    // colour, which is the convention every system of this kind follows: red
+    // for airspace the aircraft is already inside, amber for airspace it is
+    // predicted to enter and can still be turned away from. Both are lifted
+    // well clear of the зона outlines they are warning about, so the word in
+    // the tag is never mistaken for part of the overlay.
+    const COLORREF ApwInside    = RGB(0xFF, 0x3C, 0x3C);
+    const COLORREF ApwPredicted = RGB(0xFF, 0xB4, 0x32);
+
+    // Out of 255, and the map and the traffic inside an area have to stay as
+    // readable as they are outside it - which is what holds the ограничительные
+    // зоны down at a tenth: there are a hundred and eighty-eight of them in the
+    // package and they overlap.
+    const BYTE ZoneAlphaProhibited = 77;   // 30%
+    const BYTE ZoneAlphaDanger     = 44;   // ~17%
+    const BYTE ZoneAlphaRestricted = 26;   // 10%
 
     // АТИС window. Taken from the photograph of the real system: an
     // olive card inside a light two-pixel frame, a grey title bar shading from
@@ -162,7 +238,7 @@ namespace Theme
             // size it dominated the screen. Every vertical metric in
             // namespace L is scaled to match (see GalaxyATMSystem.cpp).
             Body  = mk(-14, FW_NORMAL);
-            Clock = mk(-20, FW_NORMAL);
+            Clock = mk(-20, FW_BOLD);   // the reference sets the time in bold
             // The export's heading text brought down to the two fifths the
             // whole "Список РЦ" window is drawn at.
             List  = mk(-14, FW_BOLD);

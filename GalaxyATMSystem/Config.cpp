@@ -23,14 +23,104 @@ namespace
         return (slash == std::wstring::npos) ? std::wstring() : p.substr(0, slash + 1);
     }
 
+    // A config path: taken as written when it is absolute, and from the folder
+    // the plug-in itself sits in when it is not - which is where the files that
+    // ship with it are.
+    std::wstring ResolvePath(HINSTANCE hModule, const std::wstring& path)
+    {
+        bool absolute = (path.size() > 1 && path[1] == L':')
+            || (!path.empty() && (path[0] == L'\\' || path[0] == L'/'));
+        return absolute ? path : ModuleDir(hModule) + path;
+    }
+
     // The JSON reader itself lives in Json.h - the SIGMET feed needs one too,
     // and needs arrays, which the config file never did.
+
+    // "#D2463C", "D2463C", "0xD2463C" or [ 210, 70, 60 ]. Written the way a
+    // colour is written everywhere else - red first - and turned into the
+    // COLORREF the drawing wants, which is not.
+    bool ParseColor(const Json::Value& v, COLORREF& out)
+    {
+        if (v.kind == Json::Value::Kind::Array)
+        {
+            if (v.arr.size() < 3)
+                return false;
+            long long r = v.arr[0].AsInt(-1);
+            long long g = v.arr[1].AsInt(-1);
+            long long b = v.arr[2].AsInt(-1);
+            if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
+                return false;
+            out = RGB((BYTE)r, (BYTE)g, (BYTE)b);
+            return true;
+        }
+
+        if (v.kind != Json::Value::Kind::String)
+            return false;
+
+        std::wstring s = v.AsString();
+        size_t at = s.find_first_not_of(L" 	");
+        if (at == std::wstring::npos)
+            return false;
+        s = s.substr(at);
+        if (s[0] == L'#')
+            s.erase(s.begin());
+        else if (s.size() > 2 && s[0] == L'0' && (s[1] == L'x' || s[1] == L'X'))
+            s.erase(0, 2);
+
+        if (s.size() < 6)
+            return false;
+        s = s.substr(0, 6);
+
+        unsigned int rgb = 0;
+        for (wchar_t c : s)
+        {
+            int d;
+            if (c >= L'0' && c <= L'9')      d = c - L'0';
+            else if (c >= L'a' && c <= L'f') d = 10 + (c - L'a');
+            else if (c >= L'A' && c <= L'F') d = 10 + (c - L'A');
+            else return false;
+            rgb = (rgb << 4) | (unsigned int)d;
+        }
+
+        out = RGB((BYTE)(rgb >> 16), (BYTE)(rgb >> 8), (BYTE)rgb);
+        return true;
+    }
+
+    // One kind of area. Anything the node leaves out keeps what the style
+    // already held, which on the first pass is the built-in colour.
+    void ParseZoneStyle(const Json::Value& node, ZoneStyle& out)
+    {
+        if (node.kind != Json::Value::Kind::Object)
+            return;
+
+        if (const Json::Value* v = node.Find(L"Fill"))
+            ParseColor(*v, out.fill);
+        if (const Json::Value* v = node.Find(L"Line"))
+            ParseColor(*v, out.line);
+
+        // Per cent first, since that is how a wash is talked about; "Alpha" is
+        // the same thing in the units the drawing uses and has the last word.
+        if (const Json::Value* v = node.Find(L"Opacity"))
+        {
+            long long pct = v->AsInt(-1);
+            if (pct >= 0 && pct <= 100)
+                out.alpha = (BYTE)((pct * 255 + 50) / 100);
+        }
+        if (const Json::Value* v = node.Find(L"Alpha"))
+        {
+            long long a = v->AsInt(-1);
+            if (a >= 0 && a <= 255)
+                out.alpha = (BYTE)a;
+        }
+    }
 }
 
 void Config::Load(HINSTANCE hModule)
 {
-    m_Positions.clear();
-    m_LoadError.clear();
+    // Everything back to the defaults first. Load is called again by ".reload",
+    // and a key taken out of the file has to go back to what the build says
+    // rather than to whatever the previous read left behind.
+    *this = Config();
     m_Path = ModuleDir(hModule) + L"GalaxyATMSystem.json";
 
     std::ifstream file(m_Path, std::ios::binary);
@@ -84,6 +174,15 @@ void Config::Load(HINSTANCE hModule)
         {
             if (const Json::Value* v = atis->Find(L"Index"))
                 m_AtisIndex = v->AsString(m_AtisIndex);
+            if (const Json::Value* v = atis->Find(L"Live"))
+                m_AtisLive = v->AsBool(m_AtisLive);
+            if (const Json::Value* v = atis->Find(L"RefreshMinutes"))
+                m_AtisRefreshMin = (int)max(1LL, min(60LL, v->AsInt(m_AtisRefreshMin)));
+            // Clamped to the top half of any sane display: the strip is docked
+            // to the corner, and an offset that walks it off the screen would
+            // leave nothing to click and no way to see that it happened.
+            if (const Json::Value* v = atis->Find(L"TopOffset"))
+                m_AtisTopOffset = (int)max(0LL, min(400LL, v->AsInt(m_AtisTopOffset)));
             if (const Json::Value* v = atis->Find(L"TextRu"))
                 m_AtisTextRu = v->AsString();
             if (const Json::Value* v = atis->Find(L"TextEn"))
@@ -93,6 +192,49 @@ void Config::Load(HINSTANCE hModule)
             {
                 if (const Json::Value* v = atis->Find(L"Text"))
                     m_AtisTextEn = v->AsString();
+            }
+        }
+    }
+
+    // APW - the area proximity warning. Every key is optional; the defaults
+    // in ApwSettings are the working ones.
+    if (const Json::Value* apw = root.Find(L"Apw"))
+    {
+        if (apw->kind == Json::Value::Kind::Object)
+        {
+            if (const Json::Value* v = apw->Find(L"Enabled"))
+                m_Apw.enabled = v->AsBool(m_Apw.enabled);
+            if (const Json::Value* v = apw->Find(L"LookAheadMinutes"))
+                m_Apw.lookAheadMin = (int)max(0LL, min(15LL, v->AsInt(m_Apw.lookAheadMin)));
+            if (const Json::Value* v = apw->Find(L"BufferNm"))
+                m_Apw.bufferNm = max(0.0, min(20.0, v->AsNumber(m_Apw.bufferNm)));
+            if (const Json::Value* v = apw->Find(L"VerticalBufferFt"))
+                m_Apw.verticalBufferFt = (int)max(0LL, min(5000LL, v->AsInt(m_Apw.verticalBufferFt)));
+            if (const Json::Value* v = apw->Find(L"ShowZone"))
+                m_Apw.showZone = v->AsBool(m_Apw.showZone);
+
+            // "Kinds": which of the three warn at all, written the way the
+            // areas themselves are typed - "P", "R", "D". An explicit empty
+            // list is a config that has turned the alert off area by area,
+            // and is left as it is rather than read as "all of them".
+            if (const Json::Value* v = apw->Find(L"Kinds"))
+            {
+                if (v->kind == Json::Value::Kind::Array)
+                {
+                    m_Apw.warnProhibited = m_Apw.warnRestricted = m_Apw.warnDanger = false;
+                    for (const Json::Value& k : v->arr)
+                    {
+                        const std::wstring t = ToUpper(k.AsString());
+                        if (t.empty())
+                            continue;
+                        if (t[0] == L'P')
+                            m_Apw.warnProhibited = true;
+                        else if (t[0] == L'R')
+                            m_Apw.warnRestricted = true;
+                        else if (t[0] == L'D')
+                            m_Apw.warnDanger = true;
+                    }
+                }
             }
         }
     }
@@ -125,6 +267,121 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
+    // Зоны запретов и ограничений. Normally the whole list comes out of the
+    // TopSky package that the sector file ships with - it is already kept up
+    // to date there - and "Items" is for anything that has to be added on top
+    // of it. A relative path is taken from the folder the config itself is in.
+    if (const Json::Value* zones = root.Find(L"Zones"))
+    {
+        std::wstring areasPath;
+        if (zones->kind == Json::Value::Kind::Object)
+        {
+            if (const Json::Value* v = zones->Find(L"TopSkyAreas"))
+                areasPath = v->AsString();
+        }
+        if (zones->kind == Json::Value::Kind::Object)
+        {
+            // The plan is fetched over plain HTTP(S) and the URL is ASCII, so
+            // it is narrowed on the way in rather than at every fetch.
+            if (const Json::Value* v = zones->Find(L"AupUrl"))
+            {
+                std::wstring url = v->AsString();
+                m_AupUrl.assign(url.begin(), url.end());
+            }
+            if (const Json::Value* v = zones->Find(L"AupRefreshMinutes"))
+                m_AupRefreshMin = (int)max(1LL, min(180LL, v->AsInt(m_AupRefreshMin)));
+            if (const Json::Value* v = zones->Find(L"ShowNotamAreas"))
+                m_ShowNotamAreas = v->AsBool(m_ShowNotamAreas);
+
+            // A URL is narrowed like the plan's; a path is narrowed the same
+            // way and widened again when the file is opened, so a folder name
+            // in Cyrillic survives the round trip.
+            if (const Json::Value* v = zones->Find(L"NotamSource"))
+            {
+                std::wstring src = v->AsString();
+                if (!src.empty() && src.compare(0, 4, L"http") != 0)
+                    src = ResolvePath(hModule, src);
+                m_NotamSource = Json::WideToUtf8(src);
+            }
+            if (const Json::Value* v = zones->Find(L"NotamRefreshMinutes"))
+                m_NotamRefreshMin = (int)max(1LL, min(180LL, v->AsInt(m_NotamRefreshMin)));
+
+            if (const Json::Value* colors = zones->Find(L"Colors"))
+            {
+                if (const Json::Value* v = colors->Find(L"Prohibited"))
+                    ParseZoneStyle(*v, m_ZoneProhibited);
+                if (const Json::Value* v = colors->Find(L"Restricted"))
+                    ParseZoneStyle(*v, m_ZoneRestricted);
+                if (const Json::Value* v = colors->Find(L"Danger"))
+                    ParseZoneStyle(*v, m_ZoneDanger);
+            }
+        }
+
+        if (!areasPath.empty())
+        {
+            std::wstring path = ResolvePath(hModule, areasPath);
+            if (!LoadTopSkyAreas(path, m_Zones))
+                m_LoadError = L"zones: cannot open " + path;
+        }
+
+        // The library of areas that ships with the plug-in: the same package
+        // converted once into JSON (tools/topsky_to_zones.py), so a position
+        // without TopSky installed still has the airspace. Read before
+        // "Items", which is then whatever this controller adds on top.
+        if (zones->kind == Json::Value::Kind::Object)
+        {
+            if (const Json::Value* v = zones->Find(L"ItemsFile"))
+            {
+                std::wstring name = v->AsString();
+                if (!name.empty())
+                {
+                    std::wstring path = ResolvePath(hModule, name);
+                    std::ifstream lib(path, std::ios::binary);
+                    if (!lib)
+                    {
+                        m_LoadError = L"zones: cannot open " + path;
+                    }
+                    else
+                    {
+                        std::string body((std::istreambuf_iterator<char>(lib)),
+                            std::istreambuf_iterator<char>());
+                        Json::Value parsed;
+                        bool ignored = true;
+                        if (!Json::ParseUtf8(body, parsed)
+                            || !ParseZones(parsed, m_Zones, ignored))
+                            m_LoadError = L"zones: cannot read " + path;
+                    }
+                }
+            }
+        }
+
+        ParseZones(*zones, m_Zones, m_ZonesEnabled);
+    }
+
+    // Squawks from the shared server. Reset first, so a ".reload" of a file
+    // that has dropped the section switches the client off rather than
+    // keeping the old server. Both strings are ASCII.
+    m_SquawkServerUrl.clear();
+    m_SquawkApiKey.clear();
+    m_SquawkPollSeconds = 15;
+    if (const Json::Value* sq = root.Find(L"Squawk"))
+    {
+        if (sq->kind == Json::Value::Kind::Object)
+        {
+            bool enabled = true;
+            if (const Json::Value* v = sq->Find(L"Enabled"))
+                enabled = v->AsBool(true);
+            if (const Json::Value* v = sq->Find(L"ServerUrl"))
+                m_SquawkServerUrl = Json::WideToUtf8(v->AsString());
+            if (const Json::Value* v = sq->Find(L"ApiKey"))
+                m_SquawkApiKey = Json::WideToUtf8(v->AsString());
+            if (const Json::Value* v = sq->Find(L"PollSeconds"))
+                m_SquawkPollSeconds = (int)max(5LL, min(300LL, v->AsInt(m_SquawkPollSeconds)));
+            if (!enabled)
+                m_SquawkServerUrl.clear();
+        }
+    }
+
     // The broadcast carries both languages one after the other, and so does
     // the window. With only one of them configured it stands alone - a lone
     // heading over a single block would say nothing - and with neither, the
@@ -136,6 +393,16 @@ void Config::Load(HINSTANCE hModule)
     else if (!m_AtisTextEn.empty())
         m_AtisMessage = m_AtisTextEn;
 
+}
+
+const ZoneStyle& Config::ZoneStyleFor(ZoneKind kind) const
+{
+    switch (kind)
+    {
+    case ZoneKind::Prohibited: return m_ZoneProhibited;
+    case ZoneKind::Danger:     return m_ZoneDanger;
+    default:                   return m_ZoneRestricted;
+    }
 }
 
 bool Config::FindPosition(const std::string& callsign,

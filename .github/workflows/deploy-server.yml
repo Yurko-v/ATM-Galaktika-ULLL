@@ -1,0 +1,52 @@
+# Deploys the squawk server (server/) to Beget: logs in over SSH and pulls the
+# repository clone the site is served from. See server/README.md for the
+# one-time setup - the clone, the keys and the secrets below.
+#
+# Secrets:   BEGET_HOST     SSH address from the Beget panel
+#            BEGET_USER     Beget login
+#            BEGET_SSH_KEY  private key whose public half is in ~/.ssh/authorized_keys on Beget
+# Variables: BEGET_REPO_DIR   clone path relative to the home folder (default squawk/repo)
+#            SQUAWK_HEALTH_URL  optional, e.g. https://squawk.example.ru/api/health.php
+
+name: Deploy squawk server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/deploy-server.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull on Beget
+        env:
+          BEGET_HOST: ${{ secrets.BEGET_HOST }}
+          BEGET_USER: ${{ secrets.BEGET_USER }}
+          BEGET_SSH_KEY: ${{ secrets.BEGET_SSH_KEY }}
+          REPO_DIR: ${{ vars.BEGET_REPO_DIR || 'squawk/repo' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BEGET_HOST" ] || [ -z "$BEGET_USER" ] || [ -z "$BEGET_SSH_KEY" ]; then
+            echo "::error::BEGET_HOST, BEGET_USER and BEGET_SSH_KEY secrets are required - see server/README.md"
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$BEGET_SSH_KEY" > ~/.ssh/beget
+          chmod 600 ~/.ssh/beget
+          ssh-keyscan -H "$BEGET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          ssh -i ~/.ssh/beget -o BatchMode=yes "$BEGET_USER@$BEGET_HOST" \
+            "cd '$REPO_DIR' && git pull --ff-only && git log -1 --oneline"
+
+      - name: Check health
+        if: ${{ vars.SQUAWK_HEALTH_URL != '' }}
+        run: curl -fsS "${{ vars.SQUAWK_HEALTH_URL }}"

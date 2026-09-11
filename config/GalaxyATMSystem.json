@@ -1,4 +1,4 @@
-{
+﻿{
   "Airport": "ULLI",
 
   "QnhMmHg": "760",
@@ -30,8 +30,43 @@
     "Firs": ["ULLL"]
   },
 
+  "Zones": {
+    "Enabled": true,
+    "ItemsFile": "Zones.ULLL.json",
+    "AupUrl": "https://aup.vatsim-petersburg.com",
+    "AupRefreshMinutes": 10,
+    "NotamSource": "",
+    "NotamRefreshMinutes": 15,
+    "ShowNotamAreas": false,
+    "Colors": {
+      "Prohibited": { "Fill": "#D2463C", "Line": "#962E28", "Opacity": 30 },
+      "Restricted": { "Fill": "#D2463C", "Line": "#962E28", "Opacity": 10 },
+      "Danger":     { "Fill": "#CE7C3C", "Line": "#92562A", "Opacity": 17 }
+    },
+    "Items": []
+  },
+
+  "Apw": {
+    "Enabled": true,
+    "LookAheadMinutes": 2,
+    "BufferNm": 1.0,
+    "VerticalBufferFt": 0,
+    "ShowZone": false,
+    "Kinds": [ "P", "R", "D" ]
+  },
+
+  "Squawk": {
+    "Enabled": true,
+    "ServerUrl": "",
+    "ApiKey": "",
+    "PollSeconds": 15
+  },
+
   "Atis": {
     "Index": "Z",
+    "Live": true,
+    "RefreshMinutes": 2,
+    "TopOffset": 22,
     "TextRu": "ПУЛКОВО АТИС. ИНФОРМАЦИЯ ЗУЛУ, 20:00. ЗАХОД ПО ИЛС ПОЛОСА 28 ЛЕВАЯ. ПОКРЫТА МОКРЫМ СНЕГОМ МЕНЕЕ 10% 5 МИЛЛИМЕТРОВ. РАСЧЁТНОЕ СЦЕПЛЕНИЕ ХОРОШЕЕ. ДЛЯ ВЫЛЕТА ПОЛОСА 28 ПРАВАЯ, ПОКРЫТА МОКРЫМ СНЕГОМ МЕНЕЕ 10% 5 МИЛЛИМЕТРОВ. РАСЧЁТНОЕ СЦЕПЛЕНИЕ ХОРОШЕЕ. ЭШЕЛОН ПЕРЕХОДА 50. ПЕРРОН И РУЛЁЖНЫЕ ДОРОЖКИ СКОЛЬЗКИЕ. РУЛЕНИЕ С ОСТОРОЖНОСТЬЮ. ОПАСНОСТЬ СТОЛКНОВЕНИЯ С ПТИЦАМИ В РАЙОНЕ АЭРОДРОМА И НА ПРЯМОЙ",
     "TextEn": "ST PETERSBURG PULKOVO ATIS. INFORMATION ZULU, 20:00. EXPECT ILS APPROACH Z RUNWAY 28 LEFT. COVERED WITH WET SNOW LESS 10% 5 MILLIMETERS. ESTIMATED SURFACE FRICTION GOOD FOR DEPARTURE RUNWAY 28 RIGHT COVERED WITH WET SNOW LESS 10% 5 MILLIMETERS. ESTIMATED SURFACE FRICTION GOOD. TRANSITION LEVEL 50. APRON AND TAXIWAYS ARE SLIPPERY. TAXI WITH CAUTION. BIRD STRIKE HAZARD IN VICINITY OF AERODROME AND ON FINAL"
   }

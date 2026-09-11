@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <thread>
 #include <atomic>
 #include <memory>
@@ -12,6 +13,9 @@
 #include "Theme.h"
 #include "Config.h"
 #include "Sigmet.h"
+#include "Atis.h"
+#include "Apw.h"
+#include "Squawk.h"
 
 // Handle to this DLL (set in dllmain.cpp) - used to locate the config file.
 extern HINSTANCE g_hModule;
@@ -61,7 +65,19 @@ public:
     // thread and to re-fetch periodically.
     virtual void OnTimer(int Counter);
 
+    // Squawks from the shared server (see Squawk.h): the "ULLL Squawk" column's
+    // clicks and menu, and a code changed some other way reported back to it.
+    virtual void OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area);
+    virtual void OnFlightPlanControllerAssignedDataUpdate(
+        EuroScopePlugIn::CFlightPlan FlightPlan, int DataType);
+
     const Config& GetConfig() const { return m_config; }
+
+    // Reads GalaxyATMSystem.json again and starts every feed over on what it
+    // now says - ".reload". Everything a radar screen keeps that points into
+    // the config is worked out per frame, so the only thing a reload asks of a
+    // screen is to drop an open window: see OnCompileCommand.
+    void ReloadConfig();
 
     // Сигметы, fetched on a worker thread and handed over as a whole list
     // at a time. A radar screen takes the current one for the frame it is
@@ -69,6 +85,24 @@ public:
     // replace the list underneath without ever pulling it out from under a
     // half-drawn overlay. Never null - an empty list before the first fetch.
     std::shared_ptr<const std::vector<Sigmet>> Sigmets() const;
+
+    // The АТИС the panel and its two windows show: the live broadcast while the
+    // network is carrying one for this aerodrome, and the config file's own
+    // letter and text whenever it is not - a sweatbox session, a fetch that
+    // failed, or simply no ATIS station logged on.
+    std::wstring AtisIndex() const;
+    std::wstring AtisMessage() const;
+
+    // The bookings that decide which restricted areas are up right now. Handed
+    // over whole, like the сигметы, so a frame that starts reading them cannot
+    // have them replaced underneath it. Never null.
+    std::shared_ptr<const std::vector<ZoneBooking>> AupBookings() const;
+
+    // The NOTAMs, read the same way and handed over the same way. Null - not
+    // merely empty - while no source is configured or none has been read yet,
+    // because an area that hangs on a NOTAM has to tell "nothing booked" from
+    // "nobody asked".
+    std::shared_ptr<const std::vector<ZoneBooking>> Notams() const;
 
     // БЛОК 5's ДАВЛ - the config's placeholder values until the first METAR
     // for the configured airport arrives, then the parsed QNH from then on.
@@ -115,6 +149,7 @@ private:
     // from EuroScope always wins once it arrives.
     void StartMetarFetch();
     void ApplyQnhHpa(int hpa);
+    std::string AirportIcao() const;   // the config's airport, sanitised for a URL
 
     // Same shape as the METAR fetch above: a worker thread, joined before the
     // next one starts and again on shutdown, since the DLL can be unloaded
@@ -138,6 +173,68 @@ private:
     mutable std::mutex m_sigmetMutex;
     std::shared_ptr<const std::vector<Sigmet>> m_sigmets;
 
+    // Same shape again: a worker fetches the aerodrome's ATIS off the network
+    // and swaps the whole report in under the lock. Empty until the first one
+    // lands, which is what makes the config file the fallback.
+    void StartAtisFetch();
+    std::thread m_atisFetch;
+    mutable std::mutex m_atisMutex;
+    AtisReport m_atisLive;
+
+    // And once more for the day's airspace use plan, which is what says whether
+    // a restricted area exists at this moment.
+    void StartAupFetch();
+    void StartNotamFetch();
+    std::thread m_aupFetch;
+    mutable std::mutex m_aupMutex;
+    std::shared_ptr<const std::vector<ZoneBooking>> m_aup;
+
+    std::thread m_notamFetch;
+    mutable std::mutex m_notamMutex;
+    std::shared_ptr<const std::vector<ZoneBooking>> m_notams;   // null until one is read
+
+    // ---- Squawks ---------------------------------------------------------
+    SquawkClient m_squawk;
+
+    // Codes this plugin has just set on a flight plan itself, so the update
+    // EuroScope raises for them is not reported back as one typed by hand.
+    std::map<std::string, std::string> m_squawkSetByUs;
+
+    // The aircraft and the cell the menu was opened on, for the item picked in
+    // it and for the edit box "Ввести вручную" opens in the same place.
+    std::string m_squawkMenuCallsign;
+    RECT m_squawkMenuArea = { 0, 0, 0, 0 };
+
+    void ConfigureSquawk();
+    // Configured, and connected to the live network - a sweatbox session must
+    // not take codes out of the real pool. With 'tell', says why not.
+    bool SquawkReady(bool tell);
+    std::string MyPosition() const;
+    // The answers that have come back: codes set on their flight plans, and
+    // what went wrong with a request a controller clicked for.
+    void ApplySquawkAnswers();
+
+    // ---- APW -------------------------------------------------------------
+    // The areas reduced to what the warning needs, rebuilt on the clock rather
+    // than per aircraft: which of them are up changes with the day's plan, not
+    // with the tag being drawn.
+    void RefreshApwZones();
+    std::vector<ApwZone> m_apwZones;
+    ULONGLONG m_apwZonesTick = 0;
+
+    // The last answer for each callsign. EuroScope asks for a tag item on
+    // every repaint of every tag, and flying three hundred areas forward for
+    // each of those is work worth doing once a second and no oftener.
+    struct ApwCacheEntry
+    {
+        ApwResult result;
+        ULONGLONG tick = 0;    // when it was worked out
+    };
+    std::map<std::string, ApwCacheEntry> m_apwCache;
+
+    // The warning for one track, from the cache when it is fresh enough.
+    const ApwResult& ApwFor(EuroScopePlugIn::CRadarTarget& target);
+
     AltUnit  m_unitAlt  = AltUnit::FL;
     VsUnit   m_unitVs   = VsUnit::FtMin;
     GsUnit   m_unitGs   = GsUnit::Knots;
@@ -149,6 +246,23 @@ const int TAG_ITEM_ALTITUDE       = 1;
 const int TAG_ITEM_VERTICAL_SPEED = 2;
 const int TAG_ITEM_GROUND_SPEED   = 3;
 const int TAG_ITEM_DISTANCE       = 4;
+
+// APW - Area Proximity Warning: the track is in, or is about to be in, an area
+// it must stay out of. See Apw.h for what raises it.
+const int TAG_ITEM_APW            = 5;
+
+// The squawk the shared server holds for the aircraft - the Departure list
+// column. See Squawk.h.
+const int TAG_ITEM_SQUAWK         = 6;
+
+// The column's clicks and the menu items they lead to. Kept clear of the radar
+// screen's own FN_ ids (300 and up).
+const int TAG_FUNC_SQUAWK_ASSIGN  = 400;   // one click: take a code from the server
+const int TAG_FUNC_SQUAWK_MENU    = 401;   // the menu below
+const int FN_SQUAWK_GET           = 410;   // "Выдать код"
+const int FN_SQUAWK_NEW           = 411;   // "Новый код"
+const int FN_SQUAWK_MANUAL        = 412;   // "Ввести вручную" - opens the edit box
+const int FN_SQUAWK_MANUAL_EDIT   = 413;   // what was typed into it
 
 // One measuring line: each endpoint either tracks a radar target live (by
 // callsign) or sits at a fixed geo position picked by the click.
@@ -208,14 +322,11 @@ public:
     virtual void OnAsrContentToBeSaved(void);
     virtual void OnAsrContentLoaded(bool Loaded);
 
-    // Called from the one-second tick: watches for the session connecting or
-    // disconnecting, which is what starts and stops the Таймер.
-    void PollConnection();
-
 private:
     CGalaxyATMSystemPlugin* Plugin() { return (CGalaxyATMSystemPlugin*)GetPlugIn(); }
 
     // ---- Drawing (each returns the Y just below what it drew) ----
+    int  PanelTop();                            // the docked top edge, toolbar-anchored
     void DrawPanel(HDC hDC);
     int  DrawHeader(HDC hDC, int y);            // БЛОК 1 - Время / Дата / Режим (also the drag handle)
     int  DrawBlockTimer(HDC hDC, int y);        // Таймер
@@ -263,9 +374,26 @@ private:
     int  FindSigmetAt(POINT pt);   // index into the frame's snapshot, -1 if none
     void CloseSigmetInfoIfButtonReleased();
 
+    // Зоны запретов и ограничений, drawn the same way and in the same phase as
+    // the сигметы above: an outline coloured by what kind of zone it is, its
+    // designator on the area itself, and a window of details on a click.
+    void DrawZones(HDC hDC);
+    void RegisterZoneObjects();
+    void DrawZoneInfo(HDC hDC);
+    bool ZoneOutline(const Zone& zone, std::vector<POINT>& out);
+    int  FindZoneAt(POINT pt);
+    // The area a hit-box belongs to, off the box's own id - what a press falls
+    // back on when it landed on a box but on no outline.
+    int  ZoneFromObjectId(const char* sObjectId);
+    // Which areas are up at this moment, worked out once at the top of the
+    // frame so the outlines, the hit-boxes and the open window can never
+    // disagree - a zone that is not drawn must not be clickable either.
+    void UpdateZoneActivity();
+
     // Vectors drawn over radar targets (БЛОК 3's actual effect on the radar,
     // as opposed to the panel controls that configure it).
     void DrawTargetVectors(HDC hDC);
+    void DrawWakeArcs(HDC hDC);
     void DrawTrackVector(HDC hDC, EuroScopePlugIn::CRadarTarget rt, double lengthNM,
         double timeMinForLevel, int minuteTicks, COLORREF color);
     void DrawPlanVector(HDC hDC, EuroScopePlugIn::CFlightPlan fp,
@@ -361,14 +489,12 @@ private:
     UINT_PTR m_timerId;         // 1s tick that keeps the clock live
     UINT_PTR m_pollTimerId;     // fast tick that watches the side mouse buttons
 
-    // Таймер - the length of the session. It starts itself on connect and
-    // stops on disconnect (see PollConnection); "С" zeroes it. Elapsed time is
-    // derived each frame from GetTickCount64() rather than stored, so it
-    // cannot drift.
+    // Таймер - run by hand from the "С" chip: left click starts and stops it,
+    // right click zeroes it. Elapsed time is derived each frame from
+    // GetTickCount64() rather than stored, so it cannot drift.
     bool      m_timerRunning;
     ULONGLONG m_timerStartTick;
     ULONGLONG m_timerElapsedMs;   // accumulated while stopped; frozen display value
-    int       m_lastConnection;   // previous GetConnectionType(), to spot the edge
 
     // БЛОК 3 - Вектор экстраполяции
     bool m_vecDistEnabled;
@@ -419,8 +545,7 @@ private:
     // state is remembered in the ASR. The message window is the report itself,
     // opened either by the panel's "АТИС" button or by clicking the letter.
     bool m_atisLetterOpen;
-    RECT m_atisLetterArea;
-    bool m_atisLetterPositioned;
+    RECT m_atisLetterArea;      // docked to the panel, recomputed every frame
 
     // "Список РЦ". The rows themselves are never stored - they are rebuilt from
     // the live flight plans on every frame - so all that lives here is how the
@@ -452,6 +577,29 @@ private:
     POINT m_sigmetInfoAt;       // where the button went down, the window hangs off it
     bool m_sigmetInfoHeld;      // the poll has confirmed the button really is down
     int  m_sigmetInfoWait;      // polls spent waiting for that confirmation
+
+    // Зоны запретов и ограничений. Static geometry off the config file rather
+    // than a feed, so there is nothing to hold a reference to - the screen
+    // reads the plugin's list straight. The details window behaves exactly as
+    // a сигмет's does: up while the button is held, gone when it is released,
+    // with the same two fields guarding against a press that arrives late.
+    bool m_zonesVisible;        // ".zones" toggle, persisted in the ASR
+    int  m_zoneInfoIndex;       // zone whose window is open, -1 for none
+    POINT m_zoneInfoAt;         // where the button went down, the window hangs off it
+    bool m_zoneInfoHeld;
+
+    // Shift, as last seen. Зоны take the mouse only while it is held -
+    // without it their hit-boxes are not registered at all, so a label lying
+    // over one can still be dragged (see OnRefresh).
+    bool m_areaShiftDown;
+    int  m_zoneInfoWait;
+
+    // Filled by UpdateZoneActivity, one entry per configured area. The plan is
+    // held for the whole frame because m_zoneBooking points into it.
+    std::shared_ptr<const std::vector<ZoneBooking>> m_aup;
+    std::shared_ptr<const std::vector<ZoneBooking>> m_notams;   // null while none has been read
+    std::vector<char> m_zoneActive;
+    std::vector<const ZoneBooking*> m_zoneBooking;   // the booking that put it up, or null
 
     // Ruler. A side ("thumb") mouse button draws the lines: EuroScope only ever
     // reports LEFT/MIDDLE/RIGHT to a plug-in, so the button is read directly
@@ -560,6 +708,7 @@ const int SO_RULER_LABEL   = 42;   // the draggable bearing/distance/time readou
 const int SO_DROPDOWN_ITEM = 50;   // one row of the plugin's own dropdown; sObjectId is the row index
 
 const int SO_SIGMET_AREA   = 70;   // small hit-box on a сигмет's outline; sObjectId is its index
+const int SO_ZONE_AREA     = 71;   // same, for a запретная/ограничительная зона; sObjectId is its index
 
 // ---- Function ids for the Фильтр высоты edit boxes -------------------------
 const int FN_ALTFILTER_FROM = 300;

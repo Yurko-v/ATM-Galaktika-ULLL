@@ -271,6 +271,18 @@ namespace Json
         return w;
     }
 
+    // The way back, for the few things that leave the config as bytes: a URL,
+    // or a path handed to something that takes UTF-8.
+    inline std::string WideToUtf8(const std::wstring& s)
+    {
+        if (s.empty())
+            return std::string();
+        int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), (int)s.size(), NULL, 0, NULL, NULL);
+        std::string out(n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, s.data(), (int)s.size(), &out[0], n, NULL, NULL);
+        return out;
+    }
+
     inline bool Parse(const std::wstring& text, Value& out)
     {
         return Detail::Parser(text).Parse(out);

@@ -111,6 +111,10 @@
     <ClInclude Include="Json.h" />
     <ClInclude Include="Net.h" />
     <ClInclude Include="Sigmet.h" />
+    <ClInclude Include="Atis.h" />
+    <ClInclude Include="Zones.h" />
+    <ClInclude Include="Apw.h" />
+    <ClInclude Include="Squawk.h" />
     <ClInclude Include="GalaxyATMSystem.h" />
   </ItemGroup>
   <ItemGroup>
@@ -121,6 +125,10 @@
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Config.cpp" />
     <ClCompile Include="Sigmet.cpp" />
+    <ClCompile Include="Atis.cpp" />
+    <ClCompile Include="Zones.cpp" />
+    <ClCompile Include="Apw.cpp" />
+    <ClCompile Include="Squawk.cpp" />
     <ClCompile Include="GalaxyATMSystem.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
