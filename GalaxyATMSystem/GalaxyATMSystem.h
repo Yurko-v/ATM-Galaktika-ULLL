@@ -225,8 +225,11 @@ private:
     // one, or a sweatbox when the config allows it. With 'tell', says why not.
     bool SquawkReady(bool tell);
     std::string MyPosition() const;
-    // One line into the "ULLL Squawk" channel when Config::SquawkDebug is on.
-    void SquawkDebugLine(const std::wstring& text);
+    // Into the "ULLL Squawk" message channel. ASCII only - see the note on
+    // SquawkDebugLine's definition.
+    void SquawkMessage(const std::string& text);
+    // One line per click, when Config::SquawkDebug is on.
+    void SquawkDebugLine(const std::string& text);
     // The answers that have come back: codes set on their flight plans, and
     // what went wrong with a request a controller clicked for.
     void ApplySquawkAnswers();

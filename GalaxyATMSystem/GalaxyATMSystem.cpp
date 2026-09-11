@@ -1022,20 +1022,28 @@ void CGalaxyATMSystemPlugin::ConfigureSquawk()
     m_squawk.Configure(m_config.SquawkServerUrl(), m_config.SquawkApiKey(), m_config.SquawkPollSeconds());
 }
 
-void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::wstring& text)
+// Everything that goes into EuroScope's own windows - popup lists, popup edits
+// and the message channel - is written in ASCII: EuroScope draws them with a
+// western charset, and Cyrillic handed to it comes out as "Âûäàòü êîä". The
+// plugin's own panel draws its text itself and stays in Russian.
+void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::string& text)
 {
     if (!m_config.SquawkDebug())
         return;
-    DisplayUserMessage("ULLL Squawk", "debug", Narrow(text).c_str(),
-        true, true, true, true, false);
+    DisplayUserMessage("ULLL Squawk", "debug", text.c_str(), true, true, true, true, false);
+}
+
+void CGalaxyATMSystemPlugin::SquawkMessage(const std::string& text)
+{
+    DisplayUserMessage("ULLL Squawk", "squawk", text.c_str(), true, true, false, false, false);
 }
 
 bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
 {
-    const wchar_t* why = NULL;
+    const char* why = NULL;
     if (!m_squawk.Enabled())
     {
-        why = L"сервер не настроен - Squawk.ServerUrl в GalaxyATMSystem.json";
+        why = "server not set up - Squawk.ServerUrl in GalaxyATMSystem.json";
     }
     else
     {
@@ -1051,16 +1059,15 @@ bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
         if (!live && !(sim && m_config.SquawkAllowSweatbox()))
         {
             why = sim
-                ? L"тренировка: коды выключены, включите Squawk.AllowSweatbox в GalaxyATMSystem.json"
-                : L"нет подключения к сети - коды выдаются только в сети";
+                ? "sweatbox: codes are off, set Squawk.AllowSweatbox in GalaxyATMSystem.json"
+                : "not connected - codes are only handed out on the network";
         }
     }
 
     if (why == NULL)
         return true;
     if (tell)
-        DisplayUserMessage("ULLL Squawk", Narrow(L"Сквоки").c_str(), Narrow(why).c_str(),
-            true, true, false, false, false);
+        SquawkMessage(why);
     return false;
 }
 
@@ -1081,19 +1088,19 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
             if (!answer.byUser)
                 continue;
 
-            std::wstring text;
+            std::string text;
             if (answer.error == "pool_empty")
-                text = L"свободных кодов нет";
+                text = "no free codes left";
             else if (answer.error == "conflict")
-                text = L"код уже выдан " + Widen(answer.holder.c_str());
+                text = "code already held by " + answer.holder;
             else if (answer.error == "unauthorized")
-                text = L"сервер не принял ключ - Squawk.ApiKey";
+                text = "server refused the key - Squawk.ApiKey";
             else if (answer.error == "network")
-                text = L"сервер не отвечает";
+                text = "server is not answering";
             else
-                text = L"ошибка сервера: " + Widen(answer.error.c_str());
+                text = "server error: " + answer.error;
 
-            DisplayUserMessage("ULLL Squawk", answer.callsign.c_str(), Narrow(text).c_str(),
+            DisplayUserMessage("ULLL Squawk", answer.callsign.c_str(), text.c_str(),
                 true, true, false, false, false);
             continue;
         }
@@ -1133,9 +1140,8 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
     if (m_config.SquawkDebug())
     {
         CFlightPlan asel = FlightPlanSelectASEL();
-        std::wstring line = L"fn=" + std::to_wstring(FunctionId) + L" от " + Widen(source)
-            + L", борт: " + (asel.IsValid() ? Widen(asel.GetCallsign()) : std::wstring(L"не выбран"));
-        SquawkDebugLine(line);
+        SquawkDebugLine("fn=" + std::to_string(FunctionId) + " via " + source
+            + ", aircraft: " + (asel.IsValid() ? asel.GetCallsign() : "none selected"));
     }
 
     switch (FunctionId)
@@ -1148,9 +1154,7 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
         CFlightPlan fp = FlightPlanSelectASEL();
         if (!fp.IsValid())
         {
-            DisplayUserMessage("ULLL Squawk", Narrow(L"Сквоки").c_str(),
-                Narrow(L"борт не выбран - кликните по строке борта").c_str(),
-                true, true, false, false, false);
+            SquawkMessage("no aircraft selected - click the aircraft's row");
             return;
         }
         if (!SquawkReady(true))
@@ -1164,10 +1168,10 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
 
         m_squawkMenuCallsign = fp.GetCallsign();
         m_squawkMenuArea = Area;
-        OpenPopupList(Area, Narrow(L"Сквок").c_str(), 1);
-        AddPopupListElement(Narrow(L"Выдать код").c_str(), "", FN_SQUAWK_GET);
-        AddPopupListElement(Narrow(L"Новый код").c_str(), "", FN_SQUAWK_NEW);
-        AddPopupListElement(Narrow(L"Ввести вручную").c_str(), "", FN_SQUAWK_MANUAL);
+        OpenPopupList(Area, "Squawk", 1);
+        AddPopupListElement("Get code", "", FN_SQUAWK_GET);
+        AddPopupListElement("New code", "", FN_SQUAWK_NEW);
+        AddPopupListElement("Type in", "", FN_SQUAWK_MANUAL);
         return;
     }
 
@@ -1196,8 +1200,7 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
         }
         if (!IsSquawkCode(code))
         {
-            DisplayUserMessage("ULLL Squawk", Narrow(L"Сквоки").c_str(),
-                Narrow(L"код - четыре цифры от 0 до 7").c_str(), true, true, false, false, false);
+            SquawkMessage("a code is four digits, 0 to 7");
             return;
         }
 
