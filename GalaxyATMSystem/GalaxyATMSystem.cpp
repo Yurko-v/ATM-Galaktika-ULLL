@@ -1022,6 +1022,14 @@ void CGalaxyATMSystemPlugin::ConfigureSquawk()
     m_squawk.Configure(m_config.SquawkServerUrl(), m_config.SquawkApiKey(), m_config.SquawkPollSeconds());
 }
 
+void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::wstring& text)
+{
+    if (!m_config.SquawkDebug())
+        return;
+    DisplayUserMessage("ULLL Squawk", "debug", Narrow(text).c_str(),
+        true, true, true, true, false);
+}
+
 bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
 {
     const wchar_t* why = NULL;
@@ -1031,9 +1039,21 @@ bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
     }
     else
     {
+        // A sweatbox spends the same pool the live network does, so it is let
+        // in only on purpose - Squawk.AllowSweatbox, for trying the thing out.
         int connection = GetConnectionType();
-        if (connection != CONNECTION_TYPE_DIRECT && connection != CONNECTION_TYPE_VIA_PROXY)
-            why = L"коды выдаются только при подключении к сети VATSIM";
+        bool live = (connection == CONNECTION_TYPE_DIRECT || connection == CONNECTION_TYPE_VIA_PROXY);
+        bool sim = (connection == CONNECTION_TYPE_SWEATBOX
+            || connection == CONNECTION_TYPE_SIMULATOR_SERVER
+            || connection == CONNECTION_TYPE_SIMULATOR_CLIENT
+            || connection == CONNECTION_TYPE_PLAYBACK);
+
+        if (!live && !(sim && m_config.SquawkAllowSweatbox()))
+        {
+            why = sim
+                ? L"тренировка: коды выключены, включите Squawk.AllowSweatbox в GalaxyATMSystem.json"
+                : L"нет подключения к сети - коды выдаются только в сети";
+        }
     }
 
     if (why == NULL)
@@ -1090,6 +1110,118 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
         m_squawkSetByUs[answer.callsign] = answer.code;
         fp.GetControllerAssignedData().SetSquawk(answer.code.c_str());
     }
+}
+
+// The column's clicks and the menu they open. Reached from both OnFunctionCall
+// overrides - see the note on CGalaxyATMSystemPlugin::OnFunctionCall.
+void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sItemString,
+    RECT Area, const char* source)
+{
+    const bool mine = (FunctionId == TAG_FUNC_SQUAWK_ASSIGN || FunctionId == TAG_FUNC_SQUAWK_MENU
+        || FunctionId == FN_SQUAWK_GET || FunctionId == FN_SQUAWK_NEW
+        || FunctionId == FN_SQUAWK_MANUAL || FunctionId == FN_SQUAWK_MANUAL_EDIT);
+    if (!mine)
+        return;
+
+    // One click can arrive down both routes; act on it once.
+    ULONGLONG now = GetTickCount64();
+    if (FunctionId == m_lastSquawkFn && now - m_lastSquawkTick < 300)
+        return;
+    m_lastSquawkFn = FunctionId;
+    m_lastSquawkTick = now;
+
+    if (m_config.SquawkDebug())
+    {
+        CFlightPlan asel = FlightPlanSelectASEL();
+        std::wstring line = L"fn=" + std::to_wstring(FunctionId) + L" от " + Widen(source)
+            + L", борт: " + (asel.IsValid() ? Widen(asel.GetCallsign()) : std::wstring(L"не выбран"));
+        SquawkDebugLine(line);
+    }
+
+    switch (FunctionId)
+    {
+    case TAG_FUNC_SQUAWK_ASSIGN:
+    case TAG_FUNC_SQUAWK_MENU:
+    {
+        // A click in a list row or on a tag makes that aircraft the selected
+        // one before the function is called.
+        CFlightPlan fp = FlightPlanSelectASEL();
+        if (!fp.IsValid())
+        {
+            DisplayUserMessage("ULLL Squawk", Narrow(L"Сквоки").c_str(),
+                Narrow(L"борт не выбран - кликните по строке борта").c_str(),
+                true, true, false, false, false);
+            return;
+        }
+        if (!SquawkReady(true))
+            return;
+
+        if (FunctionId == TAG_FUNC_SQUAWK_ASSIGN)
+        {
+            m_squawk.Assign(fp.GetCallsign(), MyPosition(), false, true);
+            return;
+        }
+
+        m_squawkMenuCallsign = fp.GetCallsign();
+        m_squawkMenuArea = Area;
+        OpenPopupList(Area, Narrow(L"Сквок").c_str(), 1);
+        AddPopupListElement(Narrow(L"Выдать код").c_str(), "", FN_SQUAWK_GET);
+        AddPopupListElement(Narrow(L"Новый код").c_str(), "", FN_SQUAWK_NEW);
+        AddPopupListElement(Narrow(L"Ввести вручную").c_str(), "", FN_SQUAWK_MANUAL);
+        return;
+    }
+
+    case FN_SQUAWK_GET:
+    case FN_SQUAWK_NEW:
+        if (!m_squawkMenuCallsign.empty() && SquawkReady(true))
+            m_squawk.Assign(m_squawkMenuCallsign, MyPosition(), FunctionId == FN_SQUAWK_NEW, true);
+        return;
+
+    case FN_SQUAWK_MANUAL:
+    {
+        CFlightPlan fp = FlightPlanSelect(m_squawkMenuCallsign.c_str());
+        if (!fp.IsValid())
+            return;
+        OpenPopupEdit(m_squawkMenuArea, FN_SQUAWK_MANUAL_EDIT, fp.GetControllerAssignedData().GetSquawk());
+        return;
+    }
+
+    case FN_SQUAWK_MANUAL_EDIT:
+    {
+        std::string code;
+        for (const char* p = sItemString; p != NULL && *p != '\0'; p++)
+        {
+            if (*p != ' ')
+                code += *p;
+        }
+        if (!IsSquawkCode(code))
+        {
+            DisplayUserMessage("ULLL Squawk", Narrow(L"Сквоки").c_str(),
+                Narrow(L"код - четыре цифры от 0 до 7").c_str(), true, true, false, false, false);
+            return;
+        }
+
+        CFlightPlan fp = FlightPlanSelect(m_squawkMenuCallsign.c_str());
+        if (!fp.IsValid())
+            return;
+
+        // Set on the plan whatever the controller chose, and reported, so a
+        // clash with another aircraft is said out loud.
+        m_squawkSetByUs[fp.GetCallsign()] = code;
+        fp.GetControllerAssignedData().SetSquawk(code.c_str());
+        if (SquawkReady(false))
+            m_squawk.Report(fp.GetCallsign(), code, MyPosition(), true);
+        return;
+    }
+
+    default:
+        return;
+    }
+}
+
+void CGalaxyATMSystemPlugin::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)
+{
+    HandleSquawkFunction(FunctionId, sItemString, Area, "plugin");
 }
 
 // A code set on a flight plan by anything but this plugin's own answer: typed
@@ -5175,82 +5307,11 @@ void CGalaxyATMSystemRadarScreen::OnDoubleClickScreenObject(int ObjectType, cons
 
 void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)
 {
-    // The "ULLL Squawk" column's clicks and menu (see Squawk.h). EuroScope
-    // delivers a TAG item function here, on the screen the tag belongs to, not
-    // on the plugin - which is why this lives here and not next to
-    // RegisterTagItemFunction in the plugin's constructor.
-    switch (FunctionId)
-    {
-    case TAG_FUNC_SQUAWK_ASSIGN:
-    case TAG_FUNC_SQUAWK_MENU:
-    {
-        // A click in a list row or a tag makes that aircraft the selected one
-        // before the function is called.
-        CFlightPlan fp = GetPlugIn()->FlightPlanSelectASEL();
-        if (!fp.IsValid() || !Plugin()->SquawkReady(true))
-            return;
-
-        if (FunctionId == TAG_FUNC_SQUAWK_ASSIGN)
-        {
-            Plugin()->SquawkAssign(fp.GetCallsign(), Plugin()->MyPosition(), false, true);
-            return;
-        }
-
-        m_squawkMenuCallsign = fp.GetCallsign();
-        m_squawkMenuArea = Area;
-        GetPlugIn()->OpenPopupList(Area, Narrow(L"Сквок").c_str(), 1);
-        GetPlugIn()->AddPopupListElement(Narrow(L"Выдать код").c_str(), "", FN_SQUAWK_GET);
-        GetPlugIn()->AddPopupListElement(Narrow(L"Новый код").c_str(), "", FN_SQUAWK_NEW);
-        GetPlugIn()->AddPopupListElement(Narrow(L"Ввести вручную").c_str(), "", FN_SQUAWK_MANUAL);
-        return;
-    }
-
-    case FN_SQUAWK_GET:
-    case FN_SQUAWK_NEW:
-        if (!m_squawkMenuCallsign.empty() && Plugin()->SquawkReady(true))
-            Plugin()->SquawkAssign(m_squawkMenuCallsign, Plugin()->MyPosition(), FunctionId == FN_SQUAWK_NEW, true);
-        return;
-
-    case FN_SQUAWK_MANUAL:
-    {
-        CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_squawkMenuCallsign.c_str());
-        if (!fp.IsValid())
-            return;
-        GetPlugIn()->OpenPopupEdit(m_squawkMenuArea, FN_SQUAWK_MANUAL_EDIT, fp.GetControllerAssignedData().GetSquawk());
-        return;
-    }
-
-    case FN_SQUAWK_MANUAL_EDIT:
-    {
-        std::string code;
-        for (const char* p = sItemString; p != NULL && *p != '\0'; p++)
-        {
-            if (*p != ' ')
-                code += *p;
-        }
-        if (!IsSquawkCode(code))
-        {
-            GetPlugIn()->DisplayUserMessage("ULLL Squawk", Narrow(L"Сквоки").c_str(),
-                Narrow(L"код - четыре цифры от 0 до 7").c_str(), true, true, false, false, false);
-            return;
-        }
-
-        CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_squawkMenuCallsign.c_str());
-        if (!fp.IsValid())
-            return;
-
-        // Set on the plan whatever the server says - the controller chose it
-        // - and reported, so a clash with another aircraft is said out loud.
-        Plugin()->NoteSquawkSetByUs(fp.GetCallsign(), code);
-        fp.GetControllerAssignedData().SetSquawk(code.c_str());
-        if (Plugin()->SquawkReady(false))
-            Plugin()->SquawkReport(fp.GetCallsign(), code, Plugin()->MyPosition(), true);
-        return;
-    }
-
-    default:
-        break;
-    }
+    // The "ULLL Squawk" column's clicks and menu. EuroScope may deliver a TAG
+    // item function here or to the plugin, depending on whether it was clicked
+    // on a tag or in an AC list, so both routes lead to the same handler, which
+    // ignores ids that are not its own and drops a duplicate of one click.
+    Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
     if (FunctionId == FN_RC_FILTER)
     {

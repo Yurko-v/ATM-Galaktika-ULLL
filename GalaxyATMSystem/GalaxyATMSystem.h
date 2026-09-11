@@ -65,33 +65,21 @@ public:
     // thread and to re-fetch periodically.
     virtual void OnTimer(int Counter);
 
-    // Squawks from the shared server (see Squawk.h). The "ULLL Squawk" column's
-    // clicks land on the radar screen, not here - see CGalaxyATMSystemRadarScreen
-    // ::OnFunctionCall: EuroScope routes a TAG item function to whichever screen
-    // the tag belongs to, not to the plugin. This is only the plugin's own share
-    // of it: a code changed some other way is reported back to the server.
+    // Squawks from the shared server (see Squawk.h): the "ULLL Squawk" column's
+    // clicks and menu, and a code changed some other way reported back to it.
+    //
+    // Which of the two OnFunctionCall overrides EuroScope actually calls for a
+    // TAG item function depends on where it was clicked - a tag on a radar
+    // screen or a row in an AC list - so both are wired to the same handler,
+    // and the handler itself drops a repeat of the same function within a few
+    // hundred milliseconds in case both ever fire for one click.
+    virtual void OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area);
     virtual void OnFlightPlanControllerAssignedDataUpdate(
         EuroScopePlugIn::CFlightPlan FlightPlan, int DataType);
 
-    // Configured, and connected to the live network - a sweatbox session must
-    // not take codes out of the real pool. With 'tell', says why not.
-    bool SquawkReady(bool tell);
-    std::string MyPosition() const;
-
-    // Thin forwarders so the radar screen's OnFunctionCall can drive the squawk
-    // client and the "set by us" map without reaching into private state.
-    void SquawkAssign(const std::string& callsign, const std::string& position, bool fresh, bool byUser)
-    {
-        m_squawk.Assign(callsign, position, fresh, byUser);
-    }
-    void SquawkReport(const std::string& callsign, const std::string& code, const std::string& position, bool byUser)
-    {
-        m_squawk.Report(callsign, code, position, byUser);
-    }
-    void NoteSquawkSetByUs(const std::string& callsign, const std::string& code)
-    {
-        m_squawkSetByUs[callsign] = code;
-    }
+    // 'source' is only for the debug line ("plugin" / "screen") - see
+    // Config::SquawkDebug.
+    void HandleSquawkFunction(int FunctionId, const char* sItemString, RECT Area, const char* source);
 
     const Config& GetConfig() const { return m_config; }
 
@@ -222,7 +210,23 @@ private:
     // EuroScope raises for them is not reported back as one typed by hand.
     std::map<std::string, std::string> m_squawkSetByUs;
 
+    // The aircraft and the cell the menu was opened on, for the item picked in
+    // it and for the edit box "Ввести вручную" opens in the same place.
+    std::string m_squawkMenuCallsign;
+    RECT m_squawkMenuArea = { 0, 0, 0, 0 };
+
+    // Last function handled, so one click delivered down both routes is acted
+    // on once.
+    int       m_lastSquawkFn = 0;
+    ULONGLONG m_lastSquawkTick = 0;
+
     void ConfigureSquawk();
+    // Configured, and connected to a network codes may be taken for - the live
+    // one, or a sweatbox when the config allows it. With 'tell', says why not.
+    bool SquawkReady(bool tell);
+    std::string MyPosition() const;
+    // One line into the "ULLL Squawk" channel when Config::SquawkDebug is on.
+    void SquawkDebugLine(const std::wstring& text);
     // The answers that have come back: codes set on their flight plans, and
     // what went wrong with a request a controller clicked for.
     void ApplySquawkAnswers();
@@ -572,12 +576,6 @@ private:
     int  m_rcSortKey;       // index into kRcSortKeys
     bool m_rcSortAsc;
     std::wstring m_rcFilter;   // substring match on the callsign, empty = everything
-
-    // "ULLL Squawk" menu (see OnFunctionCall): the aircraft and the cell it was
-    // opened on, for the item picked in it and for the edit box "Ввести вручную"
-    // opens in the same place.
-    std::string m_squawkMenuCallsign;
-    RECT m_squawkMenuArea = { 0, 0, 0, 0 };
 
     bool m_atisOpen;
     int  m_atisScrollPx;

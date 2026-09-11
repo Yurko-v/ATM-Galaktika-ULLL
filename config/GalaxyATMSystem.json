@@ -59,7 +59,9 @@
     "Enabled": true,
     "ServerUrl": "",
     "ApiKey": "",
-    "PollSeconds": 15
+    "PollSeconds": 15,
+    "AllowSweatbox": false,
+    "Debug": false
   },
 
   "Atis": {

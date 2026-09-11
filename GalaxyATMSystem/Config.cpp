@@ -364,6 +364,8 @@ void Config::Load(HINSTANCE hModule)
     m_SquawkServerUrl.clear();
     m_SquawkApiKey.clear();
     m_SquawkPollSeconds = 15;
+    m_SquawkAllowSweatbox = false;
+    m_SquawkDebug = false;
     if (const Json::Value* sq = root.Find(L"Squawk"))
     {
         if (sq->kind == Json::Value::Kind::Object)
@@ -377,6 +379,10 @@ void Config::Load(HINSTANCE hModule)
                 m_SquawkApiKey = Json::WideToUtf8(v->AsString());
             if (const Json::Value* v = sq->Find(L"PollSeconds"))
                 m_SquawkPollSeconds = (int)max(5LL, min(300LL, v->AsInt(m_SquawkPollSeconds)));
+            if (const Json::Value* v = sq->Find(L"AllowSweatbox"))
+                m_SquawkAllowSweatbox = v->AsBool(m_SquawkAllowSweatbox);
+            if (const Json::Value* v = sq->Find(L"Debug"))
+                m_SquawkDebug = v->AsBool(m_SquawkDebug);
             if (!enabled)
                 m_SquawkServerUrl.clear();
         }

@@ -256,6 +256,17 @@ public:
     const std::string& SquawkApiKey() const { return m_SquawkApiKey; }
     int  SquawkPollSeconds() const { return m_SquawkPollSeconds; }
 
+    // Let a sweatbox / simulator session take codes out of the same pool the
+    // live network uses. Off by default - a training session must not spend
+    // the real pool - but the only way to try the whole thing out before a
+    // real session is to turn it on for a while.
+    bool SquawkAllowSweatbox() const { return m_SquawkAllowSweatbox; }
+
+    // Says out loud, in the "ULLL Squawk" message channel, what every click on
+    // the column did - which function id arrived, from where, and whether an
+    // aircraft was selected. For working out why a click does nothing.
+    bool SquawkDebug() const { return m_SquawkDebug; }
+
     // How many positions the file named - what ".reload" reports, so a config
     // that failed to parse says so by the count rather than only by its error.
     size_t PositionCount() const { return m_Positions.size(); }
@@ -292,6 +303,8 @@ private:
     std::string m_SquawkServerUrl;
     std::string m_SquawkApiKey;
     int  m_SquawkPollSeconds = 15;
+    bool m_SquawkAllowSweatbox = false;
+    bool m_SquawkDebug = false;
     std::map<std::wstring, PositionInfo> m_Positions;   // key -> info (key upper-cased)
     std::wstring m_LoadError;
     std::wstring m_Path;
