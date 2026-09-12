@@ -67,6 +67,25 @@ void SquawkClient::Log(const std::string& line)
     file << stamp << "  " << line << "\n";
 }
 
+void SquawkClient::SetPosition(const std::string& position)
+{
+    std::string clean = Token(position, 20, true);
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (clean == m_position)
+            return;
+        m_position = clean;
+        m_saidNoPosition = false;
+        // Logging in - or on to another position - changes what the server
+        // will answer, so the list is worth asking for again straight away.
+        m_pollNow = true;
+    }
+
+    Log("position: " + (clean.empty() ? std::string("(none - not logged in)") : clean));
+    m_wake.notify_all();
+}
+
 void SquawkClient::Configure(const std::string& baseUrl, const std::string& apiKey, int pollSeconds,
     const std::wstring& logPath)
 {
@@ -216,6 +235,7 @@ void SquawkClient::Run()
         bool pollDue = false;
         std::string url;
         std::string key;
+        std::string position;
         int pollSeconds = 15;
 
         {
@@ -227,6 +247,7 @@ void SquawkClient::Run()
 
             url = m_url;
             key = m_key;
+            position = m_position;
             pollSeconds = m_pollSeconds;
 
             if (!m_queue.empty())
@@ -262,7 +283,7 @@ void SquawkClient::Run()
 
         if (pollDue)
         {
-            Poll(url, key);
+            Poll(url, key, position);
             nextPoll = Clock::now() + std::chrono::seconds(pollSeconds);
         }
     }
@@ -290,7 +311,9 @@ SquawkAnswer SquawkClient::Send(const Request& request, const std::string& url, 
             + "\",\"position\":\"" + request.position + "\"}";
     }
 
-    std::string headers = "Content-Type: application/json\r\nX-Api-Key: " + Token(key, 128, false) + "\r\n";
+    std::string headers = "Content-Type: application/json\r\n";
+    if (!key.empty())
+        headers += "X-Api-Key: " + Token(key, 128, false) + "\r\n";
 
     Log("POST " + url + endpoint + " " + body);
 
@@ -343,18 +366,40 @@ SquawkAnswer SquawkClient::Send(const Request& request, const std::string& url, 
 
 // A poll that fails leaves the last list standing: the codes it listed are no
 // less taken because one answer did not come back.
-void SquawkClient::Poll(const std::string& url, const std::string& key)
+void SquawkClient::Poll(const std::string& url, const std::string& key, const std::string& position)
 {
-    Net::HttpResponse response;
-    std::string headers = "X-Api-Key: " + Token(key, 128, false) + "\r\n";
-    if (!Net::HttpRequest("GET", url + "/state.php", headers, std::string(), response, 1024 * 1024))
+    // The server has nobody to check without a position, and would turn the
+    // poll down every time; before the controller logs in there is nothing to
+    // ask about anyway.
+    if (position.empty())
     {
-        Log("GET " + url + "/state.php -> no answer at all (network, DNS or timeout)");
+        // Said once, not once every poll. Log() takes the lock itself, so it
+        // is called after this one has gone.
+        bool tell = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            tell = !m_saidNoPosition;
+            m_saidNoPosition = true;
+        }
+        if (tell)
+            Log("state: not asking - no controller callsign yet");
+        return;
+    }
+
+    std::string endpoint = "/state.php?position=" + position;
+
+    Net::HttpResponse response;
+    std::string headers;
+    if (!key.empty())
+        headers = "X-Api-Key: " + Token(key, 128, false) + "\r\n";
+    if (!Net::HttpRequest("GET", url + endpoint, headers, std::string(), response, 1024 * 1024))
+    {
+        Log("GET " + url + endpoint + " -> no answer at all (network, DNS or timeout)");
         return;
     }
     if (response.status != 200)
     {
-        Log("GET " + url + "/state.php -> " + std::to_string(response.status)
+        Log("GET " + url + endpoint + " -> " + std::to_string(response.status)
             + " " + response.body.substr(0, 200));
         return;
     }

@@ -14,7 +14,6 @@ require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/codes.php';
 
 require_method('POST');
-require_api_key();
 
 $in = read_json_body();
 $callsign = clean_callsign($in['callsign'] ?? '');
@@ -23,6 +22,8 @@ $code = clean_code($in['code'] ?? '');
 if ($callsign === null || $position === null || $code === null) {
     json_out(400, ['error' => 'bad_request']);
 }
+
+$cid = require_caller($position);
 
 // 2000, 7000, emergencies and the like belong to nobody.
 if (in_array($code, app_config()['reserved'], true)) {
@@ -43,7 +44,7 @@ if ($current !== null) {
     release_assignment((int)$current['id']);
 }
 
-$result = try_insert($callsign, $code, $position);
+$result = try_insert($callsign, $code, $position, $cid);
 if ($result === 'ok') {
     json_out(200, ['status' => 'ok']);
 }

@@ -1,7 +1,11 @@
 <?php
 // Galaxy ATM System - squawk server settings.
 // Copy this file to config.php (next to it) and fill it in. config.php holds
-// the database password and the API key, so it is never committed.
+// the database password, so it is never committed.
+//
+// This is the only place a secret lives. The plug-in carries none: a request is
+// let in because the position it names is really controlling on VATSIM at that
+// moment (see require_caller() in lib/bootstrap.php).
 
 return [
     'db' => [
@@ -10,9 +14,27 @@ return [
         'pass' => 'CHANGE_ME',
     ],
 
-    // Shared by every controller's plugin (GalaxyATMSystem.json -> Squawk.ApiKey).
-    // Any long random string.
-    'api_key' => 'CHANGE_ME',
+    // Optional second lock, off when empty - a shared key every plug-in must
+    // send as X-Api-Key on top of being online. Leave it empty: a key shared by
+    // everyone is a key that leaks, and it buys nothing the online check does
+    // not already give. Set it only to close the service off entirely for a
+    // while - and then every controller needs the key file as well.
+    'api_key' => '',
+
+    // How old the list of who is controlling may be before nobody is let in at
+    // all. The cron refreshes it every minute; an endpoint that cannot find its
+    // caller in it refreshes it itself, at most once every few seconds.
+    'controller_max_age_sec' => 180,
+    'controller_refresh_sec' => 20,
+
+    // Requests one position may make in a minute; 0 turns the limit off. Not a
+    // lock - just a bound on what a plug-in stuck in a loop can cost.
+    'rate_limit_per_min' => 120,
+
+    // Positions let in without being online - for checking the server from the
+    // command line (see README, step 9). Leave this empty in normal use: a
+    // callsign listed here can be used by anyone who knows the address.
+    'test_positions' => [],
 
     // Code ranges per position, from the sector file (.ese, [POSITIONS]).
     // The first pattern matching the requesting position's callsign wins and

@@ -50,11 +50,20 @@ public:
     // key the server wants, and how often to poll it. An empty URL switches
     // the client off. Called again on ".reload".
     //
+    // 'apiKey' is normally empty: the server knows its callers by the position
+    // they are logged in on, not by a shared secret. It is only filled in for a
+    // server that has been closed off with an extra key of its own.
+    //
     // 'logPath', when it is not empty, is a file every request and answer is
     // appended to - the only way to see what the worker thread is doing, since
     // it cannot put anything on the screen itself. See Config::SquawkDebug.
     void Configure(const std::string& baseUrl, const std::string& apiKey, int pollSeconds,
         const std::wstring& logPath = std::wstring());
+
+    // The controller callsign every request goes out under, and the one the
+    // server checks against the network. Empty until EuroScope has one, and
+    // nothing is asked of the server until it does. Cheap to call every tick.
+    void SetPosition(const std::string& position);
 
     // One timestamped line into that file; does nothing without one.
     void Log(const std::string& line);
@@ -96,7 +105,7 @@ private:
     void Queue(Request request);
     void Run();
     SquawkAnswer Send(const Request& request, const std::string& url, const std::string& key);
-    void Poll(const std::string& url, const std::string& key);
+    void Poll(const std::string& url, const std::string& key, const std::string& position);
 
     mutable std::mutex m_mutex;
     mutable std::mutex m_logMutex;
@@ -108,6 +117,8 @@ private:
 
     std::string m_url;
     std::string m_key;
+    std::string m_position;
+    bool m_saidNoPosition = false;   // the "not logged in" line is logged once
     int m_pollSeconds = 15;
 
     std::deque<Request> m_queue;

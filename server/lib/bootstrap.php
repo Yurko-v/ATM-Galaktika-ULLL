@@ -6,6 +6,10 @@ declare(strict_types=1);
 
 date_default_timezone_set('UTC');
 
+// Reading the VATSIM feed: needed by the cron job, and by the check on who is
+// calling further down.
+require_once __DIR__ . '/vatsim.php';
+
 set_exception_handler(function (Throwable $e): void {
     error_log('squawk: ' . $e->getMessage());
     if (PHP_SAPI === 'cli') {
@@ -61,13 +65,156 @@ function require_method(string $method): void
     }
 }
 
-function require_api_key(): void
+// The small key/value store the sync times live in.
+function sync_state_get(string $name): ?string
 {
-    $key   = (string)(app_config()['api_key'] ?? '');
+    $st = db()->prepare('SELECT value FROM sync_state WHERE name = ?');
+    $st->execute([$name]);
+    $value = $st->fetchColumn();
+    return $value === false ? null : (string)$value;
+}
+
+function sync_state_set(string $name, string $value): void
+{
+    db()->prepare(
+        'INSERT INTO sync_state (name, value) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE value = VALUES(value)'
+    )->execute([$name, $value]);
+}
+
+// ---- Who is calling ---------------------------------------------------------
+// There is no secret on the controller's side to check: the plug-in is handed
+// out as it stands, and a file with a shared key in it is a file that leaks.
+// What a real caller has instead is something no config file can carry - they
+// are sitting on that position on the VATSIM network at this moment. That is
+// what is checked here, against the snapshot the cron job keeps (see
+// lib/vatsim.php), so every secret the service has stays in config.php on the
+// server.
+//
+// An api_key in config.php is still honoured if it is set, as a second lock on
+// top - but it is optional, and empty by default.
+
+function api_key_required(): bool
+{
+    $key = (string)(app_config()['api_key'] ?? '');
+    return $key !== '' && $key !== 'CHANGE_ME';
+}
+
+function check_api_key(): void
+{
+    if (!api_key_required()) {
+        return;
+    }
+    $key   = (string)app_config()['api_key'];
     $given = (string)($_SERVER['HTTP_X_API_KEY'] ?? '');
-    if ($key === '' || $key === 'CHANGE_ME' || !hash_equals($key, $given)) {
+    if (!hash_equals($key, $given)) {
         json_out(401, ['error' => 'unauthorized']);
     }
+}
+
+// True while the snapshot of who is controlling is recent enough to judge a
+// caller by. Its own clock, separate from the pilots' - the controller list is
+// what stands between the service and anyone at all, so it is held to a tighter
+// age than the code pool is.
+function controllers_are_fresh(): bool
+{
+    $updated = sync_state_get('controllers_updated');
+    if ($updated === null) {
+        return false;
+    }
+    $max = max(60, (int)(app_config()['controller_max_age_sec'] ?? 180));
+    return strtotime($updated . ' UTC') >= time() - $max;
+}
+
+function controller_cid(string $position): ?string
+{
+    $st = db()->prepare('SELECT cid FROM network_controllers WHERE callsign = ?');
+    $st->execute([$position]);
+    $cid = $st->fetchColumn();
+    return $cid === false ? null : (string)$cid;
+}
+
+// Reads the feed here and now, rather than waiting for the next cron run -
+// but at most once every controller_refresh_sec, whatever the answer, so a
+// caller nobody knows cannot turn every request into a fetch from VATSIM.
+function refresh_controllers_if_due(): void
+{
+    $config = app_config();
+    $every  = max(5, (int)($config['controller_refresh_sec'] ?? 20));
+
+    $last = sync_state_get('controllers_polled');
+    if ($last !== null && strtotime($last . ' UTC') > time() - $every) {
+        return;
+    }
+    // Stamped before the fetch, not after: a feed that times out must not leave
+    // the door open for another fetch on the very next request.
+    sync_state_set('controllers_polled', gmdate('Y-m-d H:i:s'));
+
+    $feed = vatsim_parse(vatsim_fetch((string)$config['vatsim_data_url'], 5, 10));
+    if ($feed === null) {
+        return;
+    }
+    $controllers = vatsim_controllers($feed);
+    if ($controllers !== null) {
+        vatsim_write_controllers($controllers, (int)$feed['_time']);
+    }
+}
+
+// No more than this many requests a minute from one position. Not security -
+// the online check is that - just a bound on what a plug-in stuck in a loop, or
+// someone poking at the service, can cost the database.
+function check_rate_limit(string $position): void
+{
+    $limit = (int)(app_config()['rate_limit_per_min'] ?? 120);
+    if ($limit <= 0) {
+        return;
+    }
+
+    $pdo = db();
+    // The window starts over once it is a minute old; MySQL takes the
+    // assignments left to right, so hits still sees the old window_start.
+    $pdo->prepare(
+        'INSERT INTO rate_limit (bucket, window_start, hits) VALUES (?, NOW(), 1)
+         ON DUPLICATE KEY UPDATE
+             hits         = IF(window_start < NOW() - INTERVAL 60 SECOND, 1, hits + 1),
+             window_start = IF(window_start < NOW() - INTERVAL 60 SECOND, NOW(), window_start)'
+    )->execute([$position]);
+
+    $st = $pdo->prepare('SELECT hits FROM rate_limit WHERE bucket = ?');
+    $st->execute([$position]);
+    if ((int)$st->fetchColumn() > $limit) {
+        json_out(429, ['error' => 'rate_limited']);
+    }
+}
+
+// Every endpoint that changes or reads the pool goes through here. Returns the
+// caller's CID, for the record kept against the codes they hand out.
+function require_caller(string $position): ?string
+{
+    check_rate_limit($position);
+    check_api_key();
+
+    // A position let in without the online check - for testing the server from
+    // the command line. Empty in normal use; see config.sample.php.
+    if (in_array($position, (array)(app_config()['test_positions'] ?? []), true)) {
+        return null;
+    }
+
+    $cid = controller_cid($position);
+    if ($cid === null || !controllers_are_fresh()) {
+        refresh_controllers_if_due();
+        $cid = controller_cid($position);
+    }
+
+    if (!controllers_are_fresh()) {
+        // Nobody can be checked, so nobody is let in: the alternative is a
+        // service that quietly stops checking the moment VATSIM is unreachable.
+        json_out(503, ['error' => 'network_stale']);
+    }
+    if ($cid === null) {
+        json_out(401, ['error' => 'not_online']);
+    }
+    return $cid;
 }
 
 function read_json_body(): array

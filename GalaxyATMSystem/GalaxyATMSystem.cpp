@@ -702,7 +702,12 @@ void CGalaxyATMSystemPlugin::StartMetarFetch()
 
 void CGalaxyATMSystemPlugin::OnTimer(int Counter)
 {
-    // First, and every tick: a code the server has just handed out is what a
+    // The position the squawk server knows us by - it has no key to go on, only
+    // whether this callsign is really controlling on the network right now, so
+    // the worker thread has to be told when we log in or change position.
+    m_squawk.SetPosition(MyPosition());
+
+    // Then, and every tick: a code the server has just handed out is what a
     // controller is waiting to read out to the pilot.
     ApplySquawkAnswers();
 
@@ -1114,8 +1119,15 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
                 text = "no free codes left";
             else if (answer.error == "conflict")
                 text = "code already held by " + answer.holder;
+            else if (answer.error == "not_online")
+                text = "the server does not see " + MyPosition()
+                    + " online on VATSIM - if you have only just logged in, try again in a minute";
+            else if (answer.error == "network_stale")
+                text = "the server cannot reach VATSIM, so it cannot tell who is asking";
+            else if (answer.error == "rate_limited")
+                text = "too many requests from this position - wait a minute";
             else if (answer.error == "unauthorized")
-                text = "server refused the key - Squawk.ApiKey";
+                text = "server refused the key - Squawk.ApiKeyFile";
             else if (answer.error == "network")
                 text = "server is not answering";
             else

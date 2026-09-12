@@ -7,6 +7,7 @@
 // a code found to clash on the radar.
 //
 // 200 {"callsign", "code", "existing"} | 409 {"error": "pool_empty"}
+//     401 {"error": "not_online"} if that position is not controlling on VATSIM
 
 declare(strict_types=1);
 
@@ -14,7 +15,6 @@ require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/codes.php';
 
 require_method('POST');
-require_api_key();
 
 $in = read_json_body();
 $callsign = clean_callsign($in['callsign'] ?? '');
@@ -23,6 +23,10 @@ $new = !empty($in['new']);
 if ($callsign === null || $position === null) {
     json_out(400, ['error' => 'bad_request']);
 }
+
+// Read first, checked second: the position in the body is what the caller is
+// checked against - they must be controlling it on the network right now.
+$cid = require_caller($position);
 
 $exclude = [];
 for ($attempt = 0; $attempt < 3; $attempt++) {
@@ -39,7 +43,7 @@ for ($attempt = 0; $attempt < 3; $attempt++) {
     }
 
     foreach (free_codes_in_order($position, $callsign, $exclude) as $code) {
-        $result = try_insert($callsign, $code, $position);
+        $result = try_insert($callsign, $code, $position, $cid);
         if ($result === 'ok') {
             json_out(200, ['callsign' => $callsign, 'code' => $code, 'existing' => false]);
         }

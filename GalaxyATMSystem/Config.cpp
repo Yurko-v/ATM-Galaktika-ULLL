@@ -378,10 +378,11 @@ void Config::Load(HINSTANCE hModule)
             if (const Json::Value* v = sq->Find(L"ApiKey"))
                 m_SquawkApiKey = Json::WideToUtf8(v->AsString());
 
-            // The key kept out of the config file itself, so the config can be
-            // handed to another controller, or committed, without the key
-            // riding along with it. Read after "ApiKey" and overrides it; a
-            // relative name is taken from the folder the plug-in sits in.
+            // Only for a server that asks for a key at all - see
+            // Config::SquawkApiKey. Kept out of the config file itself, so the
+            // config can be handed to another controller, or committed, without
+            // the key riding along with it. Read after "ApiKey" and overrides
+            // it; a relative name is taken from the folder the plug-in sits in.
             if (const Json::Value* v = sq->Find(L"ApiKeyFile"))
             {
                 std::wstring name = v->AsString();

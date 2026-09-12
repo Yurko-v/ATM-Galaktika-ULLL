@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS assignments (
     callsign         VARCHAR(12)  NOT NULL,
     code             CHAR(4)      NOT NULL,
     assigned_by      VARCHAR(20)  NOT NULL,
+    assigned_cid     VARCHAR(12)  NULL,
     assigned_at      DATETIME     NOT NULL,
     last_seen_online DATETIME     NULL,
     released_at      DATETIME     NULL,
@@ -33,7 +34,27 @@ CREATE TABLE IF NOT EXISTS network_pilots (
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Small key/value store; 'network_updated' is the feed time of the last sync.
+-- Who is online as a controller, as of the last look at the feed - written by
+-- the cron job, and by an endpoint that had to look for itself (lib/vatsim.php).
+-- This is what stands in for an API key: a request is let in because the
+-- position it claims is really controlling right now. Observers are not here.
+CREATE TABLE IF NOT EXISTS network_controllers (
+    callsign VARCHAR(20) NOT NULL,
+    cid      VARCHAR(12) NOT NULL,
+    PRIMARY KEY (callsign)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Requests counted per position over a rolling minute; see check_rate_limit().
+CREATE TABLE IF NOT EXISTS rate_limit (
+    bucket       VARCHAR(40)  NOT NULL,
+    window_start DATETIME     NOT NULL,
+    hits         INT UNSIGNED NOT NULL,
+    PRIMARY KEY (bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Small key/value store: 'network_updated' and 'controllers_updated' are the
+-- feed times of the last sync of each list, 'controllers_polled' the last time
+-- an endpoint went to the feed itself.
 CREATE TABLE IF NOT EXISTS sync_state (
     name  VARCHAR(32) NOT NULL,
     value VARCHAR(64) NOT NULL,

@@ -18,34 +18,6 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../lib/bootstrap.php';
 
-function fetch_feed(string $source): ?string
-{
-    if (!preg_match('~^https?://~i', $source)) {
-        $data = @file_get_contents($source);
-        return $data === false ? null : $data;
-    }
-
-    if (function_exists('curl_init')) {
-        $ch = curl_init($source);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_USERAGENT      => 'GalaxyATMSystem-squawk/1.0',
-        ]);
-        $data = curl_exec($ch);
-        $ok = $data !== false && curl_getinfo($ch, CURLINFO_HTTP_CODE) === 200;
-        curl_close($ch);
-        return $ok ? $data : null;
-    }
-
-    $ctx = stream_context_create(['http' => ['timeout' => 30, 'user_agent' => 'GalaxyATMSystem-squawk/1.0']]);
-    $data = @file_get_contents($source, false, $ctx);
-    return $data === false ? null : $data;
-}
-
 function fail(string $why): void
 {
     fwrite(STDERR, gmdate('Y-m-d H:i:s') . " vatsim_sync: $why" . PHP_EOL);
@@ -55,25 +27,19 @@ function fail(string $why): void
 $config = app_config();
 $source = $argv[1] ?? $config['vatsim_data_url'];
 
-$raw = fetch_feed($source);
+$raw = vatsim_fetch($source);
 if ($raw === null) {
     fail("could not read $source");
 }
 
-$feed = json_decode($raw, true);
-if (!is_array($feed) || !isset($feed['pilots']) || !is_array($feed['pilots'])) {
-    fail('not a VATSIM data feed');
-}
-
 // Nothing is released on a feed that is old or empty: a network outage must
-// not look like every pilot disconnecting at once.
-$feedTime = strtotime((string)($feed['general']['update_timestamp'] ?? ''));
-if ($feedTime === false) {
-    fail('feed has no update_timestamp');
+// not look like every pilot disconnecting at once. vatsim_parse() turns down a
+// feed with no timestamp, or one older than network_max_age_min.
+$feed = vatsim_parse($raw);
+if ($feed === null || !isset($feed['pilots']) || !is_array($feed['pilots'])) {
+    fail('not a usable VATSIM data feed - missing, malformed or stale');
 }
-if ($feedTime < time() - 60 * (int)$config['network_max_age_min']) {
-    fail('feed is stale: ' . gmdate('Y-m-d H:i:s', $feedTime));
-}
+$feedTime = (int)$feed['_time'];
 if (count($feed['pilots']) === 0) {
     fail('feed has no pilots');
 }
@@ -98,8 +64,17 @@ foreach ($feed['pilots'] as $p) {
     ];
 }
 
+$controllers = vatsim_controllers($feed);
+if ($controllers === null) {
+    fail('feed has no controllers list');
+}
+
 $pdo = db();
 $pdo->beginTransaction();
+
+// Who is controlling: the list every request is checked against, since the
+// plug-in carries no key of its own (see require_caller() in lib/bootstrap.php).
+vatsim_write_controllers($controllers, $feedTime);
 
 $pdo->exec('DELETE FROM network_pilots');
 foreach (array_chunk($rows, 300) as $chunk) {
@@ -131,11 +106,12 @@ $released = $release->rowCount();
 // A month of history is plenty to see what happened; the rest goes.
 $pdo->exec('DELETE FROM assignments WHERE released_at IS NOT NULL AND released_at < NOW() - INTERVAL 30 DAY');
 
-$pdo->prepare(
-    "INSERT INTO sync_state (name, value) VALUES ('network_updated', ?)
-     ON DUPLICATE KEY UPDATE value = VALUES(value)"
-)->execute([gmdate('Y-m-d H:i:s', $feedTime)]);
+sync_state_set('network_updated', gmdate('Y-m-d H:i:s', $feedTime));
+
+// Buckets nobody has touched for an hour; the table is a counter, not a log.
+$pdo->exec('DELETE FROM rate_limit WHERE window_start < NOW() - INTERVAL 1 HOUR');
 
 $pdo->commit();
 
-echo gmdate('Y-m-d H:i:s') . ' vatsim_sync: pilots=' . count($rows) . ' held=' . count($seen) . " released=$released" . PHP_EOL;
+echo gmdate('Y-m-d H:i:s') . ' vatsim_sync: pilots=' . count($rows)
+    . ' controllers=' . count($controllers) . ' held=' . count($seen) . " released=$released" . PHP_EOL;

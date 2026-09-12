@@ -253,8 +253,12 @@ public:
     // key it wants and how often to poll it. An empty URL - or "Enabled":
     // false - leaves squawks to EuroScope alone.
     const std::string& SquawkServerUrl() const { return m_SquawkServerUrl; }
-    // Straight from "ApiKey", or read out of the file "ApiKeyFile" names -
-    // which is where it belongs, so the config file itself carries no secret.
+    // Normally empty, and normally absent from the config file altogether: the
+    // server knows a caller by the position they are logged in on, not by a
+    // shared secret, so nothing here needs keeping. It is only filled in for a
+    // server that has been closed off with a key of its own - from "ApiKey", or
+    // better from the file "ApiKeyFile" names, so the config stays passable to
+    // another controller as it is.
     const std::string& SquawkApiKey() const { return m_SquawkApiKey; }
     int  SquawkPollSeconds() const { return m_SquawkPollSeconds; }
 
