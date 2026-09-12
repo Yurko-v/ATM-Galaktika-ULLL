@@ -434,6 +434,7 @@ CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     // Squawks from the shared server: the column for the Departure list, a
     // click that takes a code, and a menu with the rest.
     RegisterTagItemType("ULLL Squawk", TAG_ITEM_SQUAWK);
+    RegisterTagItemType("ULLL Squawk set", TAG_ITEM_SQUAWK_SET);
     RegisterTagItemFunction("ULLL Squawk assign", TAG_FUNC_SQUAWK_ASSIGN);
     RegisterTagItemFunction("ULLL Squawk menu", TAG_FUNC_SQUAWK_MENU);
 
@@ -972,45 +973,47 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
             return;
 
         std::string callsign = FlightPlan.GetCallsign();
-        std::string assigned = FlightPlan.GetControllerAssignedData().GetSquawk();
 
-        if (!m_squawk.Enabled())
+        // While the server is being asked, and when it has said no, the column
+        // says so in words rather than with a code: every colour a code can
+        // take has a meaning of its own, and neither of these is one of them.
+        if (m_squawk.Enabled() && m_squawk.IsPending(callsign))
         {
-            strcpy_s(sItemString, 16, assigned.substr(0, 15).c_str());
-            return;
-        }
-
-        // The server's code when it holds one; the flight plan's otherwise -
-        // a code typed in by hand is on its way to the server meanwhile.
-        auto held = m_squawk.Assignments();
-        auto it = held->find(callsign);
-        const bool serverHasOne = (it != held->end());
-        std::string code = serverHasOne ? it->second : assigned;
-
-        if (m_squawk.IsPending(callsign))
-        {
-            strcpy_s(sItemString, 16, code.empty() ? "...." : code.c_str());
+            strcpy_s(sItemString, 16, "....");
             *pColorCode = EuroScopePlugIn::TAG_COLOR_RGB_DEFINED;
             *pRGB = Theme::SquawkPending;
+            break;
         }
-        else if (!m_squawk.LastError(callsign).empty())
+        if (m_squawk.Enabled() && !m_squawk.LastError(callsign).empty())
         {
-            strcpy_s(sItemString, 16, code.empty() ? "ERR" : code.c_str());
+            strcpy_s(sItemString, 16, "ERR");
             *pColorCode = EuroScopePlugIn::TAG_COLOR_RGB_DEFINED;
             *pRGB = Theme::SquawkError;
+            break;
         }
-        else
-        {
-            strcpy_s(sItemString, 16, code.empty() ? "----" : code.substr(0, 15).c_str());
 
-            // The server holds one code and the flight plan another: whichever
-            // the pilot is squawking, one of the two is wrong.
-            if (serverHasOne && !assigned.empty() && assigned != it->second)
-            {
-                *pColorCode = EuroScopePlugIn::TAG_COLOR_RGB_DEFINED;
-                *pRGB = Theme::SquawkPending;
-            }
-        }
+        std::string code = AssignedSquawk(FlightPlan);
+        strcpy_s(sItemString, 16, code.empty() ? "----" : code.substr(0, 15).c_str());
+        *pColorCode = EuroScopePlugIn::TAG_COLOR_RGB_DEFINED;
+        *pRGB = SquawkColor(FlightPlan, RadarTarget, code);
+        break;
+    }
+    case TAG_ITEM_SQUAWK_SET:
+    {
+        // The formular's half of the column's yellow: what the transponder is
+        // showing, when it is not what was assigned. A matching code, or no
+        // code assigned at all, needs no second look and leaves it blank.
+        if (!FlightPlan.IsValid() || !RadarTarget.IsValid())
+            return;
+
+        std::string assigned = AssignedSquawk(FlightPlan);
+        const char* set = RadarTarget.GetPosition().GetSquawk();
+        if (assigned.empty() || set == NULL || *set == '\0' || assigned == set)
+            return;
+
+        strcpy_s(sItemString, 16, std::string(set).substr(0, 15).c_str());
+        *pColorCode = EuroScopePlugIn::TAG_COLOR_RGB_DEFINED;
+        *pRGB = Theme::SquawkMismatch;
         break;
     }
     default:
@@ -1097,6 +1100,43 @@ std::string CGalaxyATMSystemPlugin::MyPosition() const
 {
     const char* callsign = ControllerMyself().GetCallsign();
     return callsign != NULL ? callsign : "";
+}
+
+std::string CGalaxyATMSystemPlugin::AssignedSquawk(const CFlightPlan& fp) const
+{
+    if (m_squawk.Enabled())
+    {
+        auto held = m_squawk.Assignments();
+        auto it = held->find(fp.GetCallsign());
+        if (it != held->end())
+            return it->second;
+    }
+    const char* assigned = fp.GetControllerAssignedData().GetSquawk();
+    return assigned != NULL ? assigned : "";
+}
+
+// The order is the order of what is wrong: nothing assigned; the wrong code
+// set - whatever mode the transponder is in; the right code, but no mode C.
+// An aircraft with no radar target shows no code at all, which is not the
+// code assigned either.
+COLORREF CGalaxyATMSystemPlugin::SquawkColor(const CFlightPlan& fp, CRadarTarget rt,
+    const std::string& assigned) const
+{
+    if (assigned.empty())
+        return Theme::SquawkNone;
+
+    if (!rt.IsValid())
+        rt = fp.GetCorrelatedRadarTarget();
+    if (!rt.IsValid())
+        return Theme::SquawkMismatch;
+
+    CRadarTargetPositionData pos = rt.GetPosition();
+    const char* set = pos.IsValid() ? pos.GetSquawk() : NULL;
+    if (set == NULL || assigned != set)
+        return Theme::SquawkMismatch;
+    if (!pos.GetTransponderC())
+        return Theme::SquawkNoModeC;
+    return Theme::SquawkSet;
 }
 
 void CGalaxyATMSystemPlugin::ApplySquawkAnswers()

@@ -165,9 +165,22 @@ namespace Theme
     const COLORREF ZoneLineRestricted = RGB(0x96, 0x2E, 0x28);
     const int      ZoneWidth = 1;    // a hairline: the wash says where the area is
 
-    // The squawk column: amber while a code is being asked for, or when the
-    // flight plan carries a different code from the server's; red when the
-    // server said no - no free code left, or the code is someone else's.
+    // The squawk column. Whether the transponder is really set up can only be
+    // told from the colour of the code in the Departure list, so each of the
+    // four colours a code takes means exactly one thing:
+    //   white  - the assigned code is set, and the transponder is in mode C;
+    //   yellow - the code set is not the one assigned (the formular shows the
+    //            code that is set, in the same yellow - TAG_ITEM_SQUAWK_SET);
+    //   red    - the assigned code is set, but the transponder is not in mode C;
+    //   grey   - no code has been assigned.
+    const COLORREF SquawkSet      = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF SquawkMismatch = RGB(0xFF, 0xD6, 0x00);
+    const COLORREF SquawkNoModeC  = RGB(0xFF, 0x3B, 0x30);
+    const COLORREF SquawkNone     = RGB(0x8E, 0x8E, 0x93);
+
+    // While the server is being asked, and when it said no. The column shows
+    // words then ("...." / "ERR"), never a code, so these colours cannot be
+    // read as one of the four above.
     const COLORREF SquawkPending = RGB(0xFF, 0xD6, 0x00);
     const COLORREF SquawkError   = RGB(0xFF, 0x3B, 0x30);
 

@@ -225,6 +225,11 @@ private:
     // one, or a sweatbox when the config allows it. With 'tell', says why not.
     bool SquawkReady(bool tell);
     std::string MyPosition() const;
+    // The code the aircraft is meant to squawk: the server's when it holds one,
+    // the flight plan's otherwise.
+    std::string AssignedSquawk(const EuroScopePlugIn::CFlightPlan& fp) const;
+    // Which of the column's four colours the code takes - see Theme::SquawkSet.
+    COLORREF SquawkColor(const EuroScopePlugIn::CFlightPlan& fp, EuroScopePlugIn::CRadarTarget rt, const std::string& assigned) const;
     // Ask the server for a code for this aircraft, saying why if it cannot.
     void RequestSquawk(const std::string& callsign, bool fresh);
     // Into the "ULLL Squawk" message channel. ASCII only - see the note on
@@ -276,6 +281,10 @@ const int TAG_ITEM_APW            = 5;
 // The squawk the shared server holds for the aircraft - the Departure list
 // column. See Squawk.h.
 const int TAG_ITEM_SQUAWK         = 6;
+
+// For the formular: the code the transponder is actually showing, in the
+// column's yellow, and only when it is not the code assigned. Blank otherwise.
+const int TAG_ITEM_SQUAWK_SET     = 7;
 
 // The column's clicks and the menu items they lead to. Kept clear of the radar
 // screen's own FN_ ids (300 and up).
