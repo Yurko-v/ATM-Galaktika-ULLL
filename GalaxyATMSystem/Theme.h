@@ -63,11 +63,37 @@ namespace Theme
     const COLORREF DistressText  = RGB(0xFF, 0x3B, 0x30);
     const COLORREF DuplicateText = RGB(0xFF, 0xD6, 0x00);
 
+    // The формуляр's sector indicator ("MC" beside the callsign), blue as the
+    // ULLL wiki's picture of the РДЦ label has it.
+    const COLORREF FormularSector = RGB(0x3E, 0x7F, 0xE0);
+
+    // MAPP over the callsign - a missed approach, set from TopSky's menu.
+    const COLORREF FormularMapp = RGB(0xFF, 0x8C, 0x00);
+
+    // A callsign the controller has highlighted (middle click on the label).
+    const COLORREF FormularHighlight = RGB(0xD0, 0x60, 0x00);   // dark orange
+
+    // A heading being pulled off the формуляр's AHDG: a dashed line in TopSky's
+    // orange, and its readout in plain white.
+    const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);
+    const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);
+
     // The index letter on the INDEX АТИС strip. The one lit thing on it: the
     // label beside it is ordinary white, the letter is the value the strip
     // exists to show, so it is picked out in lime the way the real system
     // lights it up.
     const COLORREF AtisIndexText = RGB(0x9E, 0xFF, 0x3D);
+
+    // The menu bar across the top of the radar: the panel's own card, so the
+    // bar and the panel read as one frame. What works on it is white, and
+    // what does not yet - every menu item, and Bypass - is grey.
+    const COLORREF MenuBarFill      = Background;
+    const COLORREF MenuText         = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF MenuTextDisabled = RGB(0x9A, 0x9A, 0x9A);
+
+    // Авторизация: the "Доступ разрешён" line at the end of the check, in the
+    // same lime - the one thing on the block that says it went through.
+    const COLORREF AuthGranted   = AtisIndexText;
 
     // "Список РЦ" - the sector list. Every colour here is "SPISKIRC.svg"'s own:
     // a white card with the panel's dark ground inset in it, two near-black
@@ -93,7 +119,7 @@ namespace Theme
 
     // Ruler (distance/bearing/time measuring line drawn on the radar).
     const COLORREF Ruler        = RGB(0xE0, 0xC9, 0x9A);  // beige
-    const int      RulerWidth   = 2;    // the line, its midpoint tick and the cursor
+    const float    RulerWidth   = 1.0f; // the line, its midpoint tick and the cursor (antialiased)
 
     // Вектор экстраполяции - the track vector and the plan-following line.
     // Drawn with GDI+ (antialiased) rather than a GDI pen, so a fractional
@@ -237,6 +263,7 @@ namespace Theme
         HFONT MonoHuge = NULL; // the АТИС literal in its own little window
         HFONT WinTitle = NULL; // ATIS window caption - bold, unlike the panel's labels
         HFONT WinTitleSmall = NULL; // the same, for the small letter window's bar
+        HFONT Menu    = NULL;  // the menu bar's items
 
         void EnsureCreated()
         {
@@ -264,6 +291,7 @@ namespace Theme
             Ruler = mk(-13, FW_SEMIBOLD);
             WinTitle = mk(-15, FW_BOLD);
             WinTitleSmall = mk(-12, FW_BOLD);
+            Menu    = mk(-15, FW_NORMAL);
 
             auto mkMono = [](int h)
             {
@@ -279,7 +307,8 @@ namespace Theme
         void Destroy()
         {
             for (HFONT* f : { &Body, &Clock, &List, &Small, &Tiny, &Large, &Ruler,
-                              &Mono, &MonoBig, &MonoHuge, &WinTitle, &WinTitleSmall })
+                              &Mono, &MonoBig, &MonoHuge, &WinTitle, &WinTitleSmall,
+                              &Menu })
             {
                 if (*f) { DeleteObject(*f); *f = NULL; }
             }

@@ -23,6 +23,12 @@ import sys
 
 KIND = {"P": "P", "D": "D", "R": "R"}
 
+
+def kind_of(category):
+    """"P", or a package's own prefixed form of it - "UHP", "ULR" - by its last letter."""
+    c = category.strip().upper()
+    return KIND.get(c) or KIND.get(c[-1:], "R")
+
 # "N059.48.59.000" / "E030.17.00.000", and the plain decimal form some packages
 # use. Returns degrees, positive north and east.
 COORD = re.compile(r"^([NSEW])(\d+(?:\.\d+)*)$", re.IGNORECASE)
@@ -97,7 +103,7 @@ def convert(path):
                 continue   # CATEGORYDEF and anything else before the first area
 
             if line.startswith("CATEGORY:"):
-                cur["Type"] = KIND.get(line[9:].strip().upper(), "R")
+                cur["Type"] = kind_of(line[9:])
             elif line.startswith("ACTIVE:"):
                 cur["Activation"] = line[7:].strip()
             elif line.startswith("LIMITS:"):

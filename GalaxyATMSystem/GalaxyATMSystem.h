@@ -14,6 +14,7 @@
 #include "Config.h"
 #include "Sigmet.h"
 #include "Atis.h"
+#include "UserName.h"
 #include "Apw.h"
 #include "Squawk.h"
 
@@ -103,6 +104,14 @@ public:
     std::wstring AtisIndex() const;
     std::wstring AtisMessage() const;
 
+    // The Пользователь block's user line: the controller as "Фамилия.И.О", in
+    // Russian (see RussianShortName). Found by the CID the VATSIM datafeed
+    // lists for our callsign - "UserNames" in the config first, then the
+    // network's own name - and, off the network or before the feed has us, the
+    // name EuroScope was given. The CID itself when there is no name to be had;
+    // empty with no CID either.
+    std::wstring MyUserName() const;
+
     // The bookings that decide which restricted areas are up right now. Handed
     // over whole, like the сигметы, so a frame that starts reading them cannot
     // have them replaced underneath it. Never null.
@@ -151,6 +160,16 @@ public:
     void SetUnitGs(GsUnit u)     { m_unitGs = u; }
     void SetUnitDist(DistUnit u) { m_unitDist = u; }
 
+    // ФС "Р-р шрифта" - lives here for the same reason: OnGetTagItem scales
+    // the font of this plugin's tag items by it. 12 is EuroScope's own size.
+    int  TagFontSize() const  { return m_tagFontSize; }
+    void SetTagFontSize(int s) { m_tagFontSize = s; }
+
+    // For the plugin's own формуляр (CGalaxyATMSystemRadarScreen::DrawFormulars),
+    // which shows what the tag items do without going through EuroScope's tag.
+    const ApwResult& ApwForTarget(EuroScopePlugIn::CRadarTarget& target) { return ApwFor(target); }
+    std::string AssignedSquawkFor(const EuroScopePlugIn::CFlightPlan& fp) const { return AssignedSquawk(fp); }
+
 private:
     // EuroScope only pushes a METAR when the server sends one, so a plugin
     // loaded mid-session can wait a long time for the first QNH. To have a
@@ -179,6 +198,8 @@ private:
     int  m_altFilterFromFL  = 100;   // e.g. 100 -> "FL100"
     int  m_altFilterToFL    = 600;
 
+    int  m_tagFontSize      = 12;
+
     std::thread m_sigmetFetch;
     mutable std::mutex m_sigmetMutex;
     std::shared_ptr<const std::vector<Sigmet>> m_sigmets;
@@ -190,6 +211,15 @@ private:
     std::thread m_atisFetch;
     mutable std::mutex m_atisMutex;
     AtisReport m_atisLive;
+
+    // And for our own CID and name. Asked for whenever the callsign changes,
+    // then again every minute until the feed lists us - a new logon takes a
+    // little while to reach it.
+    void StartIdentityFetch(const std::string& callsign);
+    std::thread m_identityFetch;
+    mutable std::mutex m_identityMutex;
+    VatsimIdentity m_identity;
+    std::string m_identityAskedFor;   // main thread only
 
     // And once more for the day's airspace use plan, which is what says whether
     // a restricted area exists at this moment.
@@ -286,6 +316,11 @@ const int TAG_ITEM_SQUAWK         = 6;
 // column's yellow, and only when it is not the code assigned. Blank otherwise.
 const int TAG_ITEM_SQUAWK_SET     = 7;
 
+// The callsign, only so a формуляр can be built entirely out of this plugin's
+// items and every line of it follows ФС "Р-р шрифта" - EuroScope's own
+// callsign item keeps whatever size EuroScope gives it.
+const int TAG_ITEM_CALLSIGN       = 8;
+
 // The column's clicks and the menu items they lead to. Kept clear of the radar
 // screen's own FN_ ids (300 and up).
 const int TAG_FUNC_SQUAWK_ASSIGN  = 400;   // one click: take a code from the server
@@ -294,6 +329,21 @@ const int FN_SQUAWK_GET           = 410;   // "Выдать код"
 const int FN_SQUAWK_NEW           = 411;   // "Новый код"
 const int FN_SQUAWK_MANUAL        = 412;   // "Ввести вручную" - opens the edit box
 const int FN_SQUAWK_MANUAL_EDIT   = 413;   // what was typed into it
+
+// What a click on one item of the plugin's формуляр starts, through
+// CRadarScreen::StartTagFunction: the tag item it stands for and the function a
+// left and a right click call, each named by the plug-in that provides it -
+// NULL for EuroScope's own, and a function id of 0 for a button that does
+// nothing there. The values are the sector tag's own (see DrawFormulars).
+struct FormularFn
+{
+    const char* itemPlugin;
+    int         itemCode;
+    const char* leftPlugin;
+    int         leftFn;
+    const char* rightPlugin;
+    int         rightFn;
+};
 
 // One measuring line: each endpoint either tracks a radar target live (by
 // callsign) or sits at a fixed geo position picked by the click.
@@ -368,8 +418,16 @@ private:
     int  DrawBlockAltFilter(HDC hDC, int y);    // Фильтр высоты
     int  DrawBlockCodes(HDC hDC, int y);        // ВВ1 / Коды бедствия / Двойной код (no caption)
     int  DrawBlockAerodrome(HDC hDC, int y);    // БЛОК 5 - Аэродром
+    int  DrawBlockAuth(HDC hDC, int y);         // Авторизация - the only block until "Вход" goes through
     void DrawAtisWindow(HDC hDC);
     void DrawAtisLetterWindow(HDC hDC);
+
+    // The system's menu bar - Настройки, Вид, ... Справка - laid over the top
+    // of the radar edge to edge, with the panel hanging under it, so the two
+    // read as one frame. It stands exactly where TopSky draws its own menu, and never
+    // shorter than Config::AtisTopOffset says that menu is, so it covers it.
+    void DrawMenuBar(HDC hDC);
+    int  MenuBarHeight();       // the INDEX АТИС strip stands right under it
 
     // "Список РЦ" - the sector list: every flight this sector is concerned
     // with, one row each, in the twelve columns the real system prints. Opened
@@ -421,6 +479,54 @@ private:
     // disagree - a zone that is not drawn must not be clickable either.
     void UpdateZoneActivity();
 
+    // Формуляр сопровождения, drawn by the plugin rather than by EuroScope's
+    // tag - EuroScope spaces a tag's lines by its own symbology size and gives a
+    // plug-in no way to change that, so a larger ФС "Р-р шрифта" ran each line
+    // into the next. Rebuilt every frame from the live picture; all that is
+    // kept per aircraft is where its label was dragged to, and where on it
+    // each item landed this frame, for the click.
+    struct FormularItem
+    {
+        RECT rect;
+        const FormularFn* fn;   // NULL: a click only selects the aircraft
+        std::string text;       // as drawn, for StartTagFunction
+    };
+    struct FormularState
+    {
+        POINT offset = { 0, 0 };   // the callsign line's left end (mid-height), from the target, px
+        POINT callsignAt = { 0, 0 };   // that point on the screen this frame - the leader's end, the drag's grip
+        bool  placed = false;      // offset set - by the default or by a drag
+        bool  highlighted = false; // callsign lit up orange by a middle click
+        POINT anchor = { 0, 0 };   // the target this frame
+        RECT  area = { 0, 0, 0, 0 };
+        std::vector<FormularItem> items;
+    };
+    std::map<std::string, FormularState> m_formulars;   // by callsign
+    bool  m_formularsVisible;   // ".formular"
+    std::string m_formularHover;   // callsign of the label under the cursor - the expanded one
+    HFONT m_formularFont;       // re-created only when TagFontSize changes
+    int   m_formularFontSize;
+    HFONT GetFormularFont();
+    // With registerObjects false the labels are drawn but take no clicks -
+    // while the ruler is armed, so its canvas gets them.
+    void  DrawFormulars(HDC hDC, bool registerObjects);
+    void  FormularClick(const char* sCallsign, POINT pt, int button);
+
+    // AHDG pulled with the button held: a line from the aircraft to the cursor
+    // and the heading it points along, assigned when the button is let go.
+    bool  m_hdgDragging;        // a press on AHDG is being moved
+    bool  m_hdgDragMoved;       // ...far enough to be a pull rather than a click
+    POINT m_hdgDragStart;
+    POINT m_hdgDragPt;          // the cursor, radar pixels
+    std::string m_hdgDragCallsign;
+    ULONGLONG m_hdgDragEndTick; // a pull just ended - the click that may follow it is not one
+    bool  m_hdgDragCancelled;   // dropped mid-press - EuroScope's moves ignored until the button is let go
+    int   m_hdgReleaseTicks;    // polls the left button has been seen up during a pull
+    // The heading a pull to 'cursor' assigns: from the aircraft to the cursor,
+    // magnetic, to the nearest 5 degrees; 0 when there is no aircraft or the cursor is on
+    // it. Optionally hands back the aircraft in radar pixels and the distance.
+    int   DragHeading(const char* sCallsign, POINT cursor, POINT* from = NULL, double* distNm = NULL);
+
     // Vectors drawn over radar targets (БЛОК 3's actual effect on the radar,
     // as opposed to the panel controls that configure it).
     void DrawTargetVectors(HDC hDC);
@@ -466,7 +572,8 @@ private:
     void DrawRadioRow(HDC hDC, int top, int x, int labelRight, const std::wstring& label, bool selected, int objType, const char* objId, const char* tooltip);
     void DrawOutlinedField(HDC hDC, RECT box, const std::wstring& text, HFONT font);
     void DrawFittedField(HDC hDC, RECT box, const std::wstring& text);   // shrinks the text to fit the plate
-    void DrawToggleChip(HDC hDC, RECT box, const std::wstring& text, bool active, int objType, const char* objId, const char* tooltip);
+    void DrawToggleChip(HDC hDC, RECT box, const std::wstring& text, bool active, int objType, const char* objId, const char* tooltip,
+        COLORREF idleFill = Theme::ControlFill);
     void DrawDropdownField(HDC hDC, RECT box, const std::wstring& text, int objType, const char* objId, const char* tooltip);
 
     // ---- Derived / external data ----
@@ -486,7 +593,7 @@ private:
     // EuroScope's default popup list, so they match the panel's own look.
     // Opened by clicking a field's chevron, closed by picking a value, by
     // clicking the same chevron again, or by any other click on the panel.
-    enum class DropdownKind { None, VecDist, VecTime };
+    enum class DropdownKind { None, VecDist, VecTime, OsFont };
     void DrawDropdownList(HDC hDC);
 
     // ---- Geometry ----
@@ -516,6 +623,17 @@ private:
                                  // frame from the radar area, never stored
     bool  m_visible;            // panel shown at all (".ulll")
     bool  m_collapsed;          // collapsed to the small clock/date window
+
+    // Авторизация. Cosmetic only: no login, no password, nothing is checked -
+    // "Вход" runs a short staged "проверка" and then opens the panel. Until it
+    // has, the panel is the header and the Авторизация block alone, and the
+    // things the panel drives (its windows, the ruler, the vectors) stay off.
+    // Deliberately not saved to the ASR, so every session starts at the login.
+    enum class AuthState { LoggedOut, Checking, LoggedIn };
+    AuthState m_authState;
+    ULONGLONG m_authStartTick;  // when "Вход" was pressed
+    bool Authorized() const { return m_authState == AuthState::LoggedIn; }
+    void TickAuth();            // fast timer: animates the check and ends it
     POINT m_dragOffset;         // cursor->window offset captured on an АТИС drag
     UINT_PTR m_timerId;         // 1s tick that keeps the clock live
     UINT_PTR m_pollTimerId;     // fast tick that watches the side mouse buttons
@@ -541,11 +659,11 @@ private:
 
     // ОС - how the track label ("формуляр сопровождения") is laid out. The
     // reference offers a two- or three-line label plus an independent speed
-    // line. Both are stored and persisted; EuroScope owns the label layout, so
-    // they do not restyle it by themselves - they are here to drive whatever
-    // plugin tag items an ASR chooses to place.
+    // line. Both are stored and persisted, and lay out the plugin's own
+    // формуляр (DrawFormulars).
     int  m_osLines;             // 2 or 3
     bool m_osSpeed;
+    RECT m_osFontFieldRect;     // "Р-р шрифта" - the size itself is the plugin's TagFontSize()
 
     // Code block. "ВВ1" names the secondary-radar source; ВСЕ / БП and the
     // small right-hand checkbox pick what it passes through, and the slider is
@@ -673,6 +791,10 @@ const int SO_PANEL_COLLAPSE = 2;   // "-"/"+" in the top-right corner - collapse
 
 const int SO_TIMER_TOGGLE = 5;     // "C" chip - start/stop the Таймер stopwatch
 
+const int SO_AUTH_LOGIN   = 90;    // "LOGIN" on the menu bar - starts the Авторизация check
+
+const int SO_MENU_BAR     = 91;    // the whole menu bar, so a click on it never reaches TopSky's menu below
+
 const int SO_ALTFILTER_FROM     = 6;
 const int SO_ALTFILTER_TO       = 7;
 const int SO_ALTFILTER_USE_CHK  = 8;
@@ -697,6 +819,7 @@ const int SO_UNIT_DIST_KM  = 28;
 const int SO_OS_TWO_LINE   = 16;
 const int SO_OS_SPEED      = 17;
 const int SO_OS_THREE_LINE = 18;
+const int SO_OS_FONT_FIELD = 19;   // "Р-р шрифта" dropdown
 
 const int SO_CODE_ALL      = 60;   // "ВСЕ"
 const int SO_CODE_BP       = 61;   // "БП"
@@ -731,6 +854,9 @@ const int SO_RC_FILTER_CLR = 84;   // the button that empties it
 const int SO_RC_UP         = 85;   // scroll one row; sObjectId is the pane ("0" upper, "1" lower)
 const int SO_RC_DOWN       = 86;
 const int SO_RC_ROW        = 87;   // one row; sObjectId is its callsign
+
+const int SO_FORMULAR      = 89;   // one aircraft's формуляр - drag to move, click an item; sObjectId is its callsign
+const int SO_FORMULAR_AHDG = 92;   // its AHDG item - pull for a heading, click for the list; sObjectId is the callsign
 
 const int SO_RULER_CANVAS  = 40;
 const int SO_RULER_LINE    = 41;   // small hit-box around one existing line, for delete only - sObjectId is its index

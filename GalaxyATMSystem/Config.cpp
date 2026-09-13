@@ -168,6 +168,18 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
+    if (const Json::Value* names = root.Find(L"UserNames"))
+    {
+        if (names->kind == Json::Value::Kind::Object)
+        {
+            for (const auto& [cid, name] : names->obj)
+            {
+                if (!name.AsString().empty())
+                    m_UserNames[cid] = name.AsString();
+            }
+        }
+    }
+
     if (const Json::Value* atis = root.Find(L"Atis"))
     {
         if (atis->kind == Json::Value::Kind::Object)

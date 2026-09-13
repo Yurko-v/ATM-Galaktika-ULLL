@@ -35,6 +35,8 @@ namespace
     const int kDistanceStepsCount = sizeof(kDistanceSteps) / sizeof(kDistanceSteps[0]);
     const int kTimeSteps[] = { 1, 2, 3, 4, 5, 10, 15 };
     const int kTimeStepsCount = sizeof(kTimeSteps) / sizeof(kTimeSteps[0]);
+    const int kFontSizeSteps[] = { 8, 9, 10, 11, 12, 13, 14, 16 };
+    const int kFontSizeStepsCount = sizeof(kFontSizeSteps) / sizeof(kFontSizeSteps[0]);
 
     // EuroScope hands out ANSI (Windows code page) C strings; widen for GDI.
     std::wstring Widen(const char* s)
@@ -236,16 +238,17 @@ namespace
 
     // GDI+ surface for the target vectors, which are Theme::VectorWidth thick -
     // a fractional width no GDI pen can draw - antialiased so the half pixel
-    // actually shows. Keep one in a scope of its own: plain GDI drawing on the
-    // same DC should wait until it is gone.
+    // actually shows. The ruler borrows it with its own width. Keep one in a
+    // scope of its own: plain GDI drawing on the same DC should wait until it
+    // is gone.
     struct VectorCanvas
     {
         Gdiplus::Graphics g;
         Gdiplus::Pen pen;
 
-        VectorCanvas(HDC hDC, COLORREF color)
+        VectorCanvas(HDC hDC, COLORREF color, float width = Theme::VectorWidth)
             : g(hDC),
-              pen(Gdiplus::Color(GetRValue(color), GetGValue(color), GetBValue(color)), Theme::VectorWidth)
+              pen(Gdiplus::Color(GetRValue(color), GetGValue(color), GetBValue(color)), width)
         {
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             pen.SetLineJoin(Gdiplus::LineJoinRound);
@@ -340,10 +343,11 @@ namespace L
     const int V_TOP = 5, V_ROW = 20, V_GAP1 = 8, V_CHK = 16, V_GAP2 = 6, V_BOT = 6;
     const int VECTORS_BOX_H = V_TOP + V_ROW + V_GAP1 + V_CHK + V_GAP2 + V_CHK + V_BOT;  // 77
 
-    // ОС - a "Р-р шрифта:" label over a sunken three-row list.
-    const int O_TOP = 4, O_LABEL = 16, O_GAP = 4, O_LIST_H = 68, O_BOT = 4;
+    // ОС - a "Р-р шрифта:" row with its size dropdown over a sunken three-row
+    // list. The row is a dropdown's height (V_ROW) so the picker fits in it.
+    const int O_TOP = 4, O_LABEL = V_ROW, O_GAP = 4, O_LIST_H = 68, O_BOT = 4;
     const int OS_ROW = 16, OS_PITCH = 21, OS_ROW0 = 4;  // inside the list
-    const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;    // 96
+    const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;    // 100
 
     // БЛОК 4 - Ед. изм.: four rows of pill selectors.
     const int E_TOP = 4, E_ROW = 16, E_PITCH = 20, E_BOT = 6;
@@ -374,6 +378,17 @@ namespace L
     // edge of the box in the reference, with only a hairline above them.
     const int A_TOP = 3, A_ROW = 21, A_GAP = 5, A_BOT = 3;
     const int AERODROME_BOX_H = A_TOP + A_ROW + A_GAP + A_ROW + A_BOT;  // 53
+
+    // Авторизация: the Пользователь block's two rows, and under them the
+    // progress bar while the check runs - only then, so the card is the two
+    // rows alone until LOGIN on the menu bar is pressed.
+    const int AU_TOP = 4, AU_ROW = 20, AU_GAP = 5, AU_GAP2 = 8, AU_STATUS = 20, AU_BOT = 6;
+    const int AUTH_BOX_H      = AU_TOP + AU_ROW + AU_GAP + AU_ROW + AU_GAP2 + AU_STATUS + AU_BOT;  // 83, checking
+    const int AUTH_BOX_H_IDLE = AU_TOP + AU_ROW + AU_GAP + AU_ROW + AU_BOT;                        // 55
+
+    // The menu bar across the top of the radar. Taller than TopSky's own menu,
+    // which it covers - see CGalaxyATMSystemRadarScreen::MenuBarHeight.
+    const int MENU_BAR_H = 28;
 
     const int PANEL_BOT_PAD = 8;
     const int COLLAPSED_BOT_PAD = 6;   // breathing room under the date when collapsed
@@ -430,6 +445,7 @@ CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     RegisterTagItemType("ULLL Ground Speed", TAG_ITEM_GROUND_SPEED);
     RegisterTagItemType("ULLL Distance to Dest", TAG_ITEM_DISTANCE);
     RegisterTagItemType("ULLL APW", TAG_ITEM_APW);
+    RegisterTagItemType("ULLL Callsign", TAG_ITEM_CALLSIGN);
 
     // Squawks from the shared server: the column for the Departure list, a
     // click that takes a code, and a menu with the rest.
@@ -461,6 +477,8 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
         m_sigmetFetch.join();
     if (m_atisFetch.joinable())
         m_atisFetch.join();
+    if (m_identityFetch.joinable())
+        m_identityFetch.join();
     if (m_aupFetch.joinable())
         m_aupFetch.join();
     if (m_notamFetch.joinable())
@@ -606,6 +624,57 @@ void CGalaxyATMSystemPlugin::StartAtisFetch()
         });
 }
 
+void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
+{
+    if (m_identityFetch.joinable())
+        m_identityFetch.join();   // the previous fetch is long finished - its stages are all timed out
+
+    m_identityAskedFor = callsign;
+    m_identityFetch = std::thread([this, callsign]()
+        {
+            VatsimIdentity found;
+            if (!FetchVatsimIdentity(callsign, found))
+                return;
+
+            std::lock_guard<std::mutex> lock(m_identityMutex);
+            m_identity = found;
+        });
+}
+
+std::wstring CGalaxyATMSystemPlugin::MyUserName() const
+{
+    VatsimIdentity id;
+    {
+        std::lock_guard<std::mutex> lock(m_identityMutex);
+        id = m_identity;
+    }
+
+    // Only while it is still us: after a change of position the old entry
+    // stands until the feed has been asked about the new callsign.
+    if (!id.Empty() && _stricmp(id.callsign.c_str(), MyPosition().c_str()) == 0)
+    {
+        // The config's name goes through the same shortening, so it can be
+        // written out in full - which is the only way to give a patronymic.
+        std::wstring chosen = m_config.UserName(id.cid);
+        if (!chosen.empty())
+        {
+            std::wstring shortened = RussianShortName(chosen);
+            return shortened.empty() ? chosen : shortened;
+        }
+        std::wstring name = RussianShortName(id.name);
+        if (!name.empty())
+            return name;
+    }
+    else
+    {
+        id = VatsimIdentity();
+    }
+
+    CController me = ControllerMyself();
+    std::wstring name = me.IsValid() ? RussianShortName(Widen(me.GetFullName())) : L"";
+    return !name.empty() ? name : id.cid;
+}
+
 std::shared_ptr<const std::vector<Sigmet>> CGalaxyATMSystemPlugin::Sigmets() const
 {
     std::lock_guard<std::mutex> lock(m_sigmetMutex);
@@ -706,7 +775,25 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
     // The position the squawk server knows us by - it has no key to go on, only
     // whether this callsign is really controlling on the network right now, so
     // the worker thread has to be told when we log in or change position.
-    m_squawk.SetPosition(MyPosition());
+    // Off the network, or connected as an observer, it gets no position at
+    // all - and with none it asks the server nothing.
+    m_squawk.SetPosition(SquawkReady(false) ? MyPosition() : "");
+
+    // Our CID and name live only in the datafeed, and only while we are really
+    // on the network. A new callsign is asked about straight away; one the
+    // feed does not list yet, once a minute until it does.
+    int ct = GetConnectionType();
+    std::string position = MyPosition();
+    if ((ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !position.empty())
+    {
+        bool known;
+        {
+            std::lock_guard<std::mutex> lock(m_identityMutex);
+            known = _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0;
+        }
+        if (position != m_identityAskedFor || (!known && Counter % 60 == 0))
+            StartIdentityFetch(position);
+    }
 
     // Then, and every tick: a code the server has just handed out is what a
     // controller is waiting to read out to the pilot.
@@ -890,6 +977,14 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
     *pColorCode = EuroScopePlugIn::TAG_COLOR_DEFAULT;
     sItemString[0] = '\0';
 
+    // ФС "Р-р шрифта". EuroScope hands in the size it would draw the item at
+    // and takes back whatever is left there, so the choice is applied as a
+    // scale of that: 12 leaves it as EuroScope set it, 16 is a third larger.
+    // The squawk columns are the Departure list's, not a формуляр's.
+    if (pFontSize != NULL && *pFontSize > 0.0
+        && ItemCode != TAG_ITEM_SQUAWK && ItemCode != TAG_ITEM_SQUAWK_SET)
+        *pFontSize *= m_tagFontSize / 12.0;
+
     // Фильтр высоты applies to every item this plugin contributes: outside the
     // От/До band the tag item simply stays blank.
     //
@@ -907,6 +1002,17 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
 
     switch (ItemCode)
     {
+    case TAG_ITEM_CALLSIGN:
+    {
+        // The flight plan's callsign where there is one; an uncorrelated
+        // target still has the one its transponder reports.
+        const char* callsign = FlightPlan.IsValid() ? FlightPlan.GetCallsign()
+            : RadarTarget.IsValid() ? RadarTarget.GetCallsign() : NULL;
+        if (callsign == NULL)
+            return;
+        strncpy_s(sItemString, 16, callsign, _TRUNCATE);
+        break;
+    }
     case TAG_ITEM_ALTITUDE:
     {
         if (!RadarTarget.IsValid())
@@ -1063,6 +1169,21 @@ void CGalaxyATMSystemPlugin::SquawkMessage(const std::string& text)
     m_squawk.Log("message: " + text);
 }
 
+// Codes are a controller's to hand out. An observer is connected to the same
+// network and sees every flight plan change, but has no position to give a
+// code from - the servers say so (IsController, facility 0), and "_OBS" is
+// checked too, since some clients log observers on with a facility set.
+static bool OnControllerPosition(const CController& me)
+{
+    if (!me.IsValid() || !me.IsController() || me.GetFacility() < 1)
+        return false;
+    const char* callsign = me.GetCallsign();
+    if (callsign == NULL || *callsign == '\0')
+        return false;
+    size_t len = strlen(callsign);
+    return !(len >= 4 && _stricmp(callsign + len - 4, "_OBS") == 0);
+}
+
 bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
 {
     const char* why = NULL;
@@ -1086,6 +1207,10 @@ bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
             why = sim
                 ? "sweatbox: codes are off, set Squawk.AllowSweatbox in GalaxyATMSystem.json"
                 : "not connected - codes are only handed out on the network";
+        }
+        else if (!OnControllerPosition(ControllerMyself()))
+        {
+            why = "not on a controller position - observers do not hand out codes";
         }
     }
 
@@ -1381,6 +1506,9 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_collapsed = false;
     m_dragOffset = { 0, 0 };
 
+    m_authState = AuthState::LoggedOut;
+    m_authStartTick = 0;
+
     m_timerRunning = false;
     m_timerStartTick = 0;
     m_timerElapsedMs = 0;
@@ -1400,8 +1528,21 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rulerFont = NULL;
     m_rulerFontSource = NULL;
 
-    m_osLines = 2;
-    m_osSpeed = false;
+    // The sector's own "Galaxy CTR" tag: three lines, with the speed on the last.
+    m_osLines = 3;
+    m_osSpeed = true;
+    m_osFontFieldRect = { 0, 0, 0, 0 };
+
+    m_formularsVisible = true;
+    m_formularFont = NULL;
+    m_formularFontSize = 0;
+    m_hdgDragging = false;
+    m_hdgDragMoved = false;
+    m_hdgDragStart = { 0, 0 };
+    m_hdgDragPt = { 0, 0 };
+    m_hdgDragEndTick = 0;
+    m_hdgDragCancelled = false;
+    m_hdgReleaseTicks = 0;
 
     m_codeAll = false;
     m_codeBp = false;
@@ -1468,7 +1609,10 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
         {
             auto it = g_pollTimers.find(idEvent);
             if (it != g_pollTimers.end())
+            {
                 it->second->PollRulerButton();
+                it->second->TickAuth();
+            }
         });
     g_pollTimers[pollId] = this;
     m_pollTimerId = pollId;
@@ -1489,6 +1633,8 @@ CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
     m_fonts.Destroy();
     if (m_rulerFont != NULL)
         DeleteObject(m_rulerFont);
+    if (m_formularFont != NULL)
+        DeleteObject(m_formularFont);
 }
 
 // ---- Derived data -----------------------------------------------------------
@@ -1551,10 +1697,9 @@ void CGalaxyATMSystemRadarScreen::GetUserInfo(std::wstring& designation,
         role = L"—";
     }
 
-    // The SDK does not expose the raw CID; the connected controller's full name
-    // is the closest available identity.
-    std::wstring full = me.IsValid() ? Widen(me.GetFullName()) : L"";
-    user = full.empty() ? L"user ?" : full;
+    user = Plugin()->MyUserName();
+    if (user.empty())
+        user = L"user ?";
 }
 
 // Callsigns currently squawking a distress code. Both the mode-A code the
@@ -1668,12 +1813,17 @@ void CGalaxyATMSystemRadarScreen::DrawFittedField(HDC hDC, RECT box, const std::
 }
 
 void CGalaxyATMSystemRadarScreen::DrawToggleChip(HDC hDC, RECT box, const std::wstring& text,
-    bool active, int objType, const char* objId, const char* tooltip)
+    bool active, int objType, const char* objId, const char* tooltip, COLORREF idleFill)
 {
     if (active)
+    {
         Theme::DrawValueField(hDC, box, text, m_fonts.Body, true);
+    }
     else
-        Theme::DrawControl(hDC, box, text, m_fonts.Body);
+    {
+        Theme::OutlineBox(hDC, box, idleFill, Theme::BorderStrong);
+        Theme::DrawLine(hDC, box, text, m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
+    }
     AddScreenObject(objType, objId, box, false, tooltip);
 }
 
@@ -1683,7 +1833,8 @@ void CGalaxyATMSystemRadarScreen::DrawToggleChip(HDC hDC, RECT box, const std::w
 void CGalaxyATMSystemRadarScreen::DrawDropdownField(HDC hDC, RECT box, const std::wstring& text,
     int objType, const char* objId, const char* tooltip)
 {
-    Theme::OutlineBox(hDC, box, Theme::ControlFill, Theme::BorderStrong);
+    // The same grey plate as the БП button, not the near-black of a text field.
+    Theme::OutlineBox(hDC, box, Theme::ButtonMid, Theme::BorderStrong);
 
     RECT chevron = { box.right - 19, box.top, box.right, box.bottom };
 
@@ -1729,6 +1880,11 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownList(HDC hDC)
     {
         values = kTimeSteps; count = kTimeStepsCount;
         current = m_vecTimeMin; anchor = m_vecTimeFieldRect;
+    }
+    else if (m_openDropdown == DropdownKind::OsFont)
+    {
+        values = kFontSizeSteps; count = kFontSizeStepsCount;
+        current = Plugin()->TagFontSize(); anchor = m_osFontFieldRect;
     }
     else
     {
@@ -1861,6 +2017,19 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
             RegisterZoneObjects();
         RegisterSigmetObjects();
 
+        // Not logged in yet: the ruler and the vectors belong to the panel and
+        // wait for it. The wake arcs are not a setting of anything, so stay.
+        if (!Authorized())
+        {
+            m_rulerPressPending = false;
+            m_rulerArmed = false;
+            m_rulerPlacing = false;
+            DrawWakeArcs(hDC);
+            // The формуляр neither: it is the traffic, not a panel setting.
+            DrawFormulars(hDC, true);
+            return;
+        }
+
         // A press of the side button arrives on the poll timer, outside any
         // refresh; it is only latched there and acted on here. The press does
         // not place anything by itself - it arms the ruler, and the two points
@@ -1968,6 +2137,10 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         if (m_vecDistEnabled || m_vecTimeEnabled || m_vecByPlan)
             DrawTargetVectors(hDC);
 
+        // Over the vectors, under the rulers. Its hit-boxes come after the
+        // ruler canvas, so they are left out while the canvas is up.
+        DrawFormulars(hDC, !(m_rulerArmed || m_rulerPlacing));
+
         for (size_t i = 0; i < m_rulers.size(); i++)
             DrawRulerLine(hDC, m_rulers[i], (int)i);
         if (m_rulerPlacing)
@@ -1980,16 +2153,25 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
     DrawPanel(hDC);
 
-    if (m_atisLetterOpen)
-        DrawAtisLetterWindow(hDC);
-    if (m_atisOpen)
-        DrawAtisWindow(hDC);
-    if (m_rcOpen)
-        DrawSectorListWindow(hDC);
+    // Before the windows, which open over it. The panel's "-" puts the bar
+    // away along with it.
+    if (!m_collapsed)
+        DrawMenuBar(hDC);
 
-    // Last, so it paints over everything and its rows win the click.
-    if (m_openDropdown != DropdownKind::None)
-        DrawDropdownList(hDC);
+    // The panel's windows open only once it has been logged into.
+    if (Authorized())
+    {
+        if (m_atisLetterOpen)
+            DrawAtisLetterWindow(hDC);
+        if (m_atisOpen)
+            DrawAtisWindow(hDC);
+        if (m_rcOpen)
+            DrawSectorListWindow(hDC);
+
+        // Last, so it paints over everything and its rows win the click.
+        if (m_openDropdown != DropdownKind::None)
+            DrawDropdownList(hDC);
+    }
 
     // The сигмет and зона windows are only up while the button is held, so they
     // go over even the dropdown - nothing else can be interacted with meanwhile.
@@ -1997,6 +2179,740 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         DrawZoneInfo(hDC);
     if (m_sigmetInfoIndex >= 0)
         DrawSigmetInfo(hDC);
+}
+
+// ---- Формуляр сопровождения ----------------------------------------------------
+// The track label, drawn by the plugin itself rather than by EuroScope's tag.
+// EuroScope sets a tag's lines a fixed distance apart - whatever its own
+// symbology size says - and a plug-in can only make the letters of an item
+// bigger, never the gap, so ФС "Р-р шрифта" above 12 ran each line into the
+// next. Drawn here, the line pitch comes from the font actually in use.
+//
+// It is the ULLL wiki's "Формуляр РДЦ (Контроль)". Collapsed: the warnings
+// ("W", "D", "Axxxx", "t"/"r", RAM, APW, EM, the remark), then callsign,
+// sector indicator and "V", then actual level, climb/descent arrow, cleared
+// level and ground speed, and under that whichever of heading, speed and rate
+// is assigned. The one under the cursor expands: the transponder
+// code after the sector indicator, then XFL COPX, AHDG ASP ARC and the FIR
+// exit point, a blank line, ATYP/WTC ADES RFL, and calculated IAS and Mach.
+// An item with nothing assigned shows its mnemonic, as the picture does.
+//
+// The sector's own tag ("Galaxy CTR" in Tags.txt) is built out of TopSky and
+// ULLLPlugin items this plugin cannot read, so the values come from EuroScope.
+// What a click does is copied from that tag, though, function for function -
+// StartTagFunction reaches another plug-in's functions by its name - so the
+// TopSky, VCH and ULLLPlugin menus come up just as they did off it.
+//
+// ФС picks three lines like that or two, with the warnings on the callsign's
+// line, and whether the speed is shown. A warnings line with nothing to say is
+// left out. The label is dragged by any part of it.
+//
+// So that this is the only label on the screen, the display's tag family is
+// the empty "Galaxy Plugin" one; ".formular" turns this one off.
+namespace
+{
+    struct FormularRun
+    {
+        std::wstring text;
+        COLORREF color;
+        const FormularFn* fn;
+    };
+
+    // Copied from the "Galaxy CTR" detailed tag in the sector's Tags.txt: the
+    // item, then the left and the right click's function, each with the
+    // plug-in that provides it.
+    const char* const kTopSky = "TopSky plugin";
+    const char* const kUlll   = "ULLLPlugin";
+    const char* const kVch    = "VCH";
+
+    const FormularFn kFnSquawkWarning = { kTopSky, 138, kTopSky, 62,  NULL,    0    };
+    const FormularFn kFnCommunication = { kTopSky, 201, NULL,    32,  NULL,    0    };
+    const FormularFn kFnRemark        = { kTopSky, 212, kTopSky, 2,   NULL,    0    };
+    const FormularFn kFnCallsign      = { kTopSky, 22,  kTopSky, 6,   kTopSky, 6    };
+    const FormularFn kFnSector        = { kTopSky, 66,  NULL,    20,  kTopSky, 100  };
+    const FormularFn kFnTssr          = { kTopSky, 106, kTopSky, 62,  NULL,    0    };
+    const FormularFn kFnAfl           = { kUlll,   509, NULL,    1,   kTopSky, 99   };
+    const FormularFn kFnCfl           = { kUlll,   510, kTopSky, 12,  kTopSky, 139  };
+    const FormularFn kFnGs            = { kTopSky, 40,  kUlll,   507, NULL,    0    };
+    const FormularFn kFnXfl           = { kTopSky, 53,  NULL,    26,  NULL,    0    };
+    const FormularFn kFnCopx          = { kTopSky, 44,  NULL,    22,  kTopSky, 45   };
+    const FormularFn kFnAhdg          = { NULL,    25,  kTopSky, 14,  kTopSky, 133  };
+    const FormularFn kFnAsp           = { kTopSky, 47,  kTopSky, 15,  kTopSky, 71   };
+    const FormularFn kFnArc           = { kTopSky, 56,  kTopSky, 16,  kTopSky, 134  };
+    const FormularFn kFnAtyp          = { kTopSky, 70,  kVch,    650, kTopSky, 2    };
+    const FormularFn kFnAdes          = { kTopSky, 79,  NULL,    7,   kTopSky, 1001 };
+    const FormularFn kFnRfl           = { kTopSky, 120, kTopSky, 59,  NULL,    0    };
+
+    // TopSky keeps what it adds to an aircraft's assigned data in flight strip
+    // annotation 7, as "/"-separated fields - "A0011/s+/" for a speed
+    // assigned "or more". The "s" field's sign is the "+" / "-" TopSky puts on
+    // the assigned speed; 0 when there is none.
+    char TopSkySpeedModifier(const CFlightPlanControllerAssignedData& assigned)
+    {
+        const char* annotation = assigned.GetFlightStripAnnotation(7);
+        if (annotation == NULL)
+            return 0;
+
+        const std::string text(annotation);
+        size_t pos = 0;
+        while (pos < text.size())
+        {
+            size_t end = text.find('/', pos);
+            const std::string field = text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+            if (field.size() >= 2 && field[0] == 's' && (field[1] == '+' || field[1] == '-'))
+                return field[1];
+            if (end == std::string::npos)
+                break;
+            pos = end + 1;
+        }
+        return 0;
+    }
+
+    // IAS and Mach off the ground speed, as if there were no wind, in the
+    // standard atmosphere. The sector tag's are calculated figures too, and a
+    // plug-in is given no wind to do any better with.
+    bool CalculatedIasMach(int gsKt, int pressureAltFt, int& iasKt, int& machX100)
+    {
+        if (gsKt < 40)
+            return false;
+
+        const double h = (double)max(0, pressureAltFt);
+        double T, delta;   // temperature, K, and pressure ratio
+        if (h <= 36089.0)
+        {
+            T = 288.15 - 0.0019812 * h;
+            delta = pow(T / 288.15, 5.25588);
+        }
+        else
+        {
+            T = 216.65;
+            delta = 0.223361 * exp(-(h - 36089.0) / 20805.8);
+        }
+
+        const double mach = gsKt / (38.967854 * sqrt(T));
+        const double qcOverP0 = delta * (pow(1.0 + 0.2 * mach * mach, 3.5) - 1.0);
+        const double cas = 661.4786 * sqrt(5.0 * (pow(qcOverP0 + 1.0, 2.0 / 7.0) - 1.0));
+
+        iasKt = (int)lround(cas);
+        machX100 = (int)lround(mach * 100.0);
+        return true;
+    }
+}
+
+HFONT CGalaxyATMSystemRadarScreen::GetFormularFont()
+{
+    int size = Plugin()->TagFontSize();
+    if (m_formularFont != NULL && m_formularFontSize == size)
+        return m_formularFont;
+    if (m_formularFont != NULL)
+        DeleteObject(m_formularFont);
+
+    // EuroScope's own tag typeface, so the label reads as part of the same
+    // picture as everything else EuroScope draws - Consolas when all the DC
+    // carried was a stock font.
+    LOGFONTW lf = {};
+    if (m_esFont == NULL || GetObjectW(m_esFont, sizeof(lf), &lf) == 0)
+        wcscpy_s(lf.lfFaceName, L"Consolas");
+    lf.lfHeight = -MulDiv(size, 7, 6);   // 12 -> 14 px
+    lf.lfWidth = 0;
+    lf.lfEscapement = lf.lfOrientation = 0;
+    lf.lfWeight = FW_NORMAL;
+    lf.lfItalic = lf.lfUnderline = lf.lfStrikeOut = FALSE;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+
+    m_formularFont = CreateFontIndirectW(&lf);
+    m_formularFontSize = size;
+    return m_formularFont;
+}
+
+void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
+{
+    // Items are rebuilt every frame. A label not drawn this frame - filtered
+    // out, or off the screen - keeps where it was dragged to, but nothing on
+    // it can be clicked.
+    for (auto& entry : m_formulars)
+        entry.second.items.clear();
+
+    if (!m_formularsVisible)
+        return;
+
+    CGalaxyATMSystemPlugin* plugin = Plugin();
+    RECT ra = GetRadarArea();
+
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+    SetTextAlign(hDC, TA_LEFT | TA_TOP);
+    SelectObject(hDC, GetFormularFont());
+
+    TEXTMETRICW tm;
+    GetTextMetricsW(hDC, &tm);
+    // A little tighter than the font's own line height, which leaves a gap
+    // between the lines wider than the label needs.
+    const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading) - 2);
+    SIZE space = { 0, 0 };
+    GetTextExtentPoint32W(hDC, L" ", 1, &space);
+
+    const int tl = plugin->TransitionLevelFL();
+    const AltUnit altUnit = plugin->UnitAlt();
+
+    // Codes more than one aircraft is squawking - "D" on each of them. The
+    // conspicuity and VFR codes are shared by design and left out.
+    std::map<std::string, int> codeCount;
+    for (CRadarTarget t = plugin->RadarTargetSelectFirst(); t.IsValid();
+         t = plugin->RadarTargetSelectNext(t))
+    {
+        CRadarTargetPositionData p = t.GetPosition();
+        const char* c = p.IsValid() ? p.GetSquawk() : NULL;
+        if (c == NULL || strlen(c) != 4 || strcmp(c, "0000") == 0 || strcmp(c, "1200") == 0
+            || strcmp(c, "2000") == 0 || strcmp(c, "7000") == 0)
+            continue;
+        codeCount[c]++;
+    }
+
+    for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
+         rt = plugin->RadarTargetSelectNext(rt))
+    {
+        CRadarTargetPositionData pos = rt.GetPosition();
+        if (!pos.IsValid())
+            continue;
+
+        POINT tp = ConvertCoordFromPositionToPixel(pos.GetPosition());
+        if (!PtInRect(&ra, tp))
+            continue;
+
+        // Фильтр высоты hides the label, as it blanks the tag items - except
+        // over an APW, which no display filter may switch off.
+        const ApwResult& apw = plugin->ApwForTarget(rt);
+        if (!plugin->AltFilterPasses(pos.GetPressureAltitude()) && apw.level == ApwLevel::None)
+            continue;
+
+        CFlightPlan fp = rt.GetCorrelatedFlightPlan();
+        const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
+        if (cs == NULL || *cs == '\0')
+            continue;
+        const std::string callsign = cs;
+        const COLORREF base = GetTagColorForFlightPlan(fp);
+        const char* sq = pos.GetSquawk();
+
+        const bool correlated = fp.IsValid();
+        // Expanded only while the cursor is on it - selecting or assuming the
+        // aircraft leaves it collapsed, as the sector's detailed tag did.
+        const bool expanded = !m_formularHover.empty() && m_formularHover == callsign;
+
+        // ---- Warnings, above the callsign, with the wiki's letters: W no RVSM,
+        // D a code another aircraft squawks too, Axxxx a code that is not the
+        // one assigned, t / r text only / receive only, RAM, CLAM, APW, the
+        // emergency codes, and the remark ----
+        std::vector<FormularRun> warnings;
+        if (correlated && !fp.GetFlightPlanData().IsRvsm())
+            warnings.push_back({ L"W", Theme::DistressText, NULL });
+        if (sq != NULL)
+        {
+            auto dup = codeCount.find(sq);
+            if (dup != codeCount.end() && dup->second > 1)
+                warnings.push_back({ L"D", Theme::DuplicateText, NULL });
+        }
+        if (correlated && sq != NULL && *sq != '\0')
+        {
+            std::string assigned = plugin->AssignedSquawkFor(fp);
+            if (!assigned.empty() && assigned != sq)
+                warnings.push_back({ L"A" + Widen(sq), Theme::SquawkMismatch, &kFnSquawkWarning });
+        }
+        if (correlated)
+        {
+            char com = fp.GetControllerAssignedData().GetCommunicationType();
+            if (com == 0 || com == ' ' || com == '?')
+                com = fp.GetFlightPlanData().GetCommunicationType();
+            com = (char)tolower((unsigned char)com);
+            if (com == 't' || com == 'r')
+                warnings.push_back({ std::wstring(1, (wchar_t)com), base, &kFnCommunication });
+            if (fp.GetRAMFlag())
+                warnings.push_back({ L"RAM", Theme::DuplicateText, NULL });
+            if (fp.GetCLAMFlag())
+                warnings.push_back({ L"CLAM", Theme::DuplicateText, NULL });
+        }
+        if (apw.level != ApwLevel::None)
+        {
+            std::wstring text = L"APW";
+            if (plugin->GetConfig().Apw().showZone && !apw.zoneId.empty())
+                text += L" " + apw.zoneId;
+            warnings.push_back({ text,
+                apw.level == ApwLevel::Inside ? Theme::ApwInside : Theme::ApwPredicted, NULL });
+        }
+        if (sq != NULL && strcmp(sq, "7700") == 0)
+            warnings.push_back({ L"EM", Theme::DistressText, NULL });
+        else if (sq != NULL && strcmp(sq, "7600") == 0)
+            warnings.push_back({ L"RDO", Theme::DistressText, NULL });
+        else if (sq != NULL && strcmp(sq, "7500") == 0)
+            warnings.push_back({ L"HIJ", Theme::DistressText, NULL });
+        if (correlated)
+        {
+            const char* remark = fp.GetControllerAssignedData().GetScratchPadString();
+            if (remark != NULL && *remark != '\0')
+            {
+                // TopSky's missed approach, set from its Callsign menu, lands in
+                // the scratch pad as "MISAP" - with whatever else is there around
+                // it - and the wiki's label calls it MAPP. Any case, anywhere.
+                std::wstring text = Widen(remark);
+                std::wstring upper = text;
+                CharUpperBuffW(&upper[0], (DWORD)upper.size());
+                bool missedApproach = false;
+                size_t at;
+                while ((at = upper.find(L"MISAP")) != std::wstring::npos)
+                {
+                    text.erase(at, 5);
+                    upper.erase(at, 5);
+                    missedApproach = true;
+                }
+                if (missedApproach)
+                {
+                    // MAPP on its own, in orange; the underscores TopSky pads
+                    // the flag with go, and any remark left beside it stays.
+                    std::wstring rest;
+                    for (wchar_t c : text)
+                        if (c != L'_')
+                            rest += c;
+                    size_t first = rest.find_first_not_of(L" \t");
+                    size_t last = rest.find_last_not_of(L" \t");
+                    text = (first == std::wstring::npos) ? std::wstring() : rest.substr(first, last - first + 1);
+                    warnings.push_back({ L"MAPP", Theme::FormularMapp, &kFnRemark });
+                }
+                if (!text.empty())
+                    warnings.push_back({ text, base, &kFnRemark });
+            }
+        }
+
+        // ---- Callsign, sector indicator (the position tracking it, then the
+        // one it is coordinated to next), V for a VFR flight, and on the
+        // expanded label the transponder code ----
+        std::vector<FormularRun> ident;
+        auto highlight = m_formulars.find(callsign);
+        const bool highlighted = highlight != m_formulars.end() && highlight->second.highlighted;
+        ident.push_back({ Widen(callsign.c_str()), highlighted ? Theme::FormularHighlight : base,
+            correlated ? &kFnCallsign : NULL });
+        if (correlated)
+        {
+            std::string si;
+            const char* current = fp.GetTrackingControllerId();
+            if (current != NULL)
+                si = current;
+            const char* next = fp.GetCoordinatedNextController();
+            if (next != NULL && *next != '\0')
+            {
+                CController nextController = plugin->ControllerSelect(next);
+                const char* nextId = nextController.IsValid() ? nextController.GetPositionId()
+                    : (strlen(next) <= 3 ? next : NULL);
+                if (nextId != NULL && si != nextId)
+                    si += nextId;
+            }
+            if (!si.empty())
+                ident.push_back({ Widen(si.c_str()), Theme::FormularSector, &kFnSector });
+
+            const char* plan = fp.GetFlightPlanData().GetPlanType();
+            if (plan != NULL && (plan[0] == 'V' || plan[0] == 'v'))
+                ident.push_back({ L"V", base, NULL });
+        }
+        if (expanded && sq != NULL && *sq != '\0')
+            ident.push_back({ Widen(sq), base, correlated ? &kFnTssr : NULL });
+
+        // ---- Actual level, climb/descent arrow, cleared level, speed ----
+        std::vector<FormularRun> levels;
+        const bool belowTL = pos.GetFlightLevel() / 100 < tl;
+        const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
+        levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit, belowTL).c_str()),
+            base, correlated ? &kFnAfl : NULL });
+        // The same +-100 fpm band the vertical speed item counts as level.
+        const int vs = rt.GetVerticalSpeed();
+        if (vs >= 100)
+            levels.push_back({ L"\x2191", base, NULL });
+        else if (vs <= -100)
+            levels.push_back({ L"\x2193", base, NULL });
+        if (correlated)
+        {
+            // 1 and 2 are EuroScope's cleared-for-approach values - the wiki's
+            // CA (instrument) and VA (visual).
+            int cfl = fp.GetControllerAssignedData().GetClearedAltitude();
+            std::wstring cflText;
+            COLORREF cflColor = base;
+            if (cfl == 1)
+                cflText = L"CA";
+            else if (cfl == 2)
+                cflText = L"VA";
+            else if (cfl > 2)
+            {
+                cflText = Widen(FormatAltitudeUnit(cfl, altUnit, cfl / 100 < tl).c_str());
+                // Yellow when the aircraft is not doing what it was cleared to:
+                // level more than 200 ft off it, or still going past it.
+                const bool level = vs > -100 && vs < 100;
+                if ((level && abs(altFt - cfl) > 200)
+                    || (vs >= 100 && altFt > cfl + 200) || (vs <= -100 && altFt < cfl - 200))
+                    cflColor = Theme::DuplicateText;
+            }
+            // Always there, even with nothing cleared - it is what a level is
+            // cleared from. With nothing cleared it shows the level the
+            // aircraft is at, as the sector tag's CFL item does.
+            if (cflText.empty())
+                cflText = Widen(FormatAltitudeUnit(altFt, altUnit, belowTL).c_str());
+            levels.push_back({ cflText, cflColor, &kFnCfl });
+        }
+        if (m_osSpeed)
+            levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
+                base, correlated ? &kFnGs : NULL });
+
+        // ---- Assigned heading, speed and rate as the label writes them -
+        // empty for one that is not assigned ----
+        std::wstring ahdgText, aspText, arcText;
+        if (correlated)
+        {
+            CFlightPlanControllerAssignedData assigned = fp.GetControllerAssignedData();
+            wchar_t t[16];
+            if (assigned.GetAssignedHeading() > 0)
+            {
+                swprintf_s(t, L"H%03d", assigned.GetAssignedHeading());
+                ahdgText = t;
+            }
+            if (assigned.GetAssignedMach() > 0)
+            {
+                swprintf_s(t, L"M%03d", assigned.GetAssignedMach());   // hundredths: M088
+                aspText = t;
+            }
+            else if (assigned.GetAssignedSpeed() > 0)
+            {
+                swprintf_s(t, L"N%03d", assigned.GetAssignedSpeed());   // knots, as the wiki's label writes it
+                aspText = t;
+            }
+            // "or more" / "or less", as TopSky set it: N250+, M078-.
+            if (!aspText.empty())
+            {
+                char modifier = TopSkySpeedModifier(assigned);
+                if (modifier != 0)
+                    aspText += (wchar_t)modifier;
+            }
+            if (assigned.GetAssignedRate() != 0)
+            {
+                swprintf_s(t, L"R%d", assigned.GetAssignedRate());
+                arcText = t;
+            }
+        }
+
+        // ---- The expanded label's own lines ----
+        std::vector<std::vector<FormularRun>> extra;
+        if (expanded && correlated)
+        {
+            CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+            CFlightPlanData fpd = fp.GetFlightPlanData();
+            wchar_t buf[32];
+
+            std::vector<FormularRun> exitLine;
+            int xfl = fp.GetExitCoordinationAltitude();
+            exitLine.push_back({ xfl > 0 ? Widen(FormatAltitudeUnit(xfl, altUnit, xfl / 100 < tl).c_str())
+                                         : std::wstring(L"XFL"), base, &kFnXfl });
+            const char* copx = fp.GetExitCoordinationPointName();
+            exitLine.push_back({ (copx != NULL && *copx != '\0') ? Widen(copx) : std::wstring(L"COPX"),
+                base, &kFnCopx });
+            extra.push_back(exitLine);
+
+            std::vector<FormularRun> assignedLine;
+            assignedLine.push_back({ ahdgText.empty() ? std::wstring(L"AHDG") : ahdgText, base, &kFnAhdg });
+            assignedLine.push_back({ aspText.empty() ? std::wstring(L"ASP") : aspText, base, &kFnAsp });
+            assignedLine.push_back({ arcText.empty() ? std::wstring(L"ARC") : arcText, base, &kFnArc });
+            const char* firExit = fp.GetNextFirCopxPointName();
+            if (firExit != NULL && *firExit != '\0')
+                assignedLine.push_back({ Widen(firExit), base, NULL });
+            extra.push_back(assignedLine);
+
+            // The picture leaves a blank line before the flight plan data.
+            extra.push_back(std::vector<FormularRun>());
+
+            std::vector<FormularRun> planLine;
+            const char* atyp = fpd.GetAircraftFPType();
+            std::wstring typeText = (atyp != NULL && *atyp != '\0') ? Widen(atyp) : std::wstring(L"ATYP");
+            char wtc = fpd.GetAircraftWtc();
+            if (wtc != 0 && wtc != ' ' && wtc != '?')
+                typeText += L"/" + std::wstring(1, (wchar_t)wtc);
+            planLine.push_back({ typeText, base, &kFnAtyp });
+            const char* ades = fpd.GetDestination();
+            if (ades != NULL && *ades != '\0')
+                planLine.push_back({ Widen(ades), base, &kFnAdes });
+            int rfl = fpd.GetFinalAltitude();
+            if (rfl > 0)
+            {
+                swprintf_s(buf, L"%03d", rfl / 100);
+                planLine.push_back({ buf, base, &kFnRfl });
+            }
+            extra.push_back(planLine);
+
+            int ias = 0, machX100 = 0;
+            if (CalculatedIasMach(rt.GetGS(), pos.GetFlightLevel(), ias, machX100))
+            {
+                std::vector<FormularRun> speedLine;
+                swprintf_s(buf, L"N%03d", ias);
+                speedLine.push_back({ buf, base, NULL });
+                swprintf_s(buf, L"M%02d", machX100);
+                speedLine.push_back({ buf, base, NULL });
+                extra.push_back(speedLine);
+            }
+        }
+        else if (correlated)
+        {
+            // Collapsed, the sector tag still shows whichever of them is
+            // assigned, on a line of their own - and none of it when nothing is.
+            std::vector<FormularRun> assignedLine;
+            if (!ahdgText.empty())
+                assignedLine.push_back({ ahdgText, base, &kFnAhdg });
+            if (!aspText.empty())
+                assignedLine.push_back({ aspText, base, &kFnAsp });
+            if (!arcText.empty())
+                assignedLine.push_back({ arcText, base, &kFnArc });
+            if (!assignedLine.empty())
+                extra.push_back(assignedLine);
+        }
+
+        std::vector<std::vector<FormularRun>> lines;
+        if (m_osLines == 3)
+        {
+            if (!warnings.empty())
+                lines.push_back(warnings);
+            lines.push_back(ident);
+        }
+        else
+        {
+            ident.insert(ident.end(), warnings.begin(), warnings.end());
+            lines.push_back(ident);
+        }
+        lines.push_back(levels);
+        lines.insert(lines.end(), extra.begin(), extra.end());
+
+        // ---- Size, and where it stands ----
+        int width = 0;
+        std::vector<std::vector<int>> runWidths(lines.size());
+        for (size_t l = 0; l < lines.size(); l++)
+        {
+            int w = 0;
+            for (size_t r = 0; r < lines[l].size(); r++)
+            {
+                SIZE sz = { 0, 0 };
+                GetTextExtentPoint32W(hDC, lines[l][r].text.c_str(), (int)lines[l][r].text.size(), &sz);
+                runWidths[l].push_back(sz.cx);
+                w += sz.cx + (r > 0 ? space.cx : 0);
+            }
+            width = max(width, w);
+        }
+        const int height = (int)lines.size() * lineH;
+
+        // The label hangs off its callsign, as EuroScope's own tag does: the
+        // offset places the callsign line, the warnings stack up above it and
+        // the expanded lines run on below, so the callsign - and the leader
+        // that reaches it - stays put whatever comes and goes around it.
+        const size_t identLine = (m_osLines == 3 && !warnings.empty()) ? 1 : 0;
+
+        FormularState& state = m_formulars[callsign];
+        if (!state.placed)
+        {
+            // Up and to the right of the target, the "Galaxy CTR" tag's own
+            // leader of about 18 px.
+            state.offset = { 16, -14 };
+            state.placed = true;
+        }
+        state.anchor = tp;
+        POINT callsignAt = { tp.x + state.offset.x, tp.y + state.offset.y };
+        state.callsignAt = callsignAt;
+
+        RECT area;
+        area.left = callsignAt.x;
+        area.top = callsignAt.y - (int)identLine * lineH - lineH / 2;
+        area.right = area.left + width;
+        area.bottom = area.top + height;
+        state.area = area;
+
+        // ---- Leader, from just off the target to the callsign: to the near end
+        // of the callsign's line, mid-height - its left end for a label out to
+        // the right of the target, its right end for one out to the left ----
+        int identWidth = 0;
+        for (size_t r = 0; r < runWidths[identLine].size(); r++)
+            identWidth += runWidths[identLine][r] + (r > 0 ? space.cx : 0);
+        const bool labelRight = callsignAt.x + runWidths[identLine][0] / 2 >= tp.x;
+        POINT edge = { labelRight ? callsignAt.x - 2 : callsignAt.x + identWidth + 2, callsignAt.y };
+        double dx = edge.x - tp.x, dy = edge.y - tp.y;
+        double len = sqrt(dx * dx + dy * dy);
+        const double kGapPx = 6.0;
+        if (len > kGapPx + 2.0)
+        {
+            // Through GDI+, antialiased, like the vectors and the ruler - a
+            // plain GDI pen leaves a slanted leader visibly stepped.
+            VectorCanvas canvas(hDC, base, 1.0f);
+            canvas.Line(tp.x + dx * kGapPx / len, tp.y + dy * kGapPx / len, edge.x, edge.y);
+        }
+
+        // ---- The text ----
+        RECT ahdgRect = { 0, 0, 0, 0 };
+        bool haveAhdg = false;
+        for (size_t l = 0; l < lines.size(); l++)
+        {
+            int x = area.left;
+            int y = area.top + (int)l * lineH;
+            for (size_t r = 0; r < lines[l].size(); r++)
+            {
+                const FormularRun& run = lines[l][r];
+                SetTextColor(hDC, run.color);
+                TextOutW(hDC, x, y, run.text.c_str(), (int)run.text.size());
+
+                FormularItem item;
+                item.rect = { x, y, x + runWidths[l][r], y + lineH };
+                item.fn = run.fn;
+                item.text = Narrow(run.text);
+                state.items.push_back(item);
+                if (run.fn == &kFnAhdg)
+                {
+                    ahdgRect = item.rect;
+                    haveAhdg = true;
+                }
+
+                x += runWidths[l][r] + space.cx;
+            }
+        }
+
+        // One moveable object for the whole label: a drag anywhere on it moves
+        // it, and a click is sorted out by item in FormularClick.
+        if (registerObjects)
+        {
+            RECT hit = area;
+            InflateRect(&hit, 2, 1);
+            AddScreenObject(SO_FORMULAR, callsign.c_str(), hit, true, "");
+
+            // AHDG on top of it, so a pull there lays a heading instead of
+            // moving the label.
+            if (haveAhdg)
+                AddScreenObject(SO_FORMULAR_AHDG, callsign.c_str(), ahdgRect, true,
+                    "Тянуть - курс, ЛКМ - выбор курса, ПКМ - сброс курса");
+        }
+    }
+
+    // ---- A heading being pulled off AHDG, as TopSky draws it: a dashed line
+    // straight from the aircraft to the cursor, and over its far end
+    // "distance/heading" ----
+    if (m_hdgDragging && m_hdgDragMoved)
+    {
+        POINT from = { 0, 0 };
+        double distNm = 0.0;
+        int hdg = DragHeading(m_hdgDragCallsign.c_str(), m_hdgDragPt, &from, &distNm);
+        if (hdg > 0)
+        {
+            {
+                VectorCanvas canvas(hDC, Theme::HeadingDragLine);
+                // Long dashes, as TopSky's: 14 px on, 6 px off. GDI+ counts a
+                // dash pattern in pen widths, so the pixels are divided by it.
+                const Gdiplus::REAL w = max((Gdiplus::REAL)0.5f, canvas.pen.GetWidth());
+                const Gdiplus::REAL dashes[] = { 14.0f / w, 6.0f / w };
+                canvas.pen.SetDashPattern(dashes, 2);
+                canvas.Line(from.x, from.y, m_hdgDragPt.x, m_hdgDragPt.y);
+            }
+
+            const double dist = (plugin->UnitDist() == DistUnit::Km) ? distNm * 1.852 : distNm;
+            wchar_t text[32];
+            swprintf_s(text, L"%.1f/%03d", dist, hdg);
+
+            SIZE sz = { 0, 0 };
+            GetTextExtentPoint32W(hDC, text, (int)wcslen(text), &sz);
+            SetTextColor(hDC, Theme::HeadingDragText);
+            TextOutW(hDC, m_hdgDragPt.x - 2, m_hdgDragPt.y - sz.cy - 2, text, (int)wcslen(text));
+        }
+    }
+
+    RestoreDC(hDC, saved);
+}
+
+int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor,
+    POINT* from, double* distNm)
+{
+    CRadarTarget rt = GetPlugIn()->RadarTargetSelect(sCallsign);
+    if (!rt.IsValid() || !rt.GetPosition().IsValid())
+        return 0;
+
+    const CPosition start = rt.GetPosition().GetPosition();
+    POINT tp = ConvertCoordFromPositionToPixel(start);
+    if (abs(cursor.x - tp.x) < 3 && abs(cursor.y - tp.y) < 3)
+        return 0;
+    const CPosition target = ConvertCoordFromPixelToPosition(cursor);
+
+    // DirectionTo is already magnetic, by the sector file's own variation -
+    // which is what an assigned heading is.
+    // Only headings in fives - 285, 290 - are given, so it snaps to the
+    // nearest one; north is 360, never 000.
+    int hdg = (int)lround(start.DirectionTo(target) / 5.0) * 5 % 360;
+    if (hdg <= 0)
+        hdg += 360;
+
+    if (from != NULL)
+        *from = tp;
+    if (distNm != NULL)
+        *distNm = start.DistanceTo(target);
+    return hdg;
+}
+
+
+// A click on a формуляр selects the aircraft, then starts on that item what the
+// sector's own tag starts there - see the kFn table above DrawFormulars.
+void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt, int button)
+{
+    // The release of a heading pull can come back as a click as well.
+    if (GetTickCount64() - m_hdgDragEndTick < 500)
+        return;
+
+    auto it = m_formulars.find(sCallsign);
+    if (it == m_formulars.end())
+        return;
+
+    // The middle button lights the callsign up in orange, and a second one
+    // puts it out. TopSky's own Highlight cannot be followed: it keeps that
+    // flag to itself and writes it nowhere a plug-in can read.
+    if (button == BUTTON_MIDDLE)
+    {
+        it->second.highlighted = !it->second.highlighted;
+        RequestRefresh();
+        return;
+    }
+
+    // Most tag functions act on the ASEL aircraft, so it is selected first.
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
+    if (fp.IsValid())
+        GetPlugIn()->SetASELAircraft(fp);
+
+    const FormularItem* hit = NULL;
+    for (const FormularItem& item : it->second.items)
+    {
+        if (PtInRect(&item.rect, pt))
+        {
+            hit = &item;
+            break;
+        }
+    }
+
+    // A right click on an approach clearance (CA / VA) clears it off, as the
+    // wiki has it. Everything else on CFL - the level menu on the left button,
+    // PEL on the right - is TopSky's, like the rest of the label.
+    if (hit != NULL && fp.IsValid() && hit->fn == &kFnCfl && button == BUTTON_RIGHT)
+    {
+        int cfl = fp.GetControllerAssignedData().GetClearedAltitude();
+        if (cfl == 1 || cfl == 2)
+        {
+            fp.GetControllerAssignedData().SetClearedAltitude(0);
+            RequestRefresh();
+            return;
+        }
+    }
+
+    if (hit != NULL && hit->fn != NULL && fp.IsValid())
+    {
+        const FormularFn& f = *hit->fn;
+        const bool right = (button == BUTTON_RIGHT);
+        const int id = right ? f.rightFn : f.leftFn;
+        if (id != 0)
+            StartTagFunction(sCallsign, f.itemPlugin, f.itemCode, hit->text.c_str(),
+                right ? f.rightPlugin : f.leftPlugin, id, pt, hit->rect);
+    }
+    RequestRefresh();
 }
 
 // ---- Сигметы ----------------------------------------------------------
@@ -2965,6 +3881,10 @@ void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
     int width = m_collapsed ? kCollapsedWidth : kPanelWidth;
     int height = m_collapsed
         ? L::HEADER_H + L::COLLAPSED_BOT_PAD
+        : !Authorized()
+        ? L::HEADER_H + L::HDR_GAP
+        + L::Block(m_authState == AuthState::Checking ? L::AUTH_BOX_H : L::AUTH_BOX_H_IDLE)
+        + L::PANEL_BOT_PAD
         : L::HEADER_H
         + L::HDR_GAP + L::Block(L::TIMER_BOX_H)
         + L::BLOCK_GAP + L::Block(L::USER_BOX_H)
@@ -2983,33 +3903,38 @@ void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
     RECT ra = GetRadarArea();
     m_panelArea.right = ra.right;
     m_panelArea.left = ra.right - width;
-    m_panelArea.top = PanelTop();
+    // Under the menu bar, which runs the full width of the radar over it.
+    // Collapsed there is no bar (see OnRefresh), and the little clock window
+    // goes back up to the toolbar.
+    m_panelArea.top = m_collapsed ? PanelTop() : PanelTop() + MenuBarHeight();
     m_panelArea.bottom = m_panelArea.top + height;
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    // Expanded, the panel carries no outline - only the boxes inside it do -
-    // and its background is stretched past the content to the bottom of the
-    // radar area, so the card reads as a full-height sidebar rather than
-    // stopping dead under the last block. m_panelArea itself (used for hit
-    // testing) stays sized to the actual content. Collapsed there is no
-    // sidebar to continue, so the little window is drawn to its own size and
-    // given an outline of its own to read as a window against the radar.
-    if (m_collapsed)
-    {
-        Theme::OutlineBox(hDC, m_panelArea, Theme::Background, Theme::Border);
-    }
-    else
-    {
-        RECT bgArea = m_panelArea;
-        if (bgArea.bottom < ra.bottom)
-            bgArea.bottom = ra.bottom;
-        Theme::FillBox(hDC, bgArea, Theme::Background);
-    }
+    // The panel carries no outline in any state - only the boxes inside it do
+    // - since it hangs off the menu bar and an edge would cut it off from it.
+    // Expanded, its background is stretched past the content to the bottom of
+    // the radar area, so the card reads as a full-height sidebar rather than
+    // stopping dead under the last block; m_panelArea itself (used for hit
+    // testing) stays sized to the actual content. Collapsed, and on the
+    // Авторизация card, there is no sidebar to continue and it is drawn to its
+    // own size.
+    //
+    // Square-cornered, not one of the rounded plates: a rounded top left
+    // corner leaves a pixel of whatever is underneath - TopSky's menu - showing
+    // at the joint with the bar.
+    RECT bgArea = m_panelArea;
+    if (!m_collapsed && Authorized() && bgArea.bottom < ra.bottom)
+        bgArea.bottom = ra.bottom;
+    Theme::FlatFill(hDC, bgArea, Theme::Background);
 
     int y = DrawHeader(hDC, m_panelArea.top);
-    if (!m_collapsed)
+    if (!m_collapsed && !Authorized())
+    {
+        DrawBlockAuth(hDC, y + L::HDR_GAP);
+    }
+    else if (!m_collapsed)
     {
         y = DrawBlockTimer(hDC, y + L::HDR_GAP);
         y = DrawBlockUser(hDC, y + L::BLOCK_GAP);
@@ -3067,6 +3992,90 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
     Theme::DrawLine(hDC, dateR, dateLine, m_fonts.Body, modeColor, DT_CENTER | DT_VCENTER);
 
     return y + L::HEADER_H;
+}
+
+// ---- Авторизация ---------------------------------------------------------------
+// The staged "проверка" after "Вход": when each stage ends, in ms after the
+// press, and the line it prints. Nothing is actually checked. The bar fills
+// over every stage but the last, which holds the full bar and the lime line
+// for a moment before the panel opens.
+namespace
+{
+    struct AuthStage { ULONGLONG endMs; const wchar_t* text; };
+    const AuthStage kAuthStages[] = {
+        {  700, L"Подключение к КСА..." },
+        { 1500, L"Проверка полномочий..." },
+        { 2200, L"Загрузка профиля..." },
+        { 2700, L"Доступ разрешён" },
+    };
+    const size_t    kAuthStageCount = _countof(kAuthStages);
+    const ULONGLONG kAuthFillMs     = kAuthStages[kAuthStageCount - 2].endMs;
+    const ULONGLONG kAuthTotalMs    = kAuthStages[kAuthStageCount - 1].endMs;
+}
+
+void CGalaxyATMSystemRadarScreen::TickAuth()
+{
+    if (m_authState != AuthState::Checking)
+        return;
+    if (GetTickCount64() - m_authStartTick >= kAuthTotalMs)
+        m_authState = AuthState::LoggedIn;
+    RequestRefresh();   // the bar moves on the fast tick, not the 1 s one
+}
+
+int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
+{
+    const bool checking = (m_authState == AuthState::Checking);
+    RECT box = DrawBlockFrame(hDC, y, L"Авторизация",
+        checking ? L::AUTH_BOX_H : L::AUTH_BOX_H_IDLE);
+
+    // Who is logging in is whoever EuroScope is connected as - the same three
+    // plates the Пользователь block shows once the panel is open.
+    std::wstring designation, role, user;
+    GetUserInfo(designation, role, user);
+
+    int cy = box.top + L::AU_TOP;
+    RECT designR = { ContentLeft(), cy, ContentLeft() + 47, cy + L::AU_ROW };
+    RECT roleR = { designR.right + 6, cy, ContentRight(), cy + L::AU_ROW };
+    DrawFittedField(hDC, designR, designation);
+    DrawFittedField(hDC, roleR, role);
+    cy += L::AU_ROW + L::AU_GAP;
+
+    RECT userR = { ContentLeft(), cy, ContentRight(), cy + L::AU_ROW };
+    DrawFittedField(hDC, userR, user);
+    cy += L::AU_ROW + L::AU_GAP2;
+
+    // Nothing to press and nothing to say here until LOGIN on the menu bar
+    // starts the check.
+    if (!checking)
+        return box.bottom;
+
+    // While it runs the progress bar stands under the two rows, with the
+    // stage it has reached printed on it.
+    RECT statusR = { ContentLeft(), cy, ContentRight(), cy + L::AU_STATUS };
+    ULONGLONG elapsed = GetTickCount64() - m_authStartTick;
+    const wchar_t* status = kAuthStages[kAuthStageCount - 1].text;
+    for (const AuthStage& s : kAuthStages)
+    {
+        if (elapsed < s.endMs)
+        {
+            status = s.text;
+            break;
+        }
+    }
+
+    ULONGLONG done = min(elapsed, kAuthFillMs);
+    Theme::OutlineBox(hDC, statusR, Theme::ControlFill, Theme::BorderStrong);
+    int w = (int)((statusR.right - statusR.left - 4) * done / kAuthFillMs);
+    if (w > 0)
+    {
+        RECT bar = { statusR.left + 2, statusR.top + 2, statusR.left + 2 + w, statusR.bottom - 2 };
+        Theme::FlatFill(hDC, bar, Theme::Active);
+    }
+    Theme::DrawLine(hDC, statusR, status, m_fonts.Body,
+        (elapsed >= kAuthFillMs) ? Theme::AuthGranted : Theme::Text,
+        DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
+
+    return box.bottom;
 }
 
 int CGalaxyATMSystemRadarScreen::DrawBlockTimer(HDC hDC, int y)
@@ -3132,13 +4141,13 @@ int CGalaxyATMSystemRadarScreen::DrawBlockVectors(HDC hDC, int y)
     m_vecTimeFieldRect = timeField;
 
     DrawToggleChip(hDC, distBtn, L"Д", m_vecDistEnabled, SO_VEC_DIST_TOGGLE, "VEC_DIST_TOGGLE",
-        "Вектор по дальности (км) - вместо вектора по времени");
+        "Вектор по дальности (км) - вместо вектора по времени", Theme::ButtonMid);
     wchar_t distText[16];
     swprintf_s(distText, L"%d", m_vecDistKm);
     DrawDropdownField(hDC, distField, distText, SO_VEC_DIST_FIELD, "VEC_DIST_FIELD", "Выбрать длину вектора, км");
 
     DrawToggleChip(hDC, timeBtn, L"Э", m_vecTimeEnabled, SO_VEC_TIME_TOGGLE, "VEC_TIME_TOGGLE",
-        "Вектор по времени (мин) - вместо вектора по дальности");
+        "Вектор по времени (мин) - вместо вектора по дальности", Theme::ButtonMid);
     wchar_t timeText[16];
     swprintf_s(timeText, L"%d", m_vecTimeMin);
     DrawDropdownField(hDC, timeField, timeText, SO_VEC_TIME_FIELD, "VEC_TIME_FIELD", "Выбрать время вектора, мин");
@@ -3160,8 +4169,17 @@ int CGalaxyATMSystemRadarScreen::DrawBlockOs(HDC hDC, int y)
 {
     RECT box = DrawBlockFrame(hDC, y, L"ФС", L::OS_BOX_H);
 
-    RECT label = { box.left + 8, box.top + L::O_TOP, ContentRight(), box.top + L::O_TOP + L::O_LABEL };
+    // The size picker sits on the label's own row, flush with the list's right
+    // edge - the same plate, width and height as the Векторы dropdowns.
+    RECT fontField = { box.right - 4 - 63, box.top + L::O_TOP, box.right - 4, box.top + L::O_TOP + L::O_LABEL };
+    m_osFontFieldRect = fontField;
+
+    RECT label = { box.left + 8, box.top + L::O_TOP, fontField.left - 6, box.top + L::O_TOP + L::O_LABEL };
     Theme::DrawLine(hDC, label, L"Р-р шрифта:", m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
+
+    wchar_t sizeText[8];
+    swprintf_s(sizeText, L"%d", Plugin()->TagFontSize());
+    DrawDropdownField(hDC, fontField, sizeText, SO_OS_FONT_FIELD, "OS_FONT_FIELD", "Выбрать размер шрифта формуляра");
 
     RECT list = { box.left + 5, label.bottom + L::O_GAP, box.right - 4,
                   label.bottom + L::O_GAP + L::O_LIST_H };
@@ -3240,7 +4258,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
 
     // "ВСЕ" straddles the top of the block, half over the ВВ1 label's row.
     RECT all = { box.left + 85, box.top + L::C_ALL_TOP, box.left + 125, box.top + L::C_ALL_TOP + L::C_ROW_H };
-    Theme::OutlineBox(hDC, all, m_codeAll ? Theme::Active : Theme::ButtonLight, Theme::Border);
+    Theme::OutlineBox(hDC, all, m_codeAll ? Theme::Active : Theme::ButtonMid, Theme::Border);
     Theme::DrawLine(hDC, all, L"ВСЕ", m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
     AddScreenObject(SO_CODE_ALL, "CODE_ALL", all, false, "Пропускать все коды");
 
@@ -3421,7 +4439,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
         const bool haveStrip = (m_atisLetterArea.bottom > m_atisLetterArea.top);
         m_atisArea.left = haveStrip ? m_atisLetterArea.left : ra.left + 8;
         m_atisArea.top = haveStrip ? m_atisLetterArea.bottom + 6
-                                   : PanelTop() + Plugin()->GetConfig().AtisTopOffset();
+                                   : PanelTop() + MenuBarHeight();
         m_atisPositioned = true;
     }
 
@@ -3596,6 +4614,101 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
+// ---- Menu bar ----------------------------------------------------------------
+// The items in the order the real system prints them. None of them opens
+// anything yet, so all of them are drawn grey and none takes a click.
+namespace
+{
+    const wchar_t* const kMenuItems[] = {
+        L"Настройки", L"Вид", L"Сенсоры", L"Карта", L"Аэродром", L"Списки",
+        L"Метео", L"Почта", L"Загрузка", L"Статистика", L"Архив", L"Справка",
+    };
+    const int kMenuItemCount = (int)_countof(kMenuItems);
+}
+
+// The bar's own height, but never less than TopSky's menu is tall
+// (Config::AtisTopOffset) - a bar shorter than that would leave the bottom of
+// TopSky's menu showing under it.
+int CGalaxyATMSystemRadarScreen::MenuBarHeight()
+{
+    return max(L::MENU_BAR_H, Plugin()->GetConfig().AtisTopOffset());
+}
+
+void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
+{
+    // The full width of the radar on the toolbar's bottom edge, over the panel
+    // too: the panel hangs under the bar rather than beside it.
+    RECT ra = GetRadarArea();
+    const int top = PanelTop();
+    RECT bar = { ra.left, top, ra.right, top + MenuBarHeight() };
+    if (bar.right <= bar.left || bar.bottom <= bar.top)
+        return;
+
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+
+    Theme::FlatFill(hDC, bar, Theme::MenuBarFill);
+
+    // The whole bar first, so a click anywhere on it - between two items too -
+    // is ours and never falls through to TopSky's menu; the items registered
+    // after it win over it.
+    AddScreenObject(SO_MENU_BAR, "MENU_BAR", bar, false, "");
+
+    const int kPadX = 8;   // bar edge -> first item
+    const int kGap  = 9;   // between two items
+
+    // The items first, from the left.
+    int x = bar.left + kPadX;
+    for (int i = 0; i < kMenuItemCount; i++)
+    {
+        const wchar_t* text = kMenuItems[i];
+        HFONT font = m_fonts.Menu;
+        SIZE sz = Theme::MeasureText(hDC, font, text);
+
+        // A screen too narrow for the lot loses items off the end rather than
+        // printing one past the bar.
+        if (x + sz.cx > bar.right - kPadX)
+            break;
+
+        RECT r = { x, bar.top, x + sz.cx, bar.bottom };
+        Theme::DrawLine(hDC, r, text, font, Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
+
+        x += sz.cx + kGap;
+    }
+
+    // LOGIN and Bypass: two buttons in a white frame, a short way after the
+    // last item. LOGIN is what logs in - the Авторизация card has no button of
+    // its own. Bypass is there because the real system has it, and does
+    // nothing - so it is grey, frame and all, and a click on it lands on the
+    // bar's own object.
+    const int kBtnLead = 40;         // last item -> LOGIN, at the least
+    const int kBtnPastCentre = 300;  // the middle of the bar -> LOGIN
+    const int kBtnPadX = 8;    // text -> frame, either side
+    const int kBtnGap  = 6;    // between the two
+    const int kBtnH    = 20;
+    HFONT btnFont = m_fonts.Body;
+    SIZE szLogin  = Theme::MeasureText(hDC, btnFont, L"LOGIN");
+    SIZE szBypass = Theme::MeasureText(hDC, btnFont, L"Bypass");
+    int btnTop = bar.top + (bar.bottom - bar.top - kBtnH) / 2;
+    // Out past the middle of the screen - but on a screen too narrow for that
+    // never over the last item.
+    const int loginLeft = max(x - kGap + kBtnLead, (bar.left + bar.right) / 2 + kBtnPastCentre);
+    RECT login  = { loginLeft, btnTop, 0, btnTop + kBtnH };
+    login.right = login.left + szLogin.cx + 2 * kBtnPadX;
+    RECT bypass = { login.right + kBtnGap, btnTop, 0, btnTop + kBtnH };
+    bypass.right = bypass.left + szBypass.cx + 2 * kBtnPadX;
+    if (bypass.right <= bar.right - kPadX)
+    {
+        Theme::FlatFrame(hDC, login, 1, Theme::Text);
+        Theme::DrawLine(hDC, login, L"LOGIN", btnFont, Theme::Text, DT_CENTER | DT_VCENTER);
+        Theme::FlatFrame(hDC, bypass, 1, Theme::MenuTextDisabled);
+        Theme::DrawLine(hDC, bypass, L"Bypass", btnFont, Theme::MenuTextDisabled, DT_CENTER | DT_VCENTER);
+        AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, "Войти в систему");
+    }
+
+    RestoreDC(hDC, saved);
+}
+
 // The АТИС index on its own: a single read-only strip standing on the radar
 // outside the panel, carrying the line the real system shows and nothing else -
 // "INDEX ATIS: <letter>" on black inside a light frame, the letter lit in lime
@@ -3634,14 +4747,12 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
     // Flush against the left edge of the screen, with no gap: the strip is
     // docked to it the way the panel is docked to the right one.
     //
-    // Below the toolbar by the configured offset rather than by a margin:
-    // TopSky lays its own menu bar across the top of the radar and the SDK
-    // reports nothing about it, so the strip would sit on the menu at any
-    // gap measured from the toolbar alone. See Config::AtisTopOffset.
-    // There is nothing to drag and nothing to restore from the ASR.
+    // Straight under the menu bar, which itself covers TopSky's menu - see
+    // MenuBarHeight. There is nothing to drag and nothing to restore from the
+    // ASR.
     RECT ra = GetRadarArea();
     m_atisLetterArea.left = ra.left;
-    m_atisLetterArea.top  = PanelTop() + Plugin()->GetConfig().AtisTopOffset();
+    m_atisLetterArea.top  = PanelTop() + MenuBarHeight();
 
     // Only if the display is narrower than the strip, which no real one is.
     if (m_atisLetterArea.left + W > ra.right)
@@ -4445,11 +5556,13 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
         }
     }
 
-    if (m_vecShowLevel)
+    // Only for a climb or descent: in level flight the predicted level is just
+    // the level already in the формуляр, and there is no chevron to label.
+    if (m_vecShowLevel && !isLevel)
     {
         // The label belongs to the chevron, so it reads the level at the point
-        // the chevron marks - the cleared level itself for a climb or descent,
-        // and the level flown all the way along for level flight.
+        // the chevron marks - the cleared level itself when it is reached
+        // within the vector, the level at the tip when it is not.
         double labelTimeMin = timeMinForLevel * levelFrac;
         int climbFt = (int)(verticalSpeed * labelTimeMin);
 
@@ -4759,6 +5872,57 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
         RequestRefresh();
     }
 
+    // The формуляр under the cursor is the expanded one, and a cursor moving
+    // over the radar asks for no frame of its own - so it is looked for here,
+    // against where each label was drawn last frame, and a frame is asked for
+    // only when the cursor has moved onto a different label or off them all.
+    {
+        std::string hover;
+        POINT cursor;
+        if (m_formularsVisible && CursorRadarPoint(cursor))
+        {
+            for (const auto& entry : m_formulars)
+            {
+                if (!entry.second.items.empty() && PtInRect(&entry.second.area, cursor))
+                {
+                    hover = entry.first;
+                    break;
+                }
+            }
+        }
+        if (hover != m_formularHover)
+        {
+            m_formularHover = hover;
+            RequestRefresh();
+        }
+    }
+
+    // A heading pull ends with the left button, but EuroScope does not always
+    // say so: a right click in the middle of one swallows the release, and the
+    // line was left stuck to the radar. So the buttons are watched here too.
+    // The right button drops the pull at once. A left button seen up is given
+    // a few polls for EuroScope's own release - which assigns the heading - to
+    // arrive before the pull is dropped without assigning anything.
+    if (m_hdgDragging)
+    {
+        const bool left = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        const bool right = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        m_hdgReleaseTicks = left ? 0 : m_hdgReleaseTicks + 1;
+        if (right || m_hdgReleaseTicks >= 3)
+        {
+            m_hdgDragging = false;
+            m_hdgDragMoved = false;
+            m_hdgDragCancelled = left;              // still held: ignore the rest of this press
+            m_hdgDragEndTick = GetTickCount64();    // nor act on the click that may follow
+            m_hdgReleaseTicks = 0;
+            RequestRefresh();
+        }
+    }
+    else
+    {
+        m_hdgReleaseTicks = 0;
+    }
+
     if (m_rulerButton != 0)
     {
         // GetAsyncKeyState is machine-wide: a thumb-button click meant for the
@@ -4877,7 +6041,9 @@ void CGalaxyATMSystemRadarScreen::DrawRulerCursor(HDC hDC)
         return;
 
     int saved = SaveDC(hDC);
-    HPEN pen = CreatePen(PS_SOLID, Theme::RulerWidth, Theme::Ruler);
+    // Only straight horizontal/vertical strokes, so a plain 1 px GDI pen is
+    // already as crisp as it gets - no need for GDI+ here.
+    HPEN pen = CreatePen(PS_SOLID, (int)Theme::RulerWidth, Theme::Ruler);
     HPEN oldPen = (HPEN)SelectObject(hDC, pen);
 
     const int arm = 10, gap = 3;
@@ -4949,10 +6115,9 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    HPEN pen = CreatePen(PS_SOLID, Theme::RulerWidth, Theme::Ruler);
-    HPEN oldPen = (HPEN)SelectObject(hDC, pen);
-    MoveToEx(hDC, p0.x, p0.y, NULL);
-    LineTo(hDC, p1.x, p1.y);
+    // The line itself and its leader are stroked further down, through GDI+
+    // so they come out antialiased - once the text has been measured, since
+    // plain GDI calls on the DC have to wait until the GDI+ surface is gone.
 
     // One-sided tick at the midpoint, always pointing towards the top of the
     // screen so the label reads above the line, exactly like the reference.
@@ -5053,14 +6218,12 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
         if (clipP[i] < 0.0) { if (t > tEnter) tEnter = t; }
         else                { if (t < tExit)  tExit = t; }
     }
-    if (drawLeader && tEnter > 0.0 && tEnter <= tExit)
     {
-        MoveToEx(hDC, from.x, from.y, NULL);
-        LineTo(hDC, from.x + (int)lround(lx * tEnter), from.y + (int)lround(ly * tEnter));
+        VectorCanvas canvas(hDC, Theme::Ruler, Theme::RulerWidth);
+        canvas.Line(p0.x, p0.y, p1.x, p1.y);
+        if (drawLeader && tEnter > 0.0 && tEnter <= tExit)
+            canvas.Line(from.x, from.y, from.x + lx * tEnter, from.y + ly * tEnter);
     }
-
-    SelectObject(hDC, oldPen);
-    DeleteObject(pen);
 
     Theme::DrawLine(hDC, r1, line1, rulerFont, Theme::Ruler, DT_LEFT | DT_VCENTER);
     Theme::DrawLine(hDC, r2, line2, rulerFont, Theme::Ruler, DT_LEFT | DT_VCENTER);
@@ -5106,6 +6269,12 @@ void CGalaxyATMSystemRadarScreen::RemoveRulerNear(POINT pt)
 void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, int Button)
 {
+    if (ObjectType == SO_FORMULAR || ObjectType == SO_FORMULAR_AHDG)
+    {
+        FormularClick(sObjectId, Pt, Button);
+        return;
+    }
+
     if (ObjectType == SO_RULER_LINE)
     {
         if (Button == BUTTON_RIGHT)
@@ -5137,7 +6306,8 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     // Any click that isn't on the open list, or on a chevron that toggles it,
     // dismisses the list.
     if (ObjectType != SO_DROPDOWN_ITEM &&
-        ObjectType != SO_VEC_DIST_FIELD && ObjectType != SO_VEC_TIME_FIELD)
+        ObjectType != SO_VEC_DIST_FIELD && ObjectType != SO_VEC_TIME_FIELD &&
+        ObjectType != SO_OS_FONT_FIELD)
     {
         m_openDropdown = DropdownKind::None;
     }
@@ -5151,6 +6321,8 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             m_vecDistKm = kDistanceSteps[idx];
         else if (m_openDropdown == DropdownKind::VecTime && idx >= 0 && idx < kTimeStepsCount)
             m_vecTimeMin = kTimeSteps[idx];
+        else if (m_openDropdown == DropdownKind::OsFont && idx >= 0 && idx < kFontSizeStepsCount)
+            Plugin()->SetTagFontSize(kFontSizeSteps[idx]);
         m_openDropdown = DropdownKind::None;
         RequestRefresh();
         break;
@@ -5158,6 +6330,23 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
 
     case SO_PANEL_COLLAPSE:
         m_collapsed = !m_collapsed;
+        RequestRefresh();
+        break;
+
+    // Nothing opens from the menu yet. The bar is registered only so a click
+    // on it is ours rather than TopSky's menu underneath; all it does is close
+    // an open dropdown, like any other click on the panel. LOGIN on it is
+    // SO_AUTH_LOGIN.
+    case SO_MENU_BAR:
+        RequestRefresh();
+        break;
+
+    case SO_AUTH_LOGIN:
+        if (m_authState == AuthState::LoggedOut)
+        {
+            m_authState = AuthState::Checking;
+            m_authStartTick = GetTickCount64();
+        }
         RequestRefresh();
         break;
 
@@ -5235,6 +6424,11 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_OS_TWO_LINE:   m_osLines = 2;              RequestRefresh(); break;
     case SO_OS_THREE_LINE: m_osLines = 3;              RequestRefresh(); break;
     case SO_OS_SPEED:      m_osSpeed = !m_osSpeed;     RequestRefresh(); break;
+    case SO_OS_FONT_FIELD:
+        m_openDropdown = (m_openDropdown == DropdownKind::OsFont)
+            ? DropdownKind::None : DropdownKind::OsFont;
+        RequestRefresh();
+        break;
 
     case SO_CODE_ALL:      m_codeAll = !m_codeAll;     RequestRefresh(); break;
     case SO_CODE_BP:       m_codeBp = !m_codeBp;       RequestRefresh(); break;
@@ -5430,6 +6624,7 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
     // ignores ids that are not its own and drops a duplicate of one click.
     Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
+
     if (FunctionId == FN_RC_FILTER)
     {
         m_rcFilter = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
@@ -5477,6 +6672,82 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
 void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, bool Released)
 {
+    // Pulling on AHDG lays a heading line from the aircraft to the cursor;
+    // letting go assigns the heading it points along. A press that hardly
+    // moves is a click, left to OnClickScreenObject.
+    if (ObjectType == SO_FORMULAR_AHDG)
+    {
+        const bool leftHeld = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
+        // A pull dropped half-way (see PollRulerButton) ignores whatever
+        // EuroScope still sends for that press, until the button is let go.
+        if (m_hdgDragCancelled)
+        {
+            if (Released || !leftHeld)
+                m_hdgDragCancelled = false;
+            return;
+        }
+        // And only a press actually held starts a pull - never a move
+        // EuroScope sends after the button is already up.
+        if (!m_hdgDragging && (Released || !leftHeld))
+            return;
+
+        if (!m_hdgDragging)
+        {
+            m_hdgDragging = true;
+            m_hdgDragMoved = false;
+            m_hdgDragStart = Pt;
+            m_hdgDragCallsign = sObjectId;
+        }
+        m_hdgDragPt = Pt;
+        if (abs(Pt.x - m_hdgDragStart.x) > 6 || abs(Pt.y - m_hdgDragStart.y) > 6)
+            m_hdgDragMoved = true;
+
+        if (Released)
+        {
+            if (m_hdgDragMoved)
+            {
+                int hdg = DragHeading(m_hdgDragCallsign.c_str(), Pt);
+                CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_hdgDragCallsign.c_str());
+                if (hdg > 0 && fp.IsValid())
+                    fp.GetControllerAssignedData().SetAssignedHeading(hdg);
+                m_hdgDragEndTick = GetTickCount64();
+            }
+            m_hdgDragging = false;
+            m_hdgDragMoved = false;
+        }
+        RequestRefresh();
+        return;
+    }
+
+    // A формуляр moves relative to its target, like the ruler's readout to
+    // its line, so it keeps its place beside the aircraft as it flies.
+    if (ObjectType == SO_FORMULAR)
+    {
+        if (Released)
+        {
+            m_dragOffset = { 0, 0 };
+            return;
+        }
+
+        auto it = m_formulars.find(sObjectId);
+        if (it == m_formulars.end())
+            return;
+        FormularState& f = it->second;
+
+        // Held by the callsign point, which is what the offset places.
+        if (m_dragOffset.x == 0 && m_dragOffset.y == 0)
+        {
+            m_dragOffset.x = Pt.x - f.callsignAt.x;
+            m_dragOffset.y = Pt.y - f.callsignAt.y;
+        }
+        f.offset.x = Pt.x - m_dragOffset.x - f.anchor.x;
+        f.offset.y = Pt.y - m_dragOffset.y - f.anchor.y;
+        f.placed = true;
+        RequestRefresh();
+        return;
+    }
+
     if (ObjectType == SO_ATIS_SCROLLBAR)
     {
         ScrollAtisTo(Pt, Area);
@@ -5559,6 +6830,22 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     if (cmd == ".ulll")
     {
         m_visible = !m_visible;
+        RequestRefresh();
+        return true;
+    }
+    // The plugin's own формуляр on and off - for a display whose tag family
+    // still draws EuroScope's.
+    if (cmd == ".formular")
+    {
+        m_formularsVisible = !m_formularsVisible;
+        RequestRefresh();
+        return true;
+    }
+    // Back to the Авторизация block, as at the start of a session.
+    if (cmd == ".logout")
+    {
+        m_authState = AuthState::LoggedOut;
+        m_openDropdown = DropdownKind::None;
         RequestRefresh();
         return true;
     }
@@ -5726,8 +7013,8 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
         Plugin()->AltFilterFromFL(), Plugin()->AltFilterToFL());
     SaveDataToAsr("AltFilter", "enabled,fromFL,toFL", buf);
 
-    sprintf_s(buf, "%d,%d", m_osLines, m_osSpeed ? 1 : 0);
-    SaveDataToAsr("Os", "lines,speed", buf);
+    sprintf_s(buf, "%d,%d,%d", m_osLines, m_osSpeed ? 1 : 0, Plugin()->TagFontSize());
+    SaveDataToAsr("Os", "lines,speed,fontSize", buf);
 
     sprintf_s(buf, "%d", m_rulerButton);
     SaveDataToAsr("RulerButton", "side mouse button that arms the ruler (0 = off)", buf);
@@ -5817,11 +7104,15 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
     const char* os = GetDataFromAsr("Os");
     if (os != NULL)
     {
-        int lines = 0, speed = 0;
-        if (sscanf_s(os, "%d,%d", &lines, &speed) == 2)
+        // An ASR from before the size picker carries only the first two.
+        int lines = 0, speed = 0, size = 0;
+        if (sscanf_s(os, "%d,%d,%d", &lines, &speed, &size) >= 2)
         {
             m_osLines = (lines == 3) ? 3 : 2;
             m_osSpeed = speed != 0;
+            for (int step : kFontSizeSteps)
+                if (step == size)
+                    Plugin()->SetTagFontSize(size);
         }
     }
 

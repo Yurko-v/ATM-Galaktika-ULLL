@@ -50,8 +50,8 @@
 // "RefreshMinutes" and its letter and text are what the windows show; "Index"
 // and the two texts above are the fallback for when nothing is on the air.
 //
-// "TopOffset" is how far below the toolbar the index strip stands, in pixels -
-// far enough to clear TopSky's menu bar, which the SDK cannot measure.
+// "TopOffset" is how tall TopSky's menu bar is, in pixels, which the SDK cannot
+// measure - the plug-in's own menu bar is never drawn shorter, so it covers it.
 //
 // A "Zones" section lists the запретные зоны, зоны ограничения полётов and
 // опасные зоны drawn on the radar. Normally they are read straight out of the
@@ -163,6 +163,13 @@
 //
 // The key under "Positions" (callsign or position id) is matched against the
 // controller's callsign first, then their position id.
+//
+// "UserNames" puts a name of one's own choosing on the Пользователь block, by
+// CID - for a name the automatic translation gets wrong, one hidden on the
+// network, or to add the patronymic the network never has. It is shown as
+// "Фамилия.И.О", so it can be written out in full or already shortened:
+//     "UserNames": { "1234567": "Велбовец Юрий Владимирович" }
+//     "UserNames": { "1234567": "Велбовец.Ю.В" }
 // How one kind of area is painted. The defaults are Theme's, so a config that
 // says nothing about colours looks exactly as the build does.
 struct ZoneStyle
@@ -205,8 +212,9 @@ public:
     bool AtisLive() const { return m_AtisLive; }
     int  AtisRefreshMinutes() const { return m_AtisRefreshMin; }
 
-    // How far below EuroScope's own toolbar the АТИС index strip stands, in
-    // pixels. It is a setting rather than a constant because what has to be
+    // How tall TopSky's menu bar is, in pixels: the least the plug-in's own
+    // menu bar is drawn at, so it covers TopSky's, with the АТИС index strip
+    // under it. It is a setting rather than a constant because what has to be
     // cleared is TopSky's menu bar, and the SDK cannot see it: TopSky draws
     // its own row of buttons across the top of the radar and nothing in
     // EuroScope reports where it ends. The default clears the menu at its
@@ -217,6 +225,13 @@ public:
     // true and fills 'out' on a hit; false if neither key is configured.
     bool FindPosition(const std::string& callsign,
         const std::string& positionId, PositionInfo& out) const;
+
+    // The name "UserNames" gives this CID, or empty when it names none.
+    std::wstring UserName(const std::wstring& cid) const
+    {
+        auto it = m_UserNames.find(cid);
+        return it == m_UserNames.end() ? std::wstring() : it->second;
+    }
 
     // Сигметы. An empty FIR list means "no filter" - see the note above.
     // It is empty only if the config says so; left out, it is УЛЛЛ alone.
@@ -312,6 +327,7 @@ private:
     bool m_SquawkAllowSweatbox = false;
     bool m_SquawkDebug = false;
     std::map<std::wstring, PositionInfo> m_Positions;   // key -> info (key upper-cased)
+    std::map<std::wstring, std::wstring> m_UserNames;   // CID -> name
     std::wstring m_LoadError;
     std::wstring m_Path;
 };

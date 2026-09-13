@@ -112,6 +112,7 @@
     <ClInclude Include="Net.h" />
     <ClInclude Include="Sigmet.h" />
     <ClInclude Include="Atis.h" />
+    <ClInclude Include="UserName.h" />
     <ClInclude Include="Zones.h" />
     <ClInclude Include="Apw.h" />
     <ClInclude Include="Squawk.h" />
@@ -126,6 +127,7 @@
     <ClCompile Include="Config.cpp" />
     <ClCompile Include="Sigmet.cpp" />
     <ClCompile Include="Atis.cpp" />
+    <ClCompile Include="UserName.cpp" />
     <ClCompile Include="Zones.cpp" />
     <ClCompile Include="Apw.cpp" />
     <ClCompile Include="Squawk.cpp" />
