@@ -39,15 +39,25 @@ function h($value): string
     return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-// The AZIMUT logo, drawn here in white rather than served as a file: the mark
-// - a ring over a half-disc, the horizon between them - and the word beside it.
+// The two logos side by side in white - AZIMUT x ULLL FIR - drawn here rather
+// than served as files: AZIMUT's ring over a half-disc with the word beside
+// it, and the FIR's airliner in a dashed square beside "ULLL FIR" / "VATSIM".
 function brand_logo(): string
 {
-    return '<div class="brand" aria-label="AZIMUT">'
+    return '<div class="brand" aria-label="AZIMUT x ULLL FIR">'
         . '<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">'
         . '<path d="M3 16 A13 13 0 0 1 29 16" fill="none" stroke="#fff" stroke-width="5"/>'
         . '<path d="M0.8 19 H31.2 A15.5 15.5 0 0 1 0.8 19 Z" fill="#fff"/>'
-        . '</svg><span>AZIMUT</span></div>';
+        . '</svg>'
+        . '<span class="word">AZIMUT</span>'
+        . '<span class="cross" aria-hidden="true">&times;</span>'
+        . '<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">'
+        . '<rect x="1" y="1" width="30" height="30" rx="3" fill="none" stroke="#fff" stroke-width="0.8" stroke-dasharray="1.6 1.2"/>'
+        . '<path d="M16 5 C17 5 17.5 6.2 17.5 7.4 V13 L26 18 V20 L17.5 17.4 V22.6 L20.5 24.8 V26.3 L16 25.2'
+        . ' L11.5 26.3 V24.8 L14.5 22.6 V17.4 L6 20 V18 L14.5 13 V7.4 C14.5 6.2 15 5 16 5 Z" fill="#fff"/>'
+        . '</svg>'
+        . '<span class="fir"><span class="word">ULLL FIR</span><small>VATSIM</small></span>'
+        . '</div>';
 }
 
 // login => hash, keeping only entries that really are password_hash() output -
@@ -267,10 +277,11 @@ $csrf = (string)$_SESSION['csrf'];
     td.actions { text-align: right; white-space: nowrap; }
     td.actions form { display: inline; }
     .empty { color: var(--dim); padding: 12px 0 0; }
-    .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; color: #fff; }
-    .brand span {
-        font: 800 24px/1 "Montserrat", "Segoe UI", Arial, sans-serif; letter-spacing: .06em;
-    }
+    .brand { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 18px; color: #fff; }
+    .brand .word { font: 800 20px/1 "Montserrat", "Segoe UI", Arial, sans-serif; letter-spacing: .06em; }
+    .brand .cross { font: 300 22px/1 "Segoe UI", Arial, sans-serif; opacity: .75; margin: 0 2px; }
+    .brand .fir { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    .brand small { font: 500 9px/1 "Montserrat", "Segoe UI", Arial, sans-serif; letter-spacing: .4em; margin-right: -.4em; }
     .login { max-width: 360px; margin: 10vh auto 0; }
     .login input { margin-bottom: 12px; }
 </style>
