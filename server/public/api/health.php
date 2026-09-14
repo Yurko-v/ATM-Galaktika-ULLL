@@ -1,6 +1,7 @@
 <?php
 // GET -> {"ok", "network_updated", "network_fresh", "controllers_updated",
-//         "controllers_fresh", "controllers_online", "api_key", "active"}
+//         "controllers_fresh", "controllers_online", "api_key", "active",
+//         "user_names"}
 //
 // No key needed and nothing private in it: a quick look, from a browser, that
 // the database is reachable and the cron job is keeping the network current.
@@ -12,6 +13,7 @@ require __DIR__ . '/../../lib/codes.php';
 
 $active      = (int)db()->query('SELECT COUNT(*) FROM assignments WHERE released_at IS NULL')->fetchColumn();
 $controllers = (int)db()->query('SELECT COUNT(*) FROM network_controllers')->fetchColumn();
+$userNames   = (int)db()->query('SELECT COUNT(*) FROM user_names')->fetchColumn();
 
 json_out(200, [
     'ok'                  => true,
@@ -25,4 +27,6 @@ json_out(200, [
     // Whether the optional second lock is on; never the key itself.
     'api_key'             => api_key_required(),
     'active'              => $active,
+    // How many controllers have a name entered by hand - a count, not the names.
+    'user_names'          => $userNames,
 ]);
