@@ -629,12 +629,29 @@ void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
     if (m_identityFetch.joinable())
         m_identityFetch.join();   // the previous fetch is long finished - its stages are all timed out
 
+    // What is already known about this callsign is kept: a retry because the
+    // squawk server did not answer has no reason to read the whole feed again.
+    VatsimIdentity known;
+    {
+        std::lock_guard<std::mutex> lock(m_identityMutex);
+        if (_stricmp(m_identity.callsign.c_str(), callsign.c_str()) == 0)
+            known = m_identity;
+    }
+    std::string url = m_config.SquawkServerUrl();
+    std::string key = m_config.SquawkApiKey();
+
     m_identityAskedFor = callsign;
-    m_identityFetch = std::thread([this, callsign]()
+    m_identityFetch = std::thread([this, callsign, known, url, key]()
         {
-            VatsimIdentity found;
-            if (!FetchVatsimIdentity(callsign, found))
+            VatsimIdentity found = known;
+            if (found.Empty() && !FetchVatsimIdentity(callsign, found))
                 return;
+
+            // The name entered by hand on the server, once the network has
+            // given us a CID for it to be found by.
+            if (!found.registeredAsked)
+                found.registeredAsked = url.empty()
+                    || FetchRegisteredName(url, key, callsign, found.registeredName);
 
             std::lock_guard<std::mutex> lock(m_identityMutex);
             m_identity = found;
@@ -655,9 +672,12 @@ std::wstring CGalaxyATMSystemPlugin::MyUserName() const
     {
         // The config's name goes through the same shortening, so it can be
         // written out in full - which is the only way to give a patronymic.
-        std::wstring chosen = m_config.UserName(id.cid);
-        if (!chosen.empty())
+        // The server's table after it: what was entered there for everyone,
+        // the config's for one controller's own machine.
+        for (const std::wstring& chosen : { m_config.UserName(id.cid), id.registeredName })
         {
+            if (chosen.empty())
+                continue;
             std::wstring shortened = RussianShortName(chosen);
             return shortened.empty() ? chosen : shortened;
         }
@@ -781,7 +801,8 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
 
     // Our CID and name live only in the datafeed, and only while we are really
     // on the network. A new callsign is asked about straight away; one the
-    // feed does not list yet, once a minute until it does.
+    // feed does not list yet - or one the squawk server has not yet answered
+    // for with its name table - once a minute until it does.
     int ct = GetConnectionType();
     std::string position = MyPosition();
     if ((ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !position.empty())
@@ -789,7 +810,8 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
         bool known;
         {
             std::lock_guard<std::mutex> lock(m_identityMutex);
-            known = _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0;
+            known = _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0
+                && m_identity.registeredAsked;
         }
         if (position != m_identityAskedFor || (!known && Counter % 60 == 0))
             StartIdentityFetch(position);

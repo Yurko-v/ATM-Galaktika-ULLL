@@ -167,9 +167,12 @@
 // "UserNames" puts a name of one's own choosing on the Пользователь block, by
 // CID - for a name the automatic translation gets wrong, one hidden on the
 // network, or to add the patronymic the network never has. It is shown as
-// "Фамилия.И.О", so it can be written out in full or already shortened:
+// "Фамилия И.О.", so it can be written out in full or already shortened:
 //     "UserNames": { "1234567": "Велбовец Юрий Владимирович" }
-//     "UserNames": { "1234567": "Велбовец.Ю.В" }
+//     "UserNames": { "1234567": "Велбовец Ю.В." }
+// It only reaches this one machine; a name for everyone goes into the squawk
+// server's user_names table instead (server/README.md), and this one wins over
+// it where both are given.
 // How one kind of area is painted. The defaults are Theme's, so a config that
 // says nothing about colours looks exactly as the build does.
 struct ZoneStyle

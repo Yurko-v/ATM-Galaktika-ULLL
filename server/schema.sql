@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS network_controllers (
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- The name each controller is shown under on the Пользователь block, by CID.
+-- Filled in by hand (phpMyAdmin) for the names the plug-in's own reading of the
+-- VATSIM name gets wrong, or to give the patronymic the network never has.
+-- Written out in full - "Велбовец Юрий Владимирович" - or already shortened,
+-- "Велбовец Ю.В."; the plug-in shortens it either way. See api/name.php.
+CREATE TABLE IF NOT EXISTS user_names (
+    cid        VARCHAR(12)  NOT NULL,
+    name       VARCHAR(100) NOT NULL,
+    updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (cid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Requests counted per position over a rolling minute; see check_rate_limit().
 CREATE TABLE IF NOT EXISTS rate_limit (
     bucket       VARCHAR(40)  NOT NULL,

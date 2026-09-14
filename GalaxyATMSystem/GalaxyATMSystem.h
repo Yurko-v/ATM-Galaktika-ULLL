@@ -104,10 +104,11 @@ public:
     std::wstring AtisIndex() const;
     std::wstring AtisMessage() const;
 
-    // The Пользователь block's user line: the controller as "Фамилия.И.О", in
+    // The Пользователь block's user line: the controller as "Фамилия И.О.", in
     // Russian (see RussianShortName). Found by the CID the VATSIM datafeed
-    // lists for our callsign - "UserNames" in the config first, then the
-    // network's own name - and, off the network or before the feed has us, the
+    // lists for our callsign - "UserNames" in the config first, then the name
+    // entered on the squawk server, then the network's own name - and, off the
+    // network or before the feed has us, the
     // name EuroScope was given. The CID itself when there is no name to be had;
     // empty with no CID either.
     std::wstring MyUserName() const;

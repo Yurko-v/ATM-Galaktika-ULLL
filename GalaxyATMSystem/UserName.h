@@ -16,6 +16,12 @@ struct VatsimIdentity
     std::wstring cid;        // "1234567"
     std::wstring name;       // "Yuriy Velbovets" - or the CID again, for a hidden name
 
+    // The name entered for this CID on the squawk server, "Велбовец Юрий
+    // Владимирович" - empty when none is. 'registeredAsked' is whether that is
+    // an answer: the server has replied, or there is no server to ask.
+    std::wstring registeredName;
+    bool registeredAsked = false;
+
     bool Empty() const { return cid.empty(); }
 };
 
@@ -29,13 +35,26 @@ bool FetchVatsimIdentity(const std::string& callsign, VatsimIdentity& out);
 // the feed without going near the network.
 bool ParseVatsimIdentity(const std::string& body, const std::string& callsign, VatsimIdentity& out);
 
-// The name the way the Пользователь block prints it, "Фамилия.И.О", in Russian:
-// "Yuriy Velbovets" -> "Велбовец.Ю", "Велбовец Юрий Владимирович" ->
-// "Велбовец.Ю.В". Two words are taken as first name then surname, the order
+// The name the admin has entered for us in the squawk server's user_names
+// table (server/public/api/name.php), found by the CID the network lists for
+// 'position' - the server only ever tells a controller their own. 'baseUrl' and
+// 'apiKey' are the squawk client's. Blocking - a worker thread's job.
+//
+// True when the server has answered, and 'name' is then what it said - empty
+// when no name is entered, or when the server predates the table (404). False
+// when there is no answer to go on yet - no network, or the server not seeing
+// us online in the first minute after logging in - so it is worth asking again.
+bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
+    const std::string& position, std::wstring& name);
+
+// The name the way the Пользователь block prints it, "Фамилия И.О.", in Russian:
+// "Yuriy Velbovets" -> "Велбовец Ю.", "Велбовец Юрий Владимирович" ->
+// "Велбовец Ю.В.". Two words are taken as first name then surname, the order
 // the network lists them in; with three, the patronymic is found by its ending
 // and says which of the others is the surname. A word already in Cyrillic is
 // kept as it is, a common first name is translated ("Michael" -> "Михаил"),
 // anything else transliterated letter by letter. Something already written as
-// "Велбовец.Ю.В" comes back unchanged. Empty when there is no name to work
+// "Велбовец Ю.В." comes back unchanged, and one written "Велбовец.Ю.В" or
+// without the last full stop is put into that form. Empty when there is no name to work
 // with - nothing given, or only digits (a CID standing in for a hidden name).
 std::wstring RussianShortName(const std::wstring& fullName);

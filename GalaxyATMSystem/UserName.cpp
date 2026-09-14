@@ -4,6 +4,7 @@
 #include "Net.h"
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <vector>
 
@@ -213,6 +214,54 @@ bool FetchVatsimIdentity(const std::string& callsign, VatsimIdentity& out)
     return ParseVatsimIdentity(body, callsign, out);
 }
 
+bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
+    const std::string& position, std::wstring& name)
+{
+    std::string url = baseUrl;
+    while (!url.empty() && (url.back() == '/' || url.back() == ' '))
+        url.pop_back();
+
+    // The position goes into a query string and the key into a header, so
+    // both are cut down to the characters they are made of.
+    std::string pos, key;
+    for (unsigned char c : position)
+        if (isalnum(c) || c == '_' || c == '-')
+            pos += (char)toupper(c);
+    for (unsigned char c : apiKey)
+        if (isalnum(c) || c == '_' || c == '-')
+            key += (char)c;
+    if (url.empty() || pos.empty())
+        return false;
+
+    std::string headers;
+    if (!key.empty())
+        headers = "X-Api-Key: " + key + "\r\n";
+
+    Net::HttpResponse response;
+    if (!Net::HttpRequest("GET", url + "/name.php?position=" + pos, headers, std::string(), response))
+        return false;
+
+    // A server set up before the table existed: there is no name to be had
+    // from it, and asking again every minute would not change that.
+    if (response.status == 404)
+    {
+        name.clear();
+        return true;
+    }
+    if (response.status != 200)
+        return false;
+
+    Json::Value root;
+    if (!Json::ParseUtf8(response.body, root) || root.kind != Json::Value::Kind::Object)
+        return false;
+
+    const Json::Value* v = root.Find(L"name");
+    name = (v != NULL) ? v->AsString() : L"";
+    if (name.size() > 100)
+        name.resize(100);
+    return true;
+}
+
 namespace
 {
     // One word of a name, in Russian and capitalised. Empty for a word with no
@@ -270,36 +319,53 @@ namespace
 
 std::wstring RussianShortName(const std::wstring& fullName)
 {
-    // Already in the block's own form - "Велбовец.Ю.В" put in the config as it
-    // is to be shown.
-    size_t start = fullName.find_first_not_of(L" \t");
-    if (start == std::wstring::npos)
-        return L"";
-    size_t end = fullName.find_last_not_of(L" \t");
-    std::wstring trimmed = fullName.substr(start, end - start + 1);
-    if (trimmed.find(L'.') != std::wstring::npos && trimmed.find_first_of(L" \t_") == std::wstring::npos
-        && std::any_of(trimmed.begin(), trimmed.end(), IsCyrillic))
-        return trimmed;
-
     // Words, however they are separated: "Yuriy Velbovets", "Yuriy_Velbovets"
     // and "Yuriy.V" all turn up. Anything with no letters in it is dropped.
     std::vector<std::wstring> words;
     size_t pos = 0;
-    while (pos < trimmed.size())
+    while (pos < fullName.size())
     {
-        size_t from = trimmed.find_first_not_of(L" \t_.", pos);
+        size_t from = fullName.find_first_not_of(L" \t_.", pos);
         if (from == std::wstring::npos)
             break;
-        size_t to = trimmed.find_first_of(L" \t_.", from);
-        std::wstring word = trimmed.substr(from, to == std::wstring::npos ? std::wstring::npos : to - from);
+        size_t to = fullName.find_first_of(L" \t_.", from);
+        std::wstring word = fullName.substr(from, to == std::wstring::npos ? std::wstring::npos : to - from);
         if (!RussianWord(word).empty())
             words.push_back(word);
-        pos = (to == std::wstring::npos) ? trimmed.size() : to;
+        pos = (to == std::wstring::npos) ? fullName.size() : to;
     }
     if (words.empty())
         return L"";
     if (words.size() == 1)
         return RussianWord(words[0]);
+
+    // Already shortened, the way it is put in the config or the server's
+    // table: a surname and its initials - "Велбовец Ю.В.", "Велбовец.Ю.В",
+    // "Ю.В. Велбовец". Told from a full name by every other word being a
+    // single letter, and only in Cyrillic, where such a word is nothing but an
+    // initial. The surname is kept as it was written - "Римская-Корсакова".
+    if (words.size() <= 3 && std::any_of(fullName.begin(), fullName.end(), IsCyrillic))
+    {
+        size_t longWords = 0, surname = 0;
+        for (size_t i = 0; i < words.size(); i++)
+        {
+            if (words[i].size() > 1)
+            {
+                longWords++;
+                surname = i;
+            }
+        }
+        if (longWords == 1)
+        {
+            std::wstring out = std::any_of(words[surname].begin(), words[surname].end(), IsCyrillic)
+                ? words[surname] : RussianWord(words[surname]);
+            out += L" ";
+            for (size_t i = 0; i < words.size(); i++)
+                if (i != surname)
+                    out += RussianWord(words[i]).substr(0, 1) + L".";
+            return out;
+        }
+    }
 
     // First name then surname, as the network has it - unless a patronymic
     // says otherwise: "Фамилия Имя Отчество" or "Имя Отчество Фамилия".
@@ -318,15 +384,17 @@ std::wstring RussianShortName(const std::wstring& fullName)
         }
     }
 
-    std::wstring out = RussianWord(words[last]);
+    // The surname, a space, and each initial with its own full stop:
+    // "Велбовец Ю.В.".
+    std::wstring out = RussianWord(words[last]) + L" ";
     std::wstring name = RussianWord(words[first]);
     if (!name.empty())
-        out += L"." + name.substr(0, 1);
+        out += name.substr(0, 1) + L".";
     if (patronymic != std::wstring::npos)
     {
         std::wstring p = RussianWord(words[patronymic]);
         if (!p.empty())
-            out += L"." + p.substr(0, 1);
+            out += p.substr(0, 1) + L".";
     }
     return out;
 }
