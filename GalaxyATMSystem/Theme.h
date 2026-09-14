@@ -84,6 +84,10 @@ namespace Theme
     // A selected aircraft's position symbol: TopSky's Color_Track_Highlight.
     const COLORREF TrackHighlight = RGB(0xFF, 0xFF, 0xFF);
 
+    // Traffic history behind a target: how many of its earlier positions are
+    // drawn, in TopSky's HISTORY symbol and the target's own colour.
+    const int TrackHistoryDots = 5;
+
     // A heading being pulled off the формуляр's AHDG: a dashed line in TopSky's
     // orange, and its readout in plain white.
     const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);

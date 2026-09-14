@@ -1782,6 +1782,8 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rcFont = NULL;
     m_rcRowFont = NULL;
     m_rcFontScale = 0;
+    m_rcFilterBefore = -1;
+    m_rcFilterAfter = -1;
 
     m_atisOpen = false;
     m_atisScrollPx = 0;
@@ -2668,7 +2670,9 @@ namespace
         "SYMBOL:ADSB\n" GALAXY_ADSB_SYMBOL
         "SYMBOL:ADSB_DIV\n" GALAXY_ADSB_SYMBOL
         "SYMBOL:UNCONTROLLED\nMOVETO:0:-5\nLINETO:0:5\nMOVETO:-5:0\nLINETO:5:0\n"
-        "MOVETO:-5:-5\nLINETO:5:-5\nLINETO:5:5\nLINETO:-5:5\nLINETO:-5:-5\n";
+        "MOVETO:-5:-5\nLINETO:5:-5\nLINETO:5:5\nLINETO:-5:5\nLINETO:-5:-5\n"
+        // Tower Ground's history dot, a two pixel square - Peterburg has none.
+        "SYMBOL:HISTORY\nMOVETO:-1:-1\nLINETO:-1:0\nLINETO:0:0\nLINETO:0:-1\nLINETO:-1:-1\n";
 #undef GALAXY_SSR_SYMBOL
 #undef GALAXY_ADSB_SYMBOL
 
@@ -3745,8 +3749,28 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 
         const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
         const bool selected = !aselCallsign.empty() && cs != NULL && aselCallsign == cs;
-        DrawTrackSymbol(hDC, symbol->second, tp,
-            selected ? Theme::TrackHighlight : GetTagColorForFlightPlan(fp));
+        const COLORREF color = GetTagColorForFlightPlan(fp);
+
+        // Traffic history: the target's last Theme::TrackHistoryDots positions
+        // behind it, in the HISTORY symbol and its own colour, under its метка.
+        // EuroScope keeps the earlier returns; each is asked for off the one
+        // after it, and one off the radar is skipped rather than ending the trail.
+        auto history = symbols.find("HISTORY");
+        if (history != symbols.end())
+        {
+            CRadarTargetPositionData earlier = pos;
+            for (int i = 0; i < Theme::TrackHistoryDots; i++)
+            {
+                earlier = rt.GetPreviousPosition(earlier);
+                if (!earlier.IsValid())
+                    break;
+                POINT hp = ConvertCoordFromPositionToPixel(earlier.GetPosition());
+                if (PtInRect(&ra, hp))
+                    DrawTrackSymbol(hDC, history->second, hp, color);
+            }
+        }
+
+        DrawTrackSymbol(hDC, symbol->second, tp, selected ? Theme::TrackHighlight : color);
         m_symbolStats.drawn++;
     }
     RestoreDC(hDC, saved);
@@ -6216,6 +6240,29 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         if (state == FLIGHT_PLAN_STATE_NON_CONCERNED || state == FLIGHT_PLAN_STATE_REDUNDANT)
             continue;
 
+        // The filter strip. The entry time is 0 inside the sector, the minutes
+        // to go outside it, and -1 for a flight that will not enter - one that
+        // never comes near, and one that has already left. Which of those two
+        // it is, is told by whether it was ever seen inside or on its way in.
+        const std::string callsign = fp.GetCallsign();
+        const int entryMin = fp.GetSectorEntryMinutes();
+        const ULONGLONG nowTick = GetTickCount64();
+        if (entryMin >= 0)
+            m_rcLastInSector[callsign] = nowTick;
+
+        if (!m_rcFilterCallsign.empty()
+            && RcUpper(Widen(callsign.c_str())).find(m_rcFilterCallsign) == std::wstring::npos)
+            continue;
+        if (m_rcFilterBefore >= 0 && entryMin > m_rcFilterBefore)
+            continue;
+        if (m_rcFilterAfter >= 0 && entryMin < 0)
+        {
+            auto seen = m_rcLastInSector.find(callsign);
+            if (seen == m_rcLastInSector.end()
+                || nowTick - seen->second > (ULONGLONG)m_rcFilterAfter * 60000)
+                continue;
+        }
+
         CFlightPlanData fpd = fp.GetFlightPlanData();
         CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
 
@@ -6472,6 +6519,50 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
             AddScreenObject(SO_RC_ROW, row.callsign.c_str(), line, false,
                 "Выбрать борт (ПКМ - следующая страница)");
         }
+    }
+
+    // ---- The filter strip under the panes -------------------------------------
+    // "Рейс:" and its field on the left; "До (мин)" and "После (мин)" with
+    // theirs on the right, clear of the grip. Black fields in a light frame;
+    // a click opens EuroScope's edit box, and an empty field is no limit.
+    {
+        const int g = max(10, S(36));   // the grip's size, drawn below
+        const int fieldTop = Y(823), fieldBottom = Y(883), fieldW = S(180);
+        const int gap = S(14);
+
+        auto label = [&](int right, const std::wstring& text) -> int
+        {
+            const int w = Theme::MeasureText(hDC, m_rcFont, text).cx;
+            RECT r = { right - w, fieldTop, right, fieldBottom };
+            Theme::DrawLine(hDC, r, text, m_rcFont, Theme::ListTitleText, DT_LEFT | DT_VCENTER);
+            return r.left;
+        };
+        auto field = [&](const RECT& r, const std::wstring& text, const char* id, const char* tip)
+        {
+            Theme::FlatFill(hDC, r, Theme::ListPaneFill);
+            Theme::FlatFrame(hDC, r, 1, Theme::ListHeadRule);
+            RECT inner = { r.left + S(12), r.top, r.right - S(8), r.bottom };
+            Theme::DrawLine(hDC, inner, text, m_rcRowFont, Theme::ListTitleText,
+                DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            AddScreenObject(SO_RC_FILTER, id, r, false, tip);
+        };
+        auto minutes = [](int value) { return value >= 0 ? std::to_wstring(value) : std::wstring(); };
+
+        const std::wstring callsignLabel = L"Рейс:";
+        const int callsignLabelW = Theme::MeasureText(hDC, m_rcFont, callsignLabel).cx;
+        label(X(20) + callsignLabelW, callsignLabel);
+        const int callsignLeft = X(20) + callsignLabelW + gap;
+        field({ callsignLeft, fieldTop, callsignLeft + fieldW, fieldBottom }, m_rcFilterCallsign,
+            "callsign", "Фильтр по рейсу");
+
+        const int afterRight = m_rcArea.right - g - S(8);
+        RECT after = { afterRight - fieldW, fieldTop, afterRight, fieldBottom };
+        field(after, minutes(m_rcFilterAfter), "after", "Сколько минут держать рейс после выхода из сектора");
+        const int afterLabelLeft = label(after.left - gap, L"После (мин)");
+
+        RECT before = { afterLabelLeft - S(40) - fieldW, fieldTop, afterLabelLeft - S(40), fieldBottom };
+        field(before, minutes(m_rcFilterBefore), "before", "За сколько минут до входа в сектор показывать рейс");
+        label(before.left - gap, L"До (мин)");
     }
 
     // ---- The grip that scales it -------------------------------------------
@@ -7824,6 +7915,24 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
     }
+    case SO_RC_FILTER:
+    {
+        const bool isCallsign = strcmp(sObjectId, "callsign") == 0;
+        const bool isBefore = strcmp(sObjectId, "before") == 0;
+        std::string initial;
+        if (isCallsign)
+            initial = Narrow(m_rcFilterCallsign);
+        else
+        {
+            const int value = isBefore ? m_rcFilterBefore : m_rcFilterAfter;
+            if (value >= 0)
+                initial = std::to_string(value);
+        }
+        GetPlugIn()->OpenPopupEdit(Area,
+            isCallsign ? FN_RC_FILTER_CALLSIGN : isBefore ? FN_RC_FILTER_BEFORE : FN_RC_FILTER_AFTER,
+            initial.c_str());
+        break;
+    }
     case SO_RC_CLOSE:
         m_rcOpen = false;
         RequestRefresh();
@@ -7944,6 +8053,39 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
         m_nameTyped = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
         m_nameProblem.clear();
         Plugin()->ResetNameSubmit();
+        RequestRefresh();
+        return;
+    }
+
+    // "Список РЦ"'s filter strip. A callsign is kept upper case and without
+    // spaces; a number of minutes is taken only as plain digits, and nothing
+    // at all clears the limit. Either way both panes go back to their first page.
+    if (FunctionId == FN_RC_FILTER_CALLSIGN)
+    {
+        std::wstring typed;
+        for (wchar_t c : (sItemString != NULL) ? Widen(sItemString) : std::wstring())
+            if (!iswspace(c) && typed.size() < 10)
+                typed += c;
+        m_rcFilterCallsign = RcUpper(typed);
+        m_rcScroll = m_rcScrollMine = 0;
+        RequestRefresh();
+        return;
+    }
+    if (FunctionId == FN_RC_FILTER_BEFORE || FunctionId == FN_RC_FILTER_AFTER)
+    {
+        std::string typed = (sItemString != NULL) ? sItemString : "";
+        typed.erase(0, typed.find_first_not_of(" \t"));
+        typed.erase(typed.find_last_not_of(" \t") + 1);
+
+        int value = -1;
+        if (!typed.empty())
+        {
+            if (typed.size() > 4 || typed.find_first_not_of("0123456789") != std::string::npos)
+                return;   // not a number of minutes - the field keeps what it had
+            value = atoi(typed.c_str());
+        }
+        (FunctionId == FN_RC_FILTER_BEFORE ? m_rcFilterBefore : m_rcFilterAfter) = value;
+        m_rcScroll = m_rcScrollMine = 0;
         RequestRefresh();
         return;
     }
@@ -8478,6 +8620,9 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
     sprintf_s(buf, "%d,%d,%d,%d", m_rcOpen ? 1 : 0, m_rcSortKey, m_rcSortAsc ? 1 : 0, m_rcScale);
     SaveDataToAsr("SectorList", "open,sortKey,sortAscending,scalePercent", buf);
 
+    sprintf_s(buf, "%d,%d,%s", m_rcFilterBefore, m_rcFilterAfter, Narrow(m_rcFilterCallsign).c_str());
+    SaveDataToAsr("SectorListFilter", "minutesBefore,minutesAfter (-1 = no limit),callsign", buf);
+
     // The gain is written for the sake of the format only - it is the radar
     // scale now, which EuroScope stores in the ASR itself and which the slider
     // re-derives on the first frame.
@@ -8619,6 +8764,21 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
             m_rcSortKey = (key >= 0 && key < kRcCols) ? key : RC_CALLSIGN;
             m_rcSortAsc = (asc != 0);
             m_rcScale = max(kRcScaleMin, min(kRcScaleMax, scale));
+        }
+    }
+
+    // Its filter strip. The callsign comes last, so an empty one still lets
+    // the two limits be read.
+    const char* rcFilter = GetDataFromAsr("SectorListFilter");
+    if (rcFilter != NULL)
+    {
+        int before = -1, after = -1;
+        char callsign[16] = { 0 };
+        if (sscanf_s(rcFilter, "%d,%d,%15s", &before, &after, callsign, (unsigned)sizeof(callsign)) >= 2)
+        {
+            m_rcFilterBefore = max(-1, min(9999, before));
+            m_rcFilterAfter = max(-1, min(9999, after));
+            m_rcFilterCallsign = RcUpper(Widen(callsign));
         }
     }
 }

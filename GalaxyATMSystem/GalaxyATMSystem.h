@@ -230,7 +230,7 @@ private:
     int  m_altFilterFromFL  = 100;   // e.g. 100 -> "FL100"
     int  m_altFilterToFL    = 600;
 
-    int  m_tagFontSize      = 12;
+    int  m_tagFontSize      = 10;   // ФС "Р-р шрифта" until the ASR says otherwise
 
     std::thread m_sigmetFetch;
     mutable std::mutex m_sigmetMutex;
@@ -818,6 +818,18 @@ private:
     HFONT m_rcRowFont;      // the values in the rows
     int   m_rcFontScale;    // the scale those two were made for, 0 for none
 
+    // The filter strip under the two panes, each field set through EuroScope's
+    // edit box and remembered in the ASR. Рейс: only callsigns with that in
+    // them. До (мин): a flight still outside is listed only once it enters
+    // within that many minutes. После (мин): a flight that has left stays that
+    // many minutes. Empty text / -1: no limit, as before there was a strip.
+    std::wstring m_rcFilterCallsign;
+    int  m_rcFilterBefore;
+    int  m_rcFilterAfter;
+    // When each flight was last inside the sector or on its way in - EuroScope
+    // says when a flight will enter and leave, never how long ago it left.
+    std::map<std::string, ULONGLONG> m_rcLastInSector;
+
     bool m_atisOpen;
     int  m_atisScrollPx;
     int  m_atisScrollMax;
@@ -970,6 +982,7 @@ const int SO_ATIS_LINE_DN  = 36;
 const int SO_RC_HEADER     = 80;   // title bar - drag handle
 const int SO_RC_CLOSE      = 81;   // its "x"
 const int SO_RC_RESIZE     = 83;   // the grip in its bottom right corner - pulled to scale the window
+const int SO_RC_FILTER     = 88;   // a field of its filter strip - sObjectId "callsign", "before" or "after"
 const int SO_RC_SORT       = 82;   // a column heading - sorts by it; sObjectId is the column index
 const int SO_RC_ROW        = 87;   // one row - left selects it, right turns its pane a page; sObjectId is its callsign
 
@@ -990,3 +1003,6 @@ const int FN_ALTFILTER_FROM = 300;
 const int FN_ALTFILTER_TO   = 301;
 const int FN_CODE_FILTER    = 302;   // the code block's inline entry field
 const int FN_NAME_ENTRY     = 304;   // the Регистрация window's name field
+const int FN_RC_FILTER_CALLSIGN = 305;   // "Список РЦ" filter strip: Рейс
+const int FN_RC_FILTER_BEFORE   = 306;   // До (мин)
+const int FN_RC_FILTER_AFTER    = 307;   // После (мин)
