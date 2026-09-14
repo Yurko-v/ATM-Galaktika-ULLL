@@ -231,7 +231,7 @@ $csrf = (string)$_SESSION['csrf'];
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Galaxy ATM System — пользователи</title>
+<title>АРМ инженера системы — Galaxy ATM System</title>
 <style>
     :root {
         --ground: #1b2017; --card: #262d20; --line: #3f4836; --text: #eef0ea;
@@ -292,7 +292,7 @@ $csrf = (string)$_SESSION['csrf'];
     <div class="login">
         <?= brand_logo() ?>
         <h1>Galaxy ATM System</h1>
-        <p class="sub">База пользователей КСА</p>
+        <p class="sub">АРМ инженера системы</p>
         <?php if ($flash): ?>
             <div class="flash <?= h($flash[0]) ?>"><?= h($flash[1]) ?></div>
         <?php endif; ?>
@@ -313,7 +313,7 @@ $csrf = (string)$_SESSION['csrf'];
     <?= brand_logo() ?>
     <div class="top">
         <div>
-            <h1>База пользователей КСА</h1>
+            <h1>АРМ инженера системы</h1>
             <p class="sub">Кто может открыть панель плагина. Вошли как <?= h($admin) ?>.</p>
         </div>
         <form method="post">
