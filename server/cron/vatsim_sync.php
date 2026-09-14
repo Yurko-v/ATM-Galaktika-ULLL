@@ -74,7 +74,8 @@ $pdo->beginTransaction();
 
 // Who is controlling: the list every request is checked against, since the
 // plug-in carries no key of its own (see require_caller() in lib/bootstrap.php).
-vatsim_write_controllers($controllers, $feedTime);
+// Who is observing beside it, for api/name.php alone.
+vatsim_write_controllers($controllers, $feedTime, vatsim_observers($feed));
 
 $pdo->exec('DELETE FROM network_pilots');
 foreach (array_chunk($rows, 300) as $chunk) {

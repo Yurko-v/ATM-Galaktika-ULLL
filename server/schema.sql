@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS network_controllers (
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- The observers (facility 0) online, written alongside network_controllers.
+-- Read by api/name.php alone: an OBS may open the plug-in's panel, but is
+-- never let in to hand out a code.
+CREATE TABLE IF NOT EXISTS network_observers (
+    callsign VARCHAR(20) NOT NULL,
+    cid      VARCHAR(12) NOT NULL,
+    PRIMARY KEY (callsign)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- The name each controller is shown under on the Пользователь block, by CID.
 -- Entered by the controller from the plug-in's Регистрация window when there is
 -- none yet (POST api/name.php, which never overwrites a name), or by hand in

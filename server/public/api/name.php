@@ -17,6 +17,9 @@
 // for the position the caller is checked against (see require_caller()), never
 // one the request names, so the table can neither be read through nor written
 // over from outside.
+//
+// An observer is let in here as well as a controller: the panel is theirs to
+// open too, and this is what opens it. The code endpoints still turn one away.
 
 declare(strict_types=1);
 
@@ -54,7 +57,7 @@ if ($method === 'GET') {
     if ($position === null) {
         json_out(400, ['error' => 'bad_request']);
     }
-    $cid = require_caller($position);
+    $cid = require_caller($position, true);
 
     // A test position has no CID behind it, and so no name.
     json_out(200, ['cid' => $cid, 'name' => $cid === null ? null : stored_name($cid)]);
@@ -69,7 +72,7 @@ $position = clean_position($body['position'] ?? '');
 if ($position === null) {
     json_out(400, ['error' => 'bad_request']);
 }
-$cid = require_caller($position);
+$cid = require_caller($position, true);
 
 // A test position has no CID to file a name under.
 if ($cid === null) {

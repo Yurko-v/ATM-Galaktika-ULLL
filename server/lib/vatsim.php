@@ -77,10 +77,43 @@ function vatsim_controllers(array $feed): ?array
     return $out;
 }
 
-// Replaces the snapshot of who is controlling, and stamps it with the feed's
-// own time - not ours, so a feed that has stopped moving looks stale even if we
-// keep fetching it.
-function vatsim_write_controllers(array $map, int $feedTime): void
+// callsign -> CID for the observers the feed lists (facility 0). Apart from the
+// controllers: an OBS may open the plug-in's panel, so api/name.php lets one
+// in, but hands out no codes, so nothing else looks at this list.
+function vatsim_observers(array $feed): array
+{
+    $out = [];
+    foreach ((array)($feed['controllers'] ?? []) as $c) {
+        $callsign = clean_position($c['callsign'] ?? '');
+        $cid      = (int)($c['cid'] ?? 0);
+        if ($callsign === null || $cid <= 0 || (int)($c['facility'] ?? 0) > 0) {
+            continue;
+        }
+        $out[$callsign] = (string)$cid;
+    }
+    return $out;
+}
+
+// Empties the table and fills it with callsign -> CID.
+function vatsim_write_callsigns(PDO $pdo, string $table, array $map): void
+{
+    $pdo->exec("DELETE FROM $table");
+
+    $rows = [];
+    foreach ($map as $callsign => $cid) {
+        $rows[] = [$callsign, $cid];
+    }
+    foreach (array_chunk($rows, 300) as $chunk) {
+        $sql = "INSERT IGNORE INTO $table (callsign, cid) VALUES "
+            . implode(',', array_fill(0, count($chunk), '(?, ?)'));
+        $pdo->prepare($sql)->execute(array_merge(...$chunk));
+    }
+}
+
+// Replaces the snapshot of who is controlling, and of who is observing, and
+// stamps it with the feed's own time - not ours, so a feed that has stopped
+// moving looks stale even if we keep fetching it.
+function vatsim_write_controllers(array $map, int $feedTime, array $observers = []): void
 {
     $pdo = db();
 
@@ -91,16 +124,15 @@ function vatsim_write_controllers(array $map, int $feedTime): void
         $pdo->beginTransaction();
     }
 
-    $pdo->exec('DELETE FROM network_controllers');
+    vatsim_write_callsigns($pdo, 'network_controllers', $map);
 
-    $rows = [];
-    foreach ($map as $callsign => $cid) {
-        $rows[] = [$callsign, $cid];
-    }
-    foreach (array_chunk($rows, 300) as $chunk) {
-        $sql = 'INSERT IGNORE INTO network_controllers (callsign, cid) VALUES '
-            . implode(',', array_fill(0, count($chunk), '(?, ?)'));
-        $pdo->prepare($sql)->execute(array_merge(...$chunk));
+    // The observers' table came later: a server whose schema.sql has not been
+    // imported again since has none, and that must not stop the controllers -
+    // and with them every code - from being written. Observers just cannot
+    // log in there until it is.
+    try {
+        vatsim_write_callsigns($pdo, 'network_observers', $observers);
+    } catch (PDOException $e) {
     }
 
     sync_state_set('controllers_updated', gmdate('Y-m-d H:i:s', $feedTime));

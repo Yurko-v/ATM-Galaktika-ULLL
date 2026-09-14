@@ -134,6 +134,28 @@ function controller_cid(string $position): ?string
     return $cid === false ? null : (string)$cid;
 }
 
+// The CID of an observer on that callsign - null as well on a server that has
+// no network_observers table yet.
+function observer_cid(string $position): ?string
+{
+    try {
+        $st = db()->prepare('SELECT cid FROM network_observers WHERE callsign = ?');
+        $st->execute([$position]);
+        $cid = $st->fetchColumn();
+    } catch (PDOException $e) {
+        return null;
+    }
+    return $cid === false ? null : (string)$cid;
+}
+
+// The caller's CID on that callsign: a controller's, and with $observerToo an
+// observer's as well.
+function caller_cid(string $position, bool $observerToo): ?string
+{
+    $cid = controller_cid($position);
+    return ($cid === null && $observerToo) ? observer_cid($position) : $cid;
+}
+
 // Reads the feed here and now, rather than waiting for the next cron run -
 // but at most once every controller_refresh_sec, whatever the answer, so a
 // caller nobody knows cannot turn every request into a fetch from VATSIM.
@@ -156,7 +178,7 @@ function refresh_controllers_if_due(): void
     }
     $controllers = vatsim_controllers($feed);
     if ($controllers !== null) {
-        vatsim_write_controllers($controllers, (int)$feed['_time']);
+        vatsim_write_controllers($controllers, (int)$feed['_time'], vatsim_observers($feed));
     }
 }
 
@@ -189,7 +211,9 @@ function check_rate_limit(string $position): void
 
 // Every endpoint that changes or reads the pool goes through here. Returns the
 // caller's CID, for the record kept against the codes they hand out.
-function require_caller(string $position): ?string
+// $observerToo lets an observer in as well - only api/name.php does: an OBS may
+// open the plug-in's panel, but never hands out a code.
+function require_caller(string $position, bool $observerToo = false): ?string
 {
     check_rate_limit($position);
     check_api_key();
@@ -200,10 +224,10 @@ function require_caller(string $position): ?string
         return null;
     }
 
-    $cid = controller_cid($position);
+    $cid = caller_cid($position, $observerToo);
     if ($cid === null || !controllers_are_fresh()) {
         refresh_controllers_if_due();
-        $cid = controller_cid($position);
+        $cid = caller_cid($position, $observerToo);
     }
 
     if (!controllers_are_fresh()) {

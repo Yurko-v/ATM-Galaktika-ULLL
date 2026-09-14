@@ -14,6 +14,12 @@ require __DIR__ . '/../../lib/codes.php';
 $active      = (int)db()->query('SELECT COUNT(*) FROM assignments WHERE released_at IS NULL')->fetchColumn();
 $controllers = (int)db()->query('SELECT COUNT(*) FROM network_controllers')->fetchColumn();
 $userNames   = (int)db()->query('SELECT COUNT(*) FROM user_names')->fetchColumn();
+// null while the table has not been created - schema.sql not imported again.
+try {
+    $observers = (int)db()->query('SELECT COUNT(*) FROM network_observers')->fetchColumn();
+} catch (PDOException $e) {
+    $observers = null;
+}
 
 json_out(200, [
     'ok'                  => true,
@@ -24,6 +30,7 @@ json_out(200, [
     'controllers_updated' => sync_state_get('controllers_updated'),
     'controllers_fresh'   => controllers_are_fresh(),
     'controllers_online'  => $controllers,
+    'observers_online'    => $observers,
     // Whether the optional second lock is on; never the key itself.
     'api_key'             => api_key_required(),
     'active'              => $active,
