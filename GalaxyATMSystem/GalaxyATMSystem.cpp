@@ -1556,6 +1556,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_osFontFieldRect = { 0, 0, 0, 0 };
 
     m_formularsVisible = true;
+    m_formularKindSetting = FormularKindSetting::Auto;
     m_formularFont = NULL;
     m_formularFontSize = 0;
     m_hdgDragging = false;
@@ -2047,7 +2048,9 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
             m_rulerArmed = false;
             m_rulerPlacing = false;
             DrawWakeArcs(hDC);
-            // The формуляр neither: it is the traffic, not a panel setting.
+            // The метки and the формуляр neither: they are the traffic, not a
+            // panel setting.
+            DrawTargetSymbols(hDC);
             DrawFormulars(hDC, true);
             return;
         }
@@ -2159,8 +2162,10 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         if (m_vecDistEnabled || m_vecTimeEnabled || m_vecByPlan)
             DrawTargetVectors(hDC);
 
-        // Over the vectors, under the rulers. Its hit-boxes come after the
-        // ruler canvas, so they are left out while the canvas is up.
+        // The метки over the vectors that start at them, and the формуляр
+        // over both, under the rulers. Its hit-boxes come after the ruler
+        // canvas, so they are left out while the canvas is up.
+        DrawTargetSymbols(hDC);
         DrawFormulars(hDC, !(m_rulerArmed || m_rulerPlacing));
 
         for (size_t i = 0; i < m_rulers.size(); i++)
@@ -2258,12 +2263,313 @@ namespace
     const FormularFn kFnGs            = { kTopSky, 40,  kUlll,   507, NULL,    0    };
     const FormularFn kFnXfl           = { kTopSky, 53,  NULL,    26,  NULL,    0    };
     const FormularFn kFnCopx          = { kTopSky, 44,  NULL,    22,  kTopSky, 45   };
-    const FormularFn kFnAhdg          = { NULL,    25,  kTopSky, 14,  kTopSky, 133  };
-    const FormularFn kFnAsp           = { kTopSky, 47,  kTopSky, 15,  kTopSky, 71   };
+    // AHDG is pulled with the left button for a heading, and the right one
+    // opens TopSky's heading menu - on every label, whatever the tags had.
+    const FormularFn kFnAhdg          = { NULL,    25,  NULL,    0,   kTopSky, 14   };
+    // ASP: TopSky's speed menu on the left button, EuroScope's speed popup on
+    // the right - on every label, in a simulator session too.
+    const FormularFn kFnAsp           = { kTopSky, 47,  kTopSky, 15,  NULL,    TAG_ITEM_FUNCTION_ASSIGNED_SPEED_POPUP };
     const FormularFn kFnArc           = { kTopSky, 56,  kTopSky, 16,  kTopSky, 134  };
     const FormularFn kFnAtyp          = { kTopSky, 70,  kVch,    650, kTopSky, 2    };
     const FormularFn kFnAdes          = { kTopSky, 79,  NULL,    7,   kTopSky, 1001 };
     const FormularFn kFnRfl           = { kTopSky, 120, kTopSky, 59,  NULL,    0    };
+
+    // The approach label's, off "Galaxy Approach": the same but for AFL's and
+    // CFL's right buttons (TopSky's 143 and 157, where the РДЦ tag has 99 and
+    // PEL), the squawk warning and the remark on both buttons, ATYP without
+    // its wake category, ARWY, and AHDG's left button - EuroScope's heading
+    // popup there.
+    const FormularFn kFnAppSquawkWarning = { kTopSky, 138,   kTopSky, 62,  kTopSky, 62   };
+    const FormularFn kFnAppRemark        = { kTopSky, 212,   kTopSky, 2,   kTopSky, 2    };
+    const FormularFn kFnAppAfl           = { kUlll,   509,   NULL,    1,   kTopSky, 143  };
+    const FormularFn kFnAppCfl           = { kUlll,   510,   kTopSky, 12,  kTopSky, 157  };
+    const FormularFn kFnAppAtyp          = { kTopSky, 69,    kVch,    650, kTopSky, 2    };
+    const FormularFn kFnArwy             = { kTopSky, 261,   NULL,    19,  NULL,    0    };
+    const FormularFn kFnAppAhdg          = { NULL,    25,    NULL,    0,   kTopSky, 14   };
+
+    // The tower label's, off "Galaxy Tower Peterburg", where they differ from
+    // the approach one: the sector indicator is TopSky's item 10014, GS takes
+    // no click, and AHDG is TopSky's on both buttons, as on the РДЦ tag.
+    const FormularFn kFnTwrSector        = { kTopSky, 10014, NULL,    20,  kTopSky, 100  };
+    const FormularFn kFnTwrGs            = { kTopSky, 40,    NULL,    0,   NULL,    0    };
+
+    // AHDG and CFL are known by what they are, whichever label's table they
+    // came out of: the heading pull hangs off the one, and the right click
+    // that clears an approach clearance off the other.
+    bool IsAhdgFn(const FormularFn* fn) { return fn == &kFnAhdg || fn == &kFnAppAhdg; }
+    bool IsCflFn(const FormularFn* fn)  { return fn == &kFnCfl || fn == &kFnAppCfl; }
+
+    // Simulator sessions. EuroScope's simulated aircraft fly only for their
+    // pseudo pilot, who takes one on with "Get simulation" in the Simulation
+    // popup behind the tag's "{}" (item 90, function 41, as the sector tags
+    // had it) - so in a simulator session every label carries that "{}". And
+    // what EuroScope says drives the pseudo pilot's aircraft is its own
+    // popups, so there CFL's right button and ARC's left one open those
+    // instead of TopSky's menus (see SimulatorFn) - ASP has EuroScope's on
+    // its right button everywhere. A
+    // heading cannot be given that way: a plug-in has no call that sets the
+    // simulator's heading, and EuroScope's AHDG drag only starts off its own
+    // tag - asked for through StartTagFunction it opens the popup instead.
+    const FormularFn kFnSimulation = { NULL, TAG_ITEM_TYPE_SIMULATION_INDICATOR,
+        NULL, TAG_ITEM_FUNCTION_SIMULATION_POPUP, NULL, TAG_ITEM_FUNCTION_SIMULATION_POPUP };
+
+    // Anything but the live network. A simulator session started in EuroScope
+    // itself did not report itself as SIMULATOR_SERVER or _CLIENT, and an
+    // offline EuroScope has no traffic for a "{}" to appear on.
+    bool InSimulatorSession(CPlugIn* plugin)
+    {
+        const int connection = plugin->GetConnectionType();
+        return connection != CONNECTION_TYPE_DIRECT
+            && connection != CONNECTION_TYPE_VIA_PROXY;
+    }
+
+    // fn for a click with the given button in a simulator session: on CFL
+    // the right button, and on ARC the left one, moved onto
+    // EuroScope's own popup. CFL's left button stays TopSky's CFL menu, which
+    // is what sets the level the way the sector tag did.
+    FormularFn SimulatorFn(const FormularFn& fn, bool right)
+    {
+        int item = 0, function = 0;
+        if (right && IsCflFn(&fn))
+        {
+            item = TAG_ITEM_TYPE_TEMP_ALTITUDE;
+            function = TAG_ITEM_FUNCTION_TEMP_ALTITUDE_POPUP;
+        }
+        else if (!right && &fn == &kFnArc)
+        {
+            item = TAG_ITEM_TYPE_ASSIGNED_RATE;
+            function = TAG_ITEM_FUNCTION_ASSIGNED_RATE_POPUP;
+        }
+        else
+        {
+            return fn;
+        }
+
+        FormularFn sim = fn;
+        sim.itemPlugin = NULL;
+        sim.itemCode = item;
+        if (right)
+        {
+            sim.rightPlugin = NULL;
+            sim.rightFn = function;
+        }
+        else
+        {
+            sim.leftPlugin = NULL;
+            sim.leftFn = function;
+        }
+        return sim;
+    }
+
+    // ".formular <name>" and the ASR's "FormularKind", in FormularKindSetting order.
+    const char* const kFormularKindNames[] = { "auto", "ctr", "app", "twr" };
+
+    // ---- Метки ----------------------------------------------------------------
+    // TopSky's track symbols, in TopSkySymbols.txt's own language: MOVETO,
+    // LINETO and SETPIXEL in pixels off the position, and ARC. FILLARC and
+    // POLYGON are not read - no track symbol of the sector's uses them.
+    struct SymbolStep
+    {
+        enum Kind { Move, Line, Pixel, Arc } kind;
+        int v[6];   // x, y - and for an arc the two radii and the two angles
+    };
+    typedef std::vector<SymbolStep> TrackSymbol;
+    typedef std::map<std::string, TrackSymbol> TrackSymbolSet;
+
+    // The sector's own track symbols - Plugins\TopSky Peterburg and
+    // Plugins\TopSky Tower Ground carry the same ones - for when there is no
+    // TopSky loaded to read them off.
+#define GALAXY_SSR_SYMBOL \
+    "MOVETO:-1:0\nLINETO:0:1\nLINETO:1:0\nLINETO:0:-1\nLINETO:-1:0\n" \
+    "MOVETO:-2:0\nLINETO:0:2\nLINETO:2:0\nLINETO:0:-2\nLINETO:-2:0\n" \
+    "MOVETO:-3:0\nLINETO:0:3\nLINETO:3:0\nLINETO:0:-3\nLINETO:-3:0\n" \
+    "MOVETO:-5:-5\nLINETO:5:-5\nLINETO:5:5\nLINETO:-5:5\nLINETO:-5:-5\n"
+#define GALAXY_ADSB_SYMBOL \
+    "MOVETO:-6:0\nLINETO:0:6\nLINETO:6:0\nLINETO:0:-6\nLINETO:-6:0\n"
+    const char* const kDefaultTrackSymbols =
+        "SYMBOL:PRIMARY\nMOVETO:0:-5\nLINETO:0:5\nMOVETO:-5:0\nLINETO:5:0\n"
+        "SYMBOL:PRIMARY_DIV\nMOVETO:0:-4\nLINETO:0:5\nMOVETO:-4:0\nLINETO:5:0\n"
+        "SYMBOL:DAPS\n" GALAXY_SSR_SYMBOL
+        "SYMBOL:DAPS_DIV\n" GALAXY_SSR_SYMBOL
+        "SYMBOL:NODAPS\n" GALAXY_SSR_SYMBOL
+        "SYMBOL:NODAPS_DIV\n" GALAXY_SSR_SYMBOL
+        "SYMBOL:ADSB\n" GALAXY_ADSB_SYMBOL
+        "SYMBOL:ADSB_DIV\n" GALAXY_ADSB_SYMBOL
+        "SYMBOL:UNCONTROLLED\nMOVETO:0:-5\nLINETO:0:5\nMOVETO:-5:0\nLINETO:5:0\n"
+        "MOVETO:-5:-5\nLINETO:5:-5\nLINETO:5:5\nLINETO:-5:5\nLINETO:-5:-5\n";
+#undef GALAXY_SSR_SYMBOL
+#undef GALAXY_ADSB_SYMBOL
+
+    // Adds what text defines to out; a symbol defined again replaces the one
+    // there, so a file read over the defaults wins wherever it says anything.
+    void ParseTrackSymbols(const std::string& text, TrackSymbolSet& out)
+    {
+        TrackSymbol* current = NULL;
+        size_t start = 0;
+        while (start < text.size())
+        {
+            size_t end = text.find('\n', start);
+            if (end == std::string::npos)
+                end = text.size();
+            std::string line = text.substr(start, end - start);
+            start = end + 1;
+
+            size_t comment = line.find("//");
+            if (comment != std::string::npos)
+                line.erase(comment);
+
+            // Fields between the colons, spaces dropped, the keyword in capitals.
+            std::vector<std::string> fields(1);
+            for (char c : line)
+            {
+                if (c == ':')
+                    fields.push_back(std::string());
+                else if (c != ' ' && c != '\t' && c != '\r')
+                    fields.back() += c;
+            }
+            if (fields[0].empty())
+                continue;
+            for (char& c : fields[0])
+                if (c >= 'a' && c <= 'z')
+                    c = (char)(c - 'a' + 'A');
+
+            if (fields[0] == "SYMBOL")
+            {
+                current = NULL;
+                if (fields.size() >= 2 && !fields[1].empty())
+                {
+                    std::string name = fields[1];
+                    for (char& c : name)
+                        if (c >= 'a' && c <= 'z')
+                            c = (char)(c - 'a' + 'A');
+                    current = &out[name];
+                    current->clear();
+                }
+                continue;
+            }
+            if (current == NULL)
+                continue;
+
+            std::vector<int> n;
+            for (size_t i = 1; i < fields.size(); i++)
+                n.push_back(atoi(fields[i].c_str()));
+
+            SymbolStep step = {};
+            if ((fields[0] == "MOVETO" || fields[0] == "LINETO" || fields[0] == "SETPIXEL") && n.size() >= 2)
+            {
+                step.kind = fields[0] == "MOVETO" ? SymbolStep::Move
+                          : fields[0] == "LINETO" ? SymbolStep::Line : SymbolStep::Pixel;
+                step.v[0] = n[0];
+                step.v[1] = n[1];
+            }
+            else if (fields[0] == "ARC" && n.size() == 5)
+            {
+                // X:Y:Radius:StartAngle:EndAngle - a circular arc
+                step.kind = SymbolStep::Arc;
+                const int v[6] = { n[0], n[1], n[2], n[2], n[3], n[4] };
+                memcpy(step.v, v, sizeof(v));
+            }
+            else if (fields[0] == "ARC" && n.size() >= 6)
+            {
+                // X:Y:RadiusX:RadiusY:StartAngle:EndAngle
+                step.kind = SymbolStep::Arc;
+                for (int i = 0; i < 6; i++)
+                    step.v[i] = n[i];
+            }
+            else
+            {
+                continue;
+            }
+            current->push_back(step);
+        }
+    }
+
+    bool g_trackSymbolsLoaded = false;
+    TrackSymbolSet g_trackSymbols;
+
+    void ResetTrackSymbols()
+    {
+        g_trackSymbolsLoaded = false;
+        g_trackSymbols.clear();
+    }
+
+    // Read once: the defaults, and over them the TopSkySymbols.txt beside
+    // whichever TopSky.dll this EuroScope has loaded - the profile's own, so
+    // Peterburg's on the area and approach profile and Tower Ground's on the
+    // tower one.
+    const TrackSymbolSet& TrackSymbols()
+    {
+        if (g_trackSymbolsLoaded)
+            return g_trackSymbols;
+        g_trackSymbolsLoaded = true;
+        ParseTrackSymbols(kDefaultTrackSymbols, g_trackSymbols);
+
+        HMODULE topsky = GetModuleHandleW(L"TopSky.dll");
+        wchar_t path[MAX_PATH] = {};
+        if (topsky == NULL || GetModuleFileNameW(topsky, path, MAX_PATH) == 0)
+            return g_trackSymbols;
+        std::wstring file = path;
+        size_t slash = file.find_last_of(L"\\/");
+        file = file.substr(0, slash == std::wstring::npos ? 0 : slash + 1) + L"TopSkySymbols.txt";
+
+        FILE* f = NULL;
+        if (_wfopen_s(&f, file.c_str(), L"rb") != 0 || f == NULL)
+            return g_trackSymbols;
+        std::string text;
+        char buf[4096];
+        size_t got;
+        while ((got = fread(buf, 1, sizeof(buf), f)) > 0)
+            text.append(buf, got);
+        fclose(f);
+        ParseTrackSymbols(text, g_trackSymbols);
+        return g_trackSymbols;
+    }
+
+    // With a plain one pixel GDI pen, as EuroScope's symbology draws a symbol:
+    // LINETO leaves its last pixel off, which the closed shapes rely on.
+    void DrawTrackSymbol(HDC hDC, const TrackSymbol& symbol, POINT at, COLORREF color)
+    {
+        HPEN pen = CreatePen(PS_SOLID, 1, color);
+        HGDIOBJ oldPen = SelectObject(hDC, pen);
+        HGDIOBJ oldBrush = SelectObject(hDC, GetStockObject(NULL_BRUSH));
+        MoveToEx(hDC, at.x, at.y, NULL);
+
+        for (const SymbolStep& s : symbol)
+        {
+            const int x = at.x + s.v[0], y = at.y + s.v[1];
+            switch (s.kind)
+            {
+            case SymbolStep::Move:
+                MoveToEx(hDC, x, y, NULL);
+                break;
+            case SymbolStep::Line:
+                LineTo(hDC, x, y);
+                break;
+            case SymbolStep::Pixel:
+                SetPixel(hDC, x, y, color);
+                break;
+            case SymbolStep::Arc:
+            {
+                const int rx = s.v[2], ry = s.v[3];
+                if (rx <= 0 || ry <= 0)
+                    break;
+                // Degrees from the positive X axis, counterclockwise - on a
+                // screen whose Y runs down.
+                const double a0 = s.v[4] * M_PI / 180.0, a1 = s.v[5] * M_PI / 180.0;
+                const int oldDir = SetArcDirection(hDC, AD_COUNTERCLOCKWISE);
+                ::Arc(hDC, x - rx, y - ry, x + rx + 1, y + ry + 1,
+                    x + (int)lround(rx * cos(a0)), y - (int)lround(ry * sin(a0)),
+                    x + (int)lround(rx * cos(a1)), y - (int)lround(ry * sin(a1)));
+                SetArcDirection(hDC, oldDir);
+                break;
+            }
+            }
+        }
+
+        SelectObject(hDC, oldBrush);
+        SelectObject(hDC, oldPen);
+        DeleteObject(pen);
+    }
 
     // TopSky keeps what it adds to an aircraft's assigned data in flight strip
     // annotation 7, as "/"-separated fields - "A0011/s+/" for a speed
@@ -2378,6 +2684,12 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     const int tl = plugin->TransitionLevelFL();
     const AltUnit altUnit = plugin->UnitAlt();
 
+    // The РДЦ label, or the approach or the tower one - see CurrentFormularKind.
+    const FormularKind kind = CurrentFormularKind();
+    const bool ctrLabel = (kind == FormularKind::Ctr);
+    const bool simulator = InSimulatorSession(plugin);
+    const FormularFn* const remarkFn = (kind == FormularKind::App) ? &kFnAppRemark : &kFnRemark;
+
     // Codes more than one aircraft is squawking - "D" on each of them. The
     // conspicuity and VFR codes are shared by design and left out.
     std::map<std::string, int> codeCount;
@@ -2403,11 +2715,12 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (!PtInRect(&ra, tp))
             continue;
 
-        // Фильтр высоты hides the label, as it blanks the tag items - except
-        // over an APW, which no display filter may switch off.
-        const ApwResult& apw = plugin->ApwForTarget(rt);
-        if (!plugin->AltFilterPasses(pos.GetPressureAltitude()) && apw.level == ApwLevel::None)
+        // Фильтр высоты hides the label, whatever it would have said - an APW
+        // included: a filter that left warning aircraft on the screen left
+        // every one on the ground inside the aerodrome's зоны there with it.
+        if (!plugin->AltFilterPasses(pos.GetPressureAltitude()))
             continue;
+        const ApwResult& apw = plugin->ApwForTarget(rt);
 
         CFlightPlan fp = rt.GetCorrelatedFlightPlan();
         const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
@@ -2427,6 +2740,13 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         // one assigned, t / r text only / receive only, RAM, CLAM, APW, the
         // emergency codes, and the remark ----
         std::vector<FormularRun> warnings;
+        // In a simulator session, first on the line: "{}", which opens
+        // EuroScope's Simulation popup - "Get simulation" takes the aircraft -
+        // and "{*}" once it is mine, as EuroScope's own item writes it. The
+        // plug-in API has no pseudo pilot; GetSimulated, "ES simulates its
+        // movements", is the nearest thing it offers.
+        if (simulator && correlated)
+            warnings.push_back({ fp.GetSimulated() ? L"{*}" : L"{}", base, &kFnSimulation });
         if (correlated && !fp.GetFlightPlanData().IsRvsm())
             warnings.push_back({ L"W", Theme::DistressText, NULL });
         if (sq != NULL)
@@ -2439,7 +2759,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         {
             std::string assigned = plugin->AssignedSquawkFor(fp);
             if (!assigned.empty() && assigned != sq)
-                warnings.push_back({ L"A" + Widen(sq), Theme::SquawkMismatch, &kFnSquawkWarning });
+                warnings.push_back({ L"A" + Widen(sq), Theme::SquawkMismatch,
+                    ctrLabel ? &kFnSquawkWarning : &kFnAppSquawkWarning });
         }
         if (correlated)
         {
@@ -2498,16 +2819,23 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     size_t first = rest.find_first_not_of(L" \t");
                     size_t last = rest.find_last_not_of(L" \t");
                     text = (first == std::wstring::npos) ? std::wstring() : rest.substr(first, last - first + 1);
-                    warnings.push_back({ L"MAPP", Theme::FormularMapp, &kFnRemark });
+                    warnings.push_back({ L"MAPP", Theme::FormularMapp, remarkFn });
                 }
                 if (!text.empty())
-                    warnings.push_back({ text, base, &kFnRemark });
+                    warnings.push_back({ text, base, remarkFn });
             }
         }
 
-        // ---- Callsign, sector indicator (the position tracking it, then the
-        // one it is coordinated to next), V for a VFR flight, and on the
-        // expanded label the transponder code ----
+        const char* planType = correlated ? fp.GetFlightPlanData().GetPlanType() : NULL;
+        const bool vfr = planType != NULL && (planType[0] == 'V' || planType[0] == 'v');
+        // The tower label carries V at the end of the warnings, in orange.
+        if (kind == FormularKind::Twr && vfr)
+            warnings.push_back({ L"V", Theme::FormularVfr, NULL });
+
+        // ---- Callsign; on the approach and tower labels a heavy's or a
+        // super's wake category; the sector indicator (the position tracking
+        // it, then the one it is coordinated to next); V for a VFR flight; and
+        // on the expanded РДЦ label the transponder code ----
         std::vector<FormularRun> ident;
         auto highlight = m_formulars.find(callsign);
         const bool highlighted = highlight != m_formulars.end() && highlight->second.highlighted;
@@ -2515,6 +2843,13 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             correlated ? &kFnCallsign : NULL });
         if (correlated)
         {
+            if (!ctrLabel)
+            {
+                const char wtc = fp.GetFlightPlanData().GetAircraftWtc();
+                if (wtc == 'H' || wtc == 'J')
+                    ident.push_back({ std::wstring(1, (wchar_t)wtc), Theme::FormularWtc, NULL });
+            }
+
             std::string si;
             const char* current = fp.GetTrackingControllerId();
             if (current != NULL)
@@ -2528,14 +2863,20 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 if (nextId != NULL && si != nextId)
                     si += nextId;
             }
+            // Blue on the РДЦ and approach labels, in the label's own colour
+            // on the tower one - as the wiki's pictures have them.
             if (!si.empty())
-                ident.push_back({ Widen(si.c_str()), Theme::FormularSector, &kFnSector });
+                ident.push_back({ Widen(si.c_str()),
+                    kind == FormularKind::Twr ? base : Theme::FormularSector,
+                    kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
 
-            const char* plan = fp.GetFlightPlanData().GetPlanType();
-            if (plan != NULL && (plan[0] == 'V' || plan[0] == 'v'))
+            // The approach label shows V only expanded, in orange.
+            if (vfr && ctrLabel)
                 ident.push_back({ L"V", base, NULL });
+            else if (vfr && kind == FormularKind::App && expanded)
+                ident.push_back({ L"V", Theme::FormularVfr, NULL });
         }
-        if (expanded && sq != NULL && *sq != '\0')
+        if (ctrLabel && expanded && sq != NULL && *sq != '\0')
             ident.push_back({ Widen(sq), base, correlated ? &kFnTssr : NULL });
 
         // ---- Actual level, climb/descent arrow, cleared level, speed ----
@@ -2543,13 +2884,17 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         const bool belowTL = pos.GetFlightLevel() / 100 < tl;
         const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit, belowTL).c_str()),
-            base, correlated ? &kFnAfl : NULL });
-        // The same +-100 fpm band the vertical speed item counts as level.
+            base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL });
+        // The same +-100 fpm band the vertical speed item counts as level. The
+        // approach and tower labels put a "|" between the two levels while
+        // the aircraft is level - "F103 | F050".
         const int vs = rt.GetVerticalSpeed();
         if (vs >= 100)
             levels.push_back({ L"\x2191", base, NULL });
         else if (vs <= -100)
             levels.push_back({ L"\x2193", base, NULL });
+        else if (!ctrLabel)
+            levels.push_back({ L"|", base, NULL });
         if (correlated)
         {
             // 1 and 2 are EuroScope's cleared-for-approach values - the wiki's
@@ -2576,9 +2921,10 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             // aircraft is at, as the sector tag's CFL item does.
             if (cflText.empty())
                 cflText = Widen(FormatAltitudeUnit(altFt, altUnit, belowTL).c_str());
-            levels.push_back({ cflText, cflColor, &kFnCfl });
+            levels.push_back({ cflText, cflColor, ctrLabel ? &kFnCfl : &kFnAppCfl });
         }
-        if (m_osSpeed)
+        // The approach and tower labels have GS on the line below.
+        if (m_osSpeed && ctrLabel)
             levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
                 base, correlated ? &kFnGs : NULL });
 
@@ -2593,6 +2939,14 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             {
                 swprintf_s(t, L"H%03d", assigned.GetAssignedHeading());
                 ahdgText = t;
+            }
+            else
+            {
+                // A direct route is written where the heading would be, as
+                // TopSky's AHDG field does: the point it was cleared direct to.
+                const char* direct = assigned.GetDirectToPointName();
+                if (direct != NULL && *direct != '\0')
+                    ahdgText = Widen(direct);
             }
             if (assigned.GetAssignedMach() > 0)
             {
@@ -2620,7 +2974,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
         // ---- The expanded label's own lines ----
         std::vector<std::vector<FormularRun>> extra;
-        if (expanded && correlated)
+        if (expanded && correlated && ctrLabel)
         {
             CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
             CFlightPlanData fpd = fp.GetFlightPlanData();
@@ -2676,7 +3030,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 extra.push_back(speedLine);
             }
         }
-        else if (correlated)
+        else if (correlated && ctrLabel)
         {
             // Collapsed, the sector tag still shows whichever of them is
             // assigned, on a line of their own - and none of it when nothing is.
@@ -2689,6 +3043,112 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 assignedLine.push_back({ arcText, base, &kFnArc });
             if (!assignedLine.empty())
                 extra.push_back(assignedLine);
+        }
+        else if (correlated)
+        {
+            // ---- The approach and tower labels below the levels, as the
+            // wiki's "Формуляр ДПК/ДПП" and "Формуляр КДП" draw them.
+            // Collapsed: GS, the assigned speed and the type; the assigned
+            // heading on a line of its own when there is one; CTL. Expanded:
+            // GS and ASP; on the approach label XFL, COPX and the calculated
+            // IAS; ATYP, ADES and ARWY; AHDG; CTL ----
+            CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+            CFlightPlanData fpd = fp.GetFlightPlanData();
+            const bool app = (kind == FormularKind::App);
+            wchar_t buf[32];
+
+            // The assigned speed as TopSky writes it with its Label_ASP_Digits:
+            // two on approach (TopSkySettings.txt's [_APP]) - "25+" for 250 kt
+            // or more - and TopSky's own three at the tower. Mach in hundredths.
+            std::wstring speed;
+            if (cad.GetAssignedMach() > 0)
+            {
+                swprintf_s(buf, L"M%02d", cad.GetAssignedMach());
+                speed = buf;
+            }
+            else if (cad.GetAssignedSpeed() > 0)
+            {
+                if (app)
+                    swprintf_s(buf, L"%02d", cad.GetAssignedSpeed() / 10);
+                else
+                    swprintf_s(buf, L"%03d", cad.GetAssignedSpeed());
+                speed = buf;
+            }
+            if (!speed.empty())
+            {
+                char modifier = TopSkySpeedModifier(cad);
+                if (modifier != 0)
+                    speed += (wchar_t)modifier;
+            }
+
+            const FormularRun gsRun = { Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
+                base, app ? &kFnGs : &kFnTwrGs };
+            const char* atyp = fpd.GetAircraftFPType();
+            const FormularRun typeRun = { (atyp != NULL && *atyp != '\0') ? Widen(atyp) : std::wstring(L"ATYP"),
+                base, &kFnAppAtyp };
+            const FormularFn* const ahdgFn = app ? &kFnAppAhdg : &kFnAhdg;
+
+            if (!expanded)
+            {
+                std::vector<FormularRun> speedLine;
+                if (m_osSpeed)
+                    speedLine.push_back(gsRun);
+                if (!speed.empty())
+                    speedLine.push_back({ speed, base, &kFnAsp });
+                speedLine.push_back(typeRun);
+                extra.push_back(speedLine);
+
+                if (!ahdgText.empty())
+                    extra.push_back(std::vector<FormularRun>(1, FormularRun{ ahdgText, base, ahdgFn }));
+            }
+            else
+            {
+                std::vector<FormularRun> speedLine;
+                if (m_osSpeed)
+                    speedLine.push_back(gsRun);
+                speedLine.push_back({ speed.empty() ? std::wstring(L"ASP") : speed, base, &kFnAsp });
+                extra.push_back(speedLine);
+
+                if (app)
+                {
+                    std::vector<FormularRun> exitLine;
+                    int xfl = fp.GetExitCoordinationAltitude();
+                    exitLine.push_back({ xfl > 0 ? Widen(FormatAltitudeUnit(xfl, altUnit, xfl / 100 < tl).c_str())
+                                                 : std::wstring(L"XFL"), base, &kFnXfl });
+                    const char* copx = fp.GetExitCoordinationPointName();
+                    exitLine.push_back({ (copx != NULL && *copx != '\0') ? Widen(copx) : std::wstring(L"COPX"),
+                        base, &kFnCopx });
+                    int ias = 0, machX100 = 0;
+                    if (CalculatedIasMach(rt.GetGS(), pos.GetFlightLevel(), ias, machX100))
+                    {
+                        swprintf_s(buf, L"N%03d", ias);
+                        exitLine.push_back({ buf, base, NULL });
+                    }
+                    extra.push_back(exitLine);
+                }
+
+                std::vector<FormularRun> planLine;
+                planLine.push_back(typeRun);
+                const char* ades = fpd.GetDestination();
+                if (ades != NULL && *ades != '\0')
+                    planLine.push_back({ Widen(ades), base, &kFnAdes });
+                const char* arwy = fpd.GetArrivalRwy();
+                if (arwy != NULL && *arwy != '\0')
+                    planLine.push_back({ Widen(arwy), Theme::FormularGreen, &kFnArwy });
+                else
+                    planLine.push_back({ L"ARWY", base, &kFnArwy });
+                extra.push_back(planLine);
+
+                extra.push_back(std::vector<FormularRun>(1,
+                    FormularRun{ ahdgText.empty() ? std::wstring(L"AHDG") : ahdgText, base, ahdgFn }));
+            }
+
+            // VCH's "CTL flag only when active": VCH keeps the landing
+            // clearance in strip annotation 3 as "CTL", and its tag item shows
+            // it to the controller tracking the flight.
+            const char* ctl = cad.GetFlightStripAnnotation(3);
+            if (ctl != NULL && strcmp(ctl, "CTL") == 0 && fp.GetTrackingControllerIsMe())
+                extra.push_back(std::vector<FormularRun>(1, FormularRun{ L"CTL", Theme::FormularGreen, NULL }));
         }
 
         std::vector<std::vector<FormularRun>> lines;
@@ -2756,6 +3216,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             identWidth += runWidths[identLine][r] + (r > 0 ? space.cx : 0);
         const bool labelRight = callsignAt.x + runWidths[identLine][0] / 2 >= tp.x;
         POINT edge = { labelRight ? callsignAt.x - 2 : callsignAt.x + identWidth + 2, callsignAt.y };
+        // A label standing straight over its target is reached at the middle
+        // of its bottom edge, and one straight under it at the middle of its
+        // top edge, rather than by a line slanting in to the callsign's end.
+        if (tp.x >= area.left && tp.x <= area.right)
+        {
+            if (tp.y > area.bottom)
+                edge = { (area.left + area.right) / 2, area.bottom + 1 };
+            else if (tp.y < area.top)
+                edge = { (area.left + area.right) / 2, area.top - 1 };
+        }
         double dx = edge.x - tp.x, dy = edge.y - tp.y;
         double len = sqrt(dx * dx + dy * dy);
         const double kGapPx = 6.0;
@@ -2785,7 +3255,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 item.fn = run.fn;
                 item.text = Narrow(run.text);
                 state.items.push_back(item);
-                if (run.fn == &kFnAhdg)
+                if (IsAhdgFn(run.fn))
                 {
                     ahdgRect = item.rect;
                     haveAhdg = true;
@@ -2807,7 +3277,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             // moving the label.
             if (haveAhdg)
                 AddScreenObject(SO_FORMULAR_AHDG, callsign.c_str(), ahdgRect, true,
-                    "Тянуть - курс, ЛКМ - выбор курса, ПКМ - сброс курса");
+                    "Тянуть ЛКМ - курс, ПКМ - меню курса TopSky");
         }
     }
 
@@ -2842,6 +3312,104 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         }
     }
 
+    RestoreDC(hDC, saved);
+}
+
+CGalaxyATMSystemRadarScreen::FormularKind CGalaxyATMSystemRadarScreen::CurrentFormularKind()
+{
+    switch (m_formularKindSetting)
+    {
+    case FormularKindSetting::Ctr: return FormularKind::Ctr;
+    case FormularKindSetting::App: return FormularKind::App;
+    case FormularKindSetting::Twr: return FormularKind::Twr;
+    default: break;
+    }
+
+    // An observer has no position, and gets the РДЦ label.
+    CController me = GetPlugIn()->ControllerMyself();
+    if (me.IsValid() && me.IsController())
+    {
+        const int facility = me.GetFacility();
+        if (facility == 5)                     // APP, DEP
+            return FormularKind::App;
+        if (facility >= 2 && facility <= 4)    // DEL, GND, TWR
+            return FormularKind::Twr;
+    }
+    return FormularKind::Ctr;
+}
+
+// ---- Метки ----------------------------------------------------------------------
+// The position symbol of every aircraft whose формуляр could be drawn - the same
+// ones, the same Фильтр высоты - picked as TopSky picks it (TopSky General,
+// 5.1.2, and TopSkySymbols.txt's list): UNCONTROLLED for a VFR flight nobody has
+// assumed; otherwise DAPS for a mode S track, NODAPS for a mode C one and
+// PRIMARY for a primary-only one, as the _SPI variant while the transponder
+// idents and as the _DIV variant while RAM or CLAM is up, whichever of those the
+// file defines, and COASTED when nothing has been heard for 30 seconds. In the
+// формуляр's colour, and TopSky's Track Highlight for the selected aircraft.
+void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
+{
+    const TrackSymbolSet& symbols = TrackSymbols();
+    if (symbols.empty())
+        return;
+
+    CGalaxyATMSystemPlugin* plugin = Plugin();
+    RECT ra = GetRadarArea();
+    CFlightPlan asel = plugin->FlightPlanSelectASEL();
+    const std::string aselCallsign = asel.IsValid() ? asel.GetCallsign() : "";
+
+    int saved = SaveDC(hDC);
+    for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
+         rt = plugin->RadarTargetSelectNext(rt))
+    {
+        CRadarTargetPositionData pos = rt.GetPosition();
+        if (!pos.IsValid())
+            continue;
+        POINT tp = ConvertCoordFromPositionToPixel(pos.GetPosition());
+        if (!PtInRect(&ra, tp))
+            continue;
+        if (!plugin->AltFilterPasses(pos.GetPressureAltitude()))
+            continue;
+
+        CFlightPlan fp = rt.GetCorrelatedFlightPlan();
+        const char* plan = fp.IsValid() ? fp.GetFlightPlanData().GetPlanType() : NULL;
+        const bool vfr = plan != NULL && (plan[0] == 'V' || plan[0] == 'v');
+
+        std::string name;
+        if (vfr && fp.GetState() != FLIGHT_PLAN_STATE_ASSUMED)
+        {
+            name = "UNCONTROLLED";
+        }
+        else
+        {
+            const int flags = pos.GetRadarFlags();
+            if (flags & RADAR_POSITION_SECONDARY_S)
+                name = "DAPS";
+            else if (flags & RADAR_POSITION_SECONDARY_C)
+                name = "NODAPS";
+            else if (flags & RADAR_POSITION_PRIMARY)
+                name = "PRIMARY";
+            else
+                name = "NODAPS";
+
+            const bool diverging = fp.IsValid() && (fp.GetRAMFlag() || fp.GetCLAMFlag());
+            if (pos.GetTransponderI() && symbols.count(name + "_SPI"))
+                name += "_SPI";
+            else if (diverging && symbols.count(name + "_DIV"))
+                name += "_DIV";
+        }
+        if (pos.GetReceivedTime() > 30 && symbols.count("COASTED"))
+            name = "COASTED";
+
+        auto symbol = symbols.find(name);
+        if (symbol == symbols.end())
+            continue;
+
+        const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
+        const bool selected = !aselCallsign.empty() && cs != NULL && aselCallsign == cs;
+        DrawTrackSymbol(hDC, symbol->second, tp,
+            selected ? Theme::TrackHighlight : GetTagColorForFlightPlan(fp));
+    }
     RestoreDC(hDC, saved);
 }
 
@@ -2912,9 +3480,10 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     }
 
     // A right click on an approach clearance (CA / VA) clears it off, as the
-    // wiki has it. Everything else on CFL - the level menu on the left button,
-    // PEL on the right - is TopSky's, like the rest of the label.
-    if (hit != NULL && fp.IsValid() && hit->fn == &kFnCfl && button == BUTTON_RIGHT)
+    // wiki has it. Otherwise CFL is the sector tag's: TopSky's CFL menu on
+    // the left button, and PEL or TopSky's 157 on the right - which in a
+    // simulator session is EuroScope's level popup instead (SimulatorFn).
+    if (hit != NULL && fp.IsValid() && IsCflFn(hit->fn) && button == BUTTON_RIGHT)
     {
         int cfl = fp.GetControllerAssignedData().GetClearedAltitude();
         if (cfl == 1 || cfl == 2)
@@ -2927,8 +3496,10 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
 
     if (hit != NULL && hit->fn != NULL && fp.IsValid())
     {
-        const FormularFn& f = *hit->fn;
         const bool right = (button == BUTTON_RIGHT);
+        // A simulator session's pseudo pilot follows EuroScope's own popups -
+        // see SimulatorFn.
+        const FormularFn f = InSimulatorSession(GetPlugIn()) ? SimulatorFn(*hit->fn, right) : *hit->fn;
         const int id = right ? f.rightFn : f.leftFn;
         if (id != 0)
             StartTagFunction(sCallsign, f.itemPlugin, f.itemCode, hit->text.c_str(),
@@ -4267,11 +4838,12 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
     // The zoom is what this reads - a wheel zoom or a preset moves it too,
     // because it is measured from the display area rather than from the slider.
     double widthNM = DisplayWidthNM();
+    // The number alone - the unit is БЛОК 4's "Мили" / "Км".
     wchar_t scaleText[24];
     if (Plugin()->UnitDist() == DistUnit::NM)
-        swprintf_s(scaleText, L"%d NM", (int)lround(widthNM));
+        swprintf_s(scaleText, L"%d", (int)lround(widthNM));
     else
-        swprintf_s(scaleText, L"%d км", (int)lround(widthNM * 1.852));
+        swprintf_s(scaleText, L"%d", (int)lround(widthNM * 1.852));
 
     RECT vv = { box.left + 7, box.top + L::C_VV_TOP, box.left + 82, box.top + L::C_VV_TOP + L::C_VV_H };
     Theme::DrawLine(hDC, vv, scaleText, m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
@@ -4646,6 +5218,27 @@ namespace
         L"Метео", L"Почта", L"Загрузка", L"Статистика", L"Архив", L"Справка",
     };
     const int kMenuItemCount = (int)_countof(kMenuItems);
+
+    // The keyboard layout typing would go in with - "RU", "EN" - as the
+    // language indicator at the end of the bar shows it. The layout is per
+    // thread, so it is the one of whichever window has the keyboard, which is
+    // what the Windows taskbar shows too. Empty if it cannot be told.
+    std::wstring KeyboardLanguage()
+    {
+        HWND fg = GetForegroundWindow();
+        DWORD thread = (fg != NULL) ? GetWindowThreadProcessId(fg, NULL) : 0;
+        HKL layout = GetKeyboardLayout(thread);
+        if (layout == NULL)
+            return std::wstring();
+
+        const LANGID lang = LOWORD((UINT_PTR)layout);
+        wchar_t name[16] = {};
+        if (GetLocaleInfoW(MAKELCID(lang, SORT_DEFAULT), LOCALE_SISO639LANGNAME, name, _countof(name)) == 0)
+            return std::wstring();
+        std::wstring text = name;
+        CharUpperBuffW(&text[0], (DWORD)text.size());
+        return text;
+    }
 }
 
 // The bar's own height, but never less than TopSky's menu is tall
@@ -4679,7 +5272,19 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
     const int kPadX = 8;   // bar edge -> first item
     const int kGap  = 9;   // between two items
 
-    // The items first, from the left.
+    // The input language, in the bar's far right corner. Placed first, so
+    // everything else knows where the bar ends for it.
+    int contentRight = bar.right - kPadX;
+    const std::wstring language = KeyboardLanguage();
+    if (!language.empty())
+    {
+        SIZE sz = Theme::MeasureText(hDC, m_fonts.Menu, language);
+        RECT r = { bar.right - kPadX - sz.cx, bar.top, bar.right - kPadX, bar.bottom };
+        Theme::DrawLine(hDC, r, language, m_fonts.Menu, Theme::MenuText, DT_LEFT | DT_VCENTER);
+        contentRight = r.left - 2 * kGap;
+    }
+
+    // The items, from the left.
     int x = bar.left + kPadX;
     for (int i = 0; i < kMenuItemCount; i++)
     {
@@ -4689,7 +5294,7 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
 
         // A screen too narrow for the lot loses items off the end rather than
         // printing one past the bar.
-        if (x + sz.cx > bar.right - kPadX)
+        if (x + sz.cx > contentRight)
             break;
 
         RECT r = { x, bar.top, x + sz.cx, bar.bottom };
@@ -4698,32 +5303,33 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         x += sz.cx + kGap;
     }
 
-    // LOGIN and Bypass: two buttons in a white frame, a short way after the
-    // last item. LOGIN is what logs in - the Авторизация card has no button of
-    // its own. Bypass is there because the real system has it, and does
-    // nothing - so it is grey, frame and all, and a click on it lands on the
-    // bar's own object.
+    // LOGIN and Bypass: two buttons in a white frame, rounded as the panel's
+    // own plates are, well out towards the right. LOGIN is what logs in - the Авторизация card
+    // has no button of its own. Bypass is there because the real system has
+    // it, and does nothing - so it is grey, frame and all, and a click on it
+    // lands on the bar's own object.
     const int kBtnLead = 40;         // last item -> LOGIN, at the least
-    const int kBtnPastCentre = 300;  // the middle of the bar -> LOGIN
+    const int kBtnPastCentre = 440;  // the middle of the bar -> LOGIN
     const int kBtnPadX = 8;    // text -> frame, either side
     const int kBtnGap  = 6;    // between the two
     const int kBtnH    = 20;
     HFONT btnFont = m_fonts.Body;
     SIZE szLogin  = Theme::MeasureText(hDC, btnFont, L"LOGIN");
     SIZE szBypass = Theme::MeasureText(hDC, btnFont, L"Bypass");
+    const int loginW  = szLogin.cx + 2 * kBtnPadX;
+    const int bypassW = szBypass.cx + 2 * kBtnPadX;
     int btnTop = bar.top + (bar.bottom - bar.top - kBtnH) / 2;
-    // Out past the middle of the screen - but on a screen too narrow for that
-    // never over the last item.
-    const int loginLeft = max(x - kGap + kBtnLead, (bar.left + bar.right) / 2 + kBtnPastCentre);
-    RECT login  = { loginLeft, btnTop, 0, btnTop + kBtnH };
-    login.right = login.left + szLogin.cx + 2 * kBtnPadX;
-    RECT bypass = { login.right + kBtnGap, btnTop, 0, btnTop + kBtnH };
-    bypass.right = bypass.left + szBypass.cx + 2 * kBtnPadX;
-    if (bypass.right <= bar.right - kPadX)
+    // Out past the middle of the screen, but clear of the language on a
+    // narrower one - and never over the last item.
+    const int loginLeft = max(x - kGap + kBtnLead,
+        min((bar.left + bar.right) / 2 + kBtnPastCentre, contentRight - loginW - kBtnGap - bypassW));
+    RECT login  = { loginLeft, btnTop, loginLeft + loginW, btnTop + kBtnH };
+    RECT bypass = { login.right + kBtnGap, btnTop, login.right + kBtnGap + bypassW, btnTop + kBtnH };
+    if (bypass.right <= contentRight)
     {
-        Theme::FlatFrame(hDC, login, 1, Theme::Text);
+        Theme::OutlineBox(hDC, login, Theme::MenuBarFill, Theme::Text);
         Theme::DrawLine(hDC, login, L"LOGIN", btnFont, Theme::Text, DT_CENTER | DT_VCENTER);
-        Theme::FlatFrame(hDC, bypass, 1, Theme::MenuTextDisabled);
+        Theme::OutlineBox(hDC, bypass, Theme::MenuBarFill, Theme::MenuTextDisabled);
         Theme::DrawLine(hDC, bypass, L"Bypass", btnFont, Theme::MenuTextDisabled, DT_CENTER | DT_VCENTER);
         AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, "Войти в систему");
     }
@@ -5943,6 +6549,11 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
     else
     {
         m_hdgReleaseTicks = 0;
+        // A press handed to EuroScope (a simulator session's AHDG pull) may
+        // never come back as a move with the button up - EuroScope keeps the
+        // mouse for its own drag - so the button is watched for it here.
+        if (m_hdgDragCancelled && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
+            m_hdgDragCancelled = false;
     }
 
     if (m_rulerButton != 0)
@@ -6863,6 +7474,74 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
+    // Which wiki label is drawn: "auto" by the position logged in on, or one
+    // of them fixed - for an observer, who has no position to go by.
+    if (cmd.compare(0, 10, ".formular ") == 0)
+    {
+        const std::string arg = cmd.substr(10);
+        int kind = -1;
+        for (int i = 0; i < (int)_countof(kFormularKindNames); i++)
+            if (arg == kFormularKindNames[i])
+                kind = i;
+        if (kind < 0)
+            return false;
+        m_formularKindSetting = (FormularKindSetting)kind;
+
+        static const wchar_t* const kLabelNames[] = {
+            L"РДЦ (Контроль)", L"ДПК/ДПП (Круг/Подход)", L"КДП (Вышка)" };
+        std::wstring what = kLabelNames[(int)CurrentFormularKind()];
+        if (m_formularKindSetting == FormularKindSetting::Auto)
+            what += L" - по позиции";
+        // What EuroScope says the connection is - decides whether the "{}"
+        // of a simulator session shows.
+        what += L", подключение: " + std::to_wstring(GetPlugIn()->GetConnectionType());
+        std::string msg = Narrow(what);
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(L"Формуляр").c_str(),
+            msg.c_str(), true, false, false, false, false);
+        RequestRefresh();
+        return true;
+    }
+    // What EuroScope says about the connection, me and the selected aircraft -
+    // everything a click on a формуляр depends on to take effect: TopSky's
+    // CFL menu only works on an assumed aircraft, and a simulator's aircraft
+    // only follows what is assigned to it. Printed to the message window.
+    if (cmd == ".galaxydiag")
+    {
+        CPlugIn* p = GetPlugIn();
+        CController me = p->ControllerMyself();
+        char line[512];
+        sprintf_s(line, "connection=%d me=%s position=%s facility=%d controller=%d",
+            p->GetConnectionType(),
+            me.IsValid() && me.GetCallsign() != NULL ? me.GetCallsign() : "-",
+            me.IsValid() && me.GetPositionId() != NULL ? me.GetPositionId() : "-",
+            me.IsValid() ? me.GetFacility() : -1,
+            (me.IsValid() && me.IsController()) ? 1 : 0);
+        p->DisplayUserMessage("ULLL Panel", "Diag", line, true, true, false, false, false);
+
+        CFlightPlan fp = p->FlightPlanSelectASEL();
+        if (fp.IsValid())
+        {
+            CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+            const char* tracking = fp.GetTrackingControllerId();
+            const char* next = fp.GetCoordinatedNextController();
+            const char* a7 = cad.GetFlightStripAnnotation(7);
+            const char* direct = cad.GetDirectToPointName();
+            sprintf_s(line, "%s state=%d simulated=%d fpstate=%d tracking='%s' trackedByMe=%d next='%s' cfl=%d ahdg=%d direct='%s' asp=%d ann7='%s'",
+                fp.GetCallsign(), fp.GetState(), fp.GetSimulated() ? 1 : 0, fp.GetFPState(),
+                tracking != NULL ? tracking : "", fp.GetTrackingControllerIsMe() ? 1 : 0,
+                next != NULL ? next : "",
+                cad.GetClearedAltitude(), cad.GetAssignedHeading(),
+                direct != NULL ? direct : "", cad.GetAssignedSpeed(),
+                a7 != NULL ? a7 : "");
+        }
+        else
+        {
+            strcpy_s(line, "no selected aircraft - click its callsign first");
+        }
+        p->DisplayUserMessage("ULLL Panel", "Diag", line, true, true, false, false, false);
+        return true;
+    }
+
     // Back to the Авторизация block, as at the start of a session.
     if (cmd == ".logout")
     {
@@ -6972,6 +7651,9 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     if (cmd == ".reload")
     {
         Plugin()->ReloadConfig();
+        // TopSkySymbols.txt is read once as well; this is how an edit to it
+        // shows up.
+        ResetTrackSymbols();
 
         // Whatever was open pointed into the old lists. Everything else a
         // screen holds about зоны is worked out per frame.
@@ -7037,6 +7719,9 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
 
     sprintf_s(buf, "%d,%d,%d", m_osLines, m_osSpeed ? 1 : 0, Plugin()->TagFontSize());
     SaveDataToAsr("Os", "lines,speed,fontSize", buf);
+
+    SaveDataToAsr("FormularKind", "формуляр: auto (по позиции), ctr, app, twr",
+        kFormularKindNames[(int)m_formularKindSetting]);
 
     sprintf_s(buf, "%d", m_rulerButton);
     SaveDataToAsr("RulerButton", "side mouse button that arms the ruler (0 = off)", buf);
@@ -7136,6 +7821,14 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
                 if (step == size)
                     Plugin()->SetTagFontSize(size);
         }
+    }
+
+    const char* formularKind = GetDataFromAsr("FormularKind");
+    if (formularKind != NULL)
+    {
+        for (int i = 0; i < (int)_countof(kFormularKindNames); i++)
+            if (strcmp(formularKind, kFormularKindNames[i]) == 0)
+                m_formularKindSetting = (FormularKindSetting)i;
     }
 
     const char* codes = GetDataFromAsr("CodeBlock");

@@ -508,9 +508,27 @@ private:
     HFONT m_formularFont;       // re-created only when TagFontSize changes
     int   m_formularFontSize;
     HFONT GetFormularFont();
+    // Which of the ULLL wiki's labels is drawn: "Формуляр РДЦ (Контроль)",
+    // "Формуляр ДПК/ДПП (Круг/Подход)" or "Формуляр КДП (Вышка)". Picked by the
+    // position I am logged in on - APP gets the approach label, TWR, GND and
+    // DEL the tower one, everything else the РДЦ one - unless ".formular ctr",
+    // "app" or "twr" has fixed it (".formular auto" hands it back).
+    enum class FormularKind { Ctr, App, Twr };
+    enum class FormularKindSetting { Auto, Ctr, App, Twr };
+    FormularKindSetting m_formularKindSetting;   // persisted in the ASR
+    FormularKind CurrentFormularKind();
+
     // With registerObjects false the labels are drawn but take no clicks -
     // while the ruler is armed, so its canvas gets them.
     void  DrawFormulars(HDC hDC, bool registerObjects);
+
+    // Метки - the aircraft position symbols, drawn by the plugin as the
+    // формуляр is and in the формуляр's colour: TopSky's own track symbols out
+    // of the TopSkySymbols.txt next to the TopSky.dll that is loaded, picked
+    // the way TopSky picks them (primary / without DAPs / with DAPs, their
+    // diverging variant on RAM or CLAM, the uncontrolled one for a VFR flight
+    // nobody has assumed).
+    void  DrawTargetSymbols(HDC hDC);
     void  FormularClick(const char* sCallsign, POINT pt, int button);
 
     // AHDG pulled with the button held: a line from the aircraft to the cursor

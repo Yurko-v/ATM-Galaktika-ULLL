@@ -73,6 +73,17 @@ namespace Theme
     // A callsign the controller has highlighted (middle click on the label).
     const COLORREF FormularHighlight = RGB(0xD0, 0x60, 0x00);   // dark orange
 
+    // The approach and tower labels' own colours, as the ULLL wiki's pictures
+    // of them have it: the wake category of a heavy or a super in red, V for a
+    // VFR flight in orange, and in green the arrival runway and VCH's CTL flag -
+    // which is VCH's own TAG_GREEN, the colour its tag item was drawn in.
+    const COLORREF FormularWtc   = RGB(0xFF, 0x3B, 0x30);
+    const COLORREF FormularVfr   = RGB(0xE8, 0x8E, 0x2C);
+    const COLORREF FormularGreen = RGB(0x00, 0xDC, 0x00);
+
+    // A selected aircraft's position symbol: TopSky's Color_Track_Highlight.
+    const COLORREF TrackHighlight = RGB(0xFF, 0xFF, 0xFF);
+
     // A heading being pulled off the формуляр's AHDG: a dashed line in TopSky's
     // orange, and its readout in plain white.
     const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);
