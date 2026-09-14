@@ -33,23 +33,6 @@ function stored_name(string $cid): ?string
     return $found === '' ? null : $found;
 }
 
-// What the window sends, the way NormalizeEnteredName in the plug-in's
-// UserName.cpp puts it: "Фамилия Имя Отчество" in full, or shortened to
-// "Фамилия И.О." / "Фамилия И." - Cyrillic only, with a hyphen allowed inside a
-// double surname. Anything else is not a name the plug-in can show, and is
-// turned down rather than stored.
-function clean_user_name($value): ?string
-{
-    $s = preg_replace('/\s+/u', ' ', trim((string)$value));
-    if ($s === null || preg_match_all('/./u', $s) > 100) {
-        return null;
-    }
-    $word = '\p{Cyrillic}+(?:-\p{Cyrillic}+)*';
-    $full = ' \p{Cyrillic}{2,} \p{Cyrillic}{2,}';
-    $short = ' \p{Cyrillic}\.(?:\p{Cyrillic}\.)?';
-    return preg_match("/^$word(?:$full|$short)$/u", $s) ? $s : null;
-}
-
 $method = $_SERVER['REQUEST_METHOD'] ?? '';
 
 if ($method === 'GET') {
