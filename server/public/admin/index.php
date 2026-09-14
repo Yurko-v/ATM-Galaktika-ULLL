@@ -39,6 +39,17 @@ function h($value): string
     return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+// The AZIMUT logo, drawn here in white rather than served as a file: the mark
+// - a ring over a half-disc, the horizon between them - and the word beside it.
+function brand_logo(): string
+{
+    return '<div class="brand" aria-label="AZIMUT">'
+        . '<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">'
+        . '<path d="M3 16 A13 13 0 0 1 29 16" fill="none" stroke="#fff" stroke-width="5"/>'
+        . '<path d="M0.8 19 H31.2 A15.5 15.5 0 0 1 0.8 19 Z" fill="#fff"/>'
+        . '</svg><span>AZIMUT</span></div>';
+}
+
 // login => hash, keeping only entries that really are password_hash() output -
 // a plain password pasted in by mistake lets nobody in.
 function admin_accounts(): array
@@ -256,6 +267,10 @@ $csrf = (string)$_SESSION['csrf'];
     td.actions { text-align: right; white-space: nowrap; }
     td.actions form { display: inline; }
     .empty { color: var(--dim); padding: 12px 0 0; }
+    .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; color: #fff; }
+    .brand span {
+        font: 800 24px/1 "Montserrat", "Segoe UI", Arial, sans-serif; letter-spacing: .06em;
+    }
     .login { max-width: 360px; margin: 10vh auto 0; }
     .login input { margin-bottom: 12px; }
 </style>
@@ -264,6 +279,7 @@ $csrf = (string)$_SESSION['csrf'];
 <main>
 <?php if ($admin === null): ?>
     <div class="login">
+        <?= brand_logo() ?>
         <h1>Galaxy ATM System</h1>
         <p class="sub">База пользователей КСА</p>
         <?php if ($flash): ?>
@@ -283,6 +299,7 @@ $csrf = (string)$_SESSION['csrf'];
         </form>
     </div>
 <?php else: ?>
+    <?= brand_logo() ?>
     <div class="top">
         <div>
             <h1>База пользователей КСА</h1>
