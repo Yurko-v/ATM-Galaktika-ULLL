@@ -113,6 +113,24 @@ public:
     // empty with no CID either.
     std::wstring MyUserName() const;
 
+    // Whether the squawk server's name table has a name for the controller
+    // logged in. Unknown until the network has given us a CID and the server
+    // has answered for it - and for as long as there is no server, or only one
+    // without the table, since there is nowhere to send a name then. A name in
+    // the config's "UserNames" counts as one.
+    enum class RegisteredNameState { Unknown, Missing, Known };
+    RegisteredNameState MyRegisteredName() const;
+
+    // The Регистрация window's "Отправить": enters 'name' (as
+    // NormalizeEnteredName made it) for our CID, on a worker thread. Done once
+    // the table holds a name for us - the one sent, or one that was there
+    // already - and the Пользователь block shows it from then on; Failed with a
+    // line for the window saying why.
+    enum class NameSubmitState { Idle, Sending, Done, Failed };
+    void SubmitMyName(const std::wstring& name);
+    NameSubmitState MyNameSubmit(std::wstring* message = NULL) const;
+    void ResetNameSubmit();
+
     // The bookings that decide which restricted areas are up right now. Handed
     // over whole, like the сигметы, so a frame that starts reading them cannot
     // have them replaced underneath it. Never null.
@@ -221,6 +239,13 @@ private:
     mutable std::mutex m_identityMutex;
     VatsimIdentity m_identity;
     std::string m_identityAskedFor;   // main thread only
+
+    // The Регистрация window's name on its way to the server - one send at a
+    // time, its state under m_identityMutex, since what comes back is written
+    // into m_identity too.
+    std::thread m_nameSubmit;
+    NameSubmitState m_nameSubmitState = NameSubmitState::Idle;
+    std::wstring m_nameSubmitMessage;
 
     // And once more for the day's airspace use plan, which is what says whether
     // a restricted area exists at this moment.
@@ -653,6 +678,17 @@ private:
     ULONGLONG m_authStartTick;  // when "Вход" was pressed
     bool Authorized() const { return m_authState == AuthState::LoggedIn; }
     void TickAuth();            // fast timer: animates the check and ends it
+    void StartAuthCheck();      // LOGIN - or the Регистрация window closing
+
+    // Регистрация пользователя: the window LOGIN opens instead of starting the
+    // check when the squawk server's table has no name for this CID (see
+    // CGalaxyATMSystemPlugin::MyRegisteredName). A field that opens EuroScope's
+    // edit box, a line saying how the name will read or why it cannot be sent,
+    // and "Отправить" / "Позже" - the check starts once it closes either way.
+    bool m_nameWindowOpen;
+    std::wstring m_nameTyped;     // as it came back from the edit box
+    std::wstring m_nameProblem;   // why "Отправить" did not send it, until the next edit
+    void DrawNameWindow(HDC hDC);
     POINT m_dragOffset;         // cursor->window offset captured on an АТИС drag
     UINT_PTR m_timerId;         // 1s tick that keeps the clock live
     UINT_PTR m_pollTimerId;     // fast tick that watches the side mouse buttons
@@ -814,6 +850,12 @@ const int SO_AUTH_LOGIN   = 90;    // "LOGIN" on the menu bar - starts the Ав�
 
 const int SO_MENU_BAR     = 91;    // the whole menu bar, so a click on it never reaches TopSky's menu below
 
+// Регистрация пользователя - the window LOGIN opens for a controller the server has no name for.
+const int SO_NAME_WINDOW  = 93;    // the whole card, so a click on it never reaches the radar
+const int SO_NAME_FIELD   = 94;    // the name field - opens EuroScope's edit box
+const int SO_NAME_SEND    = 95;    // "Отправить"
+const int SO_NAME_LATER   = 96;    // "Позже" - logs in without a name
+
 const int SO_ALTFILTER_FROM     = 6;
 const int SO_ALTFILTER_TO       = 7;
 const int SO_ALTFILTER_USE_CHK  = 8;
@@ -891,3 +933,4 @@ const int FN_ALTFILTER_FROM = 300;
 const int FN_ALTFILTER_TO   = 301;
 const int FN_CODE_FILTER    = 302;   // the code block's inline entry field
 const int FN_RC_FILTER      = 303;   // the sector list's callsign filter
+const int FN_NAME_ENTRY     = 304;   // the Регистрация window's name field

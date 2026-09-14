@@ -45,8 +45,10 @@ CREATE TABLE IF NOT EXISTS network_controllers (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- The name each controller is shown under on the Пользователь block, by CID.
--- Filled in by hand (phpMyAdmin) for the names the plug-in's own reading of the
--- VATSIM name gets wrong, or to give the patronymic the network never has.
+-- Entered by the controller from the plug-in's Регистрация window when there is
+-- none yet (POST api/name.php, which never overwrites a name), or by hand in
+-- phpMyAdmin for the names the plug-in's own reading of the VATSIM name gets
+-- wrong, or to give the patronymic the network never has.
 -- Written out in full - "Велбовец Юрий Владимирович" - or already shortened,
 -- "Велбовец Ю.В."; the plug-in shortens it either way. See api/name.php.
 CREATE TABLE IF NOT EXISTS user_names (

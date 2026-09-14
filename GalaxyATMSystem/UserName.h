@@ -22,6 +22,11 @@ struct VatsimIdentity
     std::wstring registeredName;
     bool registeredAsked = false;
 
+    // The server has the name table at all, so a name can be sent to it - a
+    // server set up before the table was added answers the question too, but
+    // with nowhere to put one.
+    bool registeredTable = false;
+
     bool Empty() const { return cid.empty(); }
 };
 
@@ -41,11 +46,32 @@ bool ParseVatsimIdentity(const std::string& body, const std::string& callsign, V
 // 'apiKey' are the squawk client's. Blocking - a worker thread's job.
 //
 // True when the server has answered, and 'name' is then what it said - empty
-// when no name is entered, or when the server predates the table (404). False
-// when there is no answer to go on yet - no network, or the server not seeing
-// us online in the first minute after logging in - so it is worth asking again.
+// when no name is entered, or when the server predates the table (404, and
+// 'hasTable' false). False when there is no answer to go on yet - no network,
+// or the server not seeing us online in the first minute after logging in - so
+// it is worth asking again.
 bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
-    const std::string& position, std::wstring& name);
+    const std::string& position, std::wstring& name, bool& hasTable);
+
+// Enters our own name in that table, for a controller it has none for - what
+// the Регистрация window sends. 'name' as NormalizeEnteredName made it.
+// Blocking - a worker thread's job.
+//
+// True when the table holds a name for us afterwards, and 'stored' is then that
+// name: the one sent, or the one that was already there, which the server keeps.
+// False otherwise, with the server's reason in 'error' ("not_online",
+// "bad_name", "network_stale", ...), "network" when no answer came at all, or
+// "http_<status>" when the answer carried no reason.
+bool SubmitRegisteredName(const std::string& baseUrl, const std::string& apiKey,
+    const std::string& position, const std::wstring& name, std::wstring& stored, std::string& error);
+
+// What was typed into the Регистрация window, put the way it is sent: surname,
+// first name and patronymic in full, capitalised - "Велбовец Юрий
+// Владимирович" - or shortened to "Велбовец Ю." when there is no patronymic to
+// tell the words apart by. "Имя Отчество Фамилия" is turned round, and initials
+// typed with or without full stops are accepted. Empty when it cannot be a
+// name, with the reason, in Russian, for the window in 'problem'.
+std::wstring NormalizeEnteredName(const std::wstring& typed, std::wstring& problem);
 
 // The name the way the Пользователь block prints it, "Фамилия И.О.", in Russian:
 // "Yuriy Velbovets" -> "Велбовец Ю.", "Велбовец Юрий Владимирович" ->

@@ -36,7 +36,7 @@
 //
 //   "Sigmets": {
 //     "Enabled": true,
-//     "RefreshMinutes": 10,
+//     "RefreshMinutes": 1,
 //     "Firs": [ "ULLL", "UUWV" ]
 //   }
 //
@@ -64,9 +64,9 @@
 //     "ItemsFile": "Zones.ULLL.json",
 //     "TopSkyAreas": "C:/.../Plugins/TopSky Peterburg/TopSkyAreas.txt",
 //     "AupUrl": "https://aup.vatsim-petersburg.com",
-//     "AupRefreshMinutes": 10,
+//     "AupRefreshMinutes": 1,
 //     "NotamSource": "",
-//     "NotamRefreshMinutes": 15,
+//     "NotamRefreshMinutes": 1,
 //     "ShowNotamAreas": false
 //   }
 //
@@ -307,10 +307,10 @@ private:
     std::wstring m_AtisTextEn;
     std::wstring m_AtisMessage = L"ATIS TEXT NOT CONFIGURED - edit GalaxyATMSystem.json";
     bool m_AtisLive = true;
-    int  m_AtisRefreshMin = 2;
+    int  m_AtisRefreshMin = 1;
     int  m_AtisTopOffset = 22;
     bool m_SigmetsEnabled = true;
-    int  m_SigmetRefreshMin = 10;
+    int  m_SigmetRefreshMin = 1;
     std::vector<std::wstring> m_SigmetFirs = { L"ULLL" };   // upper-cased; empty = all
     ApwSettings m_Apw;
 
@@ -320,10 +320,10 @@ private:
     ZoneStyle m_ZoneRestricted = { Theme::ZoneFillRestricted, Theme::ZoneLineRestricted, Theme::ZoneAlphaRestricted };
     ZoneStyle m_ZoneDanger     = { Theme::ZoneFillDanger,     Theme::ZoneLineDanger,     Theme::ZoneAlphaDanger };
     std::string m_AupUrl;
-    int  m_AupRefreshMin = 10;
+    int  m_AupRefreshMin = 1;
     bool m_ShowNotamAreas = false;
     std::string m_NotamSource;
-    int  m_NotamRefreshMin = 15;
+    int  m_NotamRefreshMin = 1;
     std::string m_SquawkServerUrl;
     std::string m_SquawkApiKey;
     int  m_SquawkPollSeconds = 15;

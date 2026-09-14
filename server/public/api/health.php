@@ -27,6 +27,6 @@ json_out(200, [
     // Whether the optional second lock is on; never the key itself.
     'api_key'             => api_key_required(),
     'active'              => $active,
-    // How many controllers have a name entered by hand - a count, not the names.
+    // How many controllers have a name entered - a count, not the names.
     'user_names'          => $userNames,
 ]);

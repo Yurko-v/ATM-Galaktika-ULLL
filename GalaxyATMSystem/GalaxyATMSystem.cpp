@@ -479,6 +479,8 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
         m_atisFetch.join();
     if (m_identityFetch.joinable())
         m_identityFetch.join();
+    if (m_nameSubmit.joinable())
+        m_nameSubmit.join();
     if (m_aupFetch.joinable())
         m_aupFetch.join();
     if (m_notamFetch.joinable())
@@ -647,13 +649,28 @@ void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
             if (found.Empty() && !FetchVatsimIdentity(callsign, found))
                 return;
 
-            // The name entered by hand on the server, once the network has
-            // given us a CID for it to be found by.
-            if (!found.registeredAsked)
-                found.registeredAsked = url.empty()
-                    || FetchRegisteredName(url, key, callsign, found.registeredName);
+            // The name entered on the server, once the network has given us a
+            // CID for it to be found by - and asked for again every time, since
+            // it can be entered or put right there at any moment.
+            std::wstring name = found.registeredName;
+            bool table = found.registeredTable;
+            const bool answered = url.empty() || FetchRegisteredName(url, key, callsign, name, table);
 
             std::lock_guard<std::mutex> lock(m_identityMutex);
+            if (answered)
+            {
+                found.registeredName = name;
+                found.registeredTable = table;
+                found.registeredAsked = true;
+            }
+            else if (_stricmp(m_identity.callsign.c_str(), callsign.c_str()) == 0)
+            {
+                // No answer: the last one stands - including a name the
+                // Регистрация window has stored while this was out.
+                found.registeredName = m_identity.registeredName;
+                found.registeredTable = m_identity.registeredTable;
+                found.registeredAsked = m_identity.registeredAsked;
+            }
             m_identity = found;
         });
 }
@@ -693,6 +710,97 @@ std::wstring CGalaxyATMSystemPlugin::MyUserName() const
     CController me = ControllerMyself();
     std::wstring name = me.IsValid() ? RussianShortName(Widen(me.GetFullName())) : L"";
     return !name.empty() ? name : id.cid;
+}
+
+CGalaxyATMSystemPlugin::RegisteredNameState CGalaxyATMSystemPlugin::MyRegisteredName() const
+{
+    const std::string position = MyPosition();
+    std::lock_guard<std::mutex> lock(m_identityMutex);
+    if (m_identity.Empty() || _stricmp(m_identity.callsign.c_str(), position.c_str()) != 0)
+        return RegisteredNameState::Unknown;
+    if (!m_identity.registeredName.empty() || !m_config.UserName(m_identity.cid).empty())
+        return RegisteredNameState::Known;
+    if (!m_identity.registeredAsked || !m_identity.registeredTable)
+        return RegisteredNameState::Unknown;
+    return RegisteredNameState::Missing;
+}
+
+namespace
+{
+    // The Регистрация window's line for a name the server did not take.
+    std::wstring NameSubmitMessage(const std::string& error)
+    {
+        if (error == "network")
+            return L"Нет связи с сервером";
+        if (error == "not_online")
+            return L"Сервер пока не видит вас в сети - повторите через минуту";
+        if (error == "network_stale")
+            return L"Сервер не получает данные VATSIM - повторите позже";
+        if (error == "bad_name")
+            return L"Сервер не принял имя - проверьте, как оно написано";
+        if (error == "rate_limited")
+            return L"Слишком часто - повторите через минуту";
+        // A server from before names could be sent: GET only.
+        if (error == "method_not_allowed" || error == "http_404")
+            return L"Сервер ещё не принимает имена";
+        return L"Сервер не принял имя (" + Widen(error.c_str()) + L")";
+    }
+}
+
+void CGalaxyATMSystemPlugin::SubmitMyName(const std::wstring& name)
+{
+    const std::string position = MyPosition();
+    {
+        std::lock_guard<std::mutex> lock(m_identityMutex);
+        if (m_nameSubmitState == NameSubmitState::Sending)
+            return;
+        m_nameSubmitState = NameSubmitState::Sending;
+        m_nameSubmitMessage.clear();
+    }
+    if (m_nameSubmit.joinable())
+        m_nameSubmit.join();   // the previous send is finished - it set its state last
+
+    std::string url = m_config.SquawkServerUrl();
+    std::string key = m_config.SquawkApiKey();
+    m_nameSubmit = std::thread([this, name, position, url, key]()
+        {
+            std::wstring stored;
+            std::string error;
+            const bool ok = SubmitRegisteredName(url, key, position, name, stored, error);
+
+            std::lock_guard<std::mutex> lock(m_identityMutex);
+            if (ok)
+            {
+                // Straight onto the Пользователь block, without waiting for a
+                // reconnect to ask the server again.
+                if (_stricmp(m_identity.callsign.c_str(), position.c_str()) == 0)
+                    m_identity.registeredName = stored;
+                m_nameSubmitState = NameSubmitState::Done;
+            }
+            else
+            {
+                m_nameSubmitState = NameSubmitState::Failed;
+                m_nameSubmitMessage = NameSubmitMessage(error);
+            }
+        });
+}
+
+CGalaxyATMSystemPlugin::NameSubmitState CGalaxyATMSystemPlugin::MyNameSubmit(std::wstring* message) const
+{
+    std::lock_guard<std::mutex> lock(m_identityMutex);
+    if (message != NULL)
+        *message = m_nameSubmitMessage;
+    return m_nameSubmitState;
+}
+
+void CGalaxyATMSystemPlugin::ResetNameSubmit()
+{
+    std::lock_guard<std::mutex> lock(m_identityMutex);
+    if (m_nameSubmitState != NameSubmitState::Sending)
+    {
+        m_nameSubmitState = NameSubmitState::Idle;
+        m_nameSubmitMessage.clear();
+    }
 }
 
 std::shared_ptr<const std::vector<Sigmet>> CGalaxyATMSystemPlugin::Sigmets() const
@@ -800,20 +908,15 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
     m_squawk.SetPosition(SquawkReady(false) ? MyPosition() : "");
 
     // Our CID and name live only in the datafeed, and only while we are really
-    // on the network. A new callsign is asked about straight away; one the
-    // feed does not list yet - or one the squawk server has not yet answered
-    // for with its name table - once a minute until it does.
+    // on the network. A new callsign is asked about straight away, and then
+    // again every minute: the feed until it lists us, and the squawk server's
+    // name table for as long as we are on - so a name entered or put right
+    // there is on the Пользователь block within a minute, not after a reconnect.
     int ct = GetConnectionType();
     std::string position = MyPosition();
     if ((ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !position.empty())
     {
-        bool known;
-        {
-            std::lock_guard<std::mutex> lock(m_identityMutex);
-            known = _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0
-                && m_identity.registeredAsked;
-        }
-        if (position != m_identityAskedFor || (!known && Counter % 60 == 0))
+        if (position != m_identityAskedFor || Counter % 60 == 0)
             StartIdentityFetch(position);
     }
 
@@ -853,10 +956,10 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
     if (hpa > 0)
         ApplyQnhHpa(hpa);
 
-    // Re-fetch every 15 minutes for as long as EuroScope hasn't delivered a
-    // METAR of its own, so the readout can't sit frozen at its startup value
-    // for a whole session.
-    if (Counter > 0 && Counter % 900 == 0)
+    // Re-fetch every minute for as long as EuroScope hasn't delivered a METAR
+    // of its own, so the readout follows a new report as soon as it is out
+    // rather than sitting at its startup value.
+    if (Counter > 0 && Counter % 60 == 0)
         StartMetarFetch();
 }
 
@@ -1525,6 +1628,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 {
     m_panelArea = { 0, 0, 0, 0 };
     m_visible = true;
+    m_nameWindowOpen = false;
     m_collapsed = false;
     m_dragOffset = { 0, 0 };
 
@@ -1720,7 +1824,9 @@ void CGalaxyATMSystemRadarScreen::GetUserInfo(std::wstring& designation,
         role = L"—";
     }
 
-    user = Plugin()->MyUserName();
+    // Nobody is anybody until LOGIN has been pressed: the Авторизация card
+    // says so rather than naming whoever EuroScope is connected as.
+    user = (m_authState == AuthState::LoggedOut) ? std::wstring() : Plugin()->MyUserName();
     if (user.empty())
         user = L"user ?";
 }
@@ -2184,6 +2290,21 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
     // away along with it.
     if (!m_collapsed)
         DrawMenuBar(hDC);
+
+    // Регистрация, over the bar whose LOGIN opened it. Once the server holds a
+    // name for us it closes by itself and the check goes on.
+    if (m_nameWindowOpen && !Authorized())
+    {
+        if (Plugin()->MyNameSubmit() == CGalaxyATMSystemPlugin::NameSubmitState::Done)
+        {
+            m_nameWindowOpen = false;
+            StartAuthCheck();
+        }
+        else
+        {
+            DrawNameWindow(hDC);
+        }
+    }
 
     // The panel's windows open only once it has been logged into.
     if (Authorized())
@@ -4615,6 +4736,137 @@ void CGalaxyATMSystemRadarScreen::TickAuth()
     RequestRefresh();   // the bar moves on the fast tick, not the 1 s one
 }
 
+void CGalaxyATMSystemRadarScreen::StartAuthCheck()
+{
+    if (m_authState != AuthState::LoggedOut)
+        return;
+    m_authState = AuthState::Checking;
+    m_authStartTick = GetTickCount64();
+    RequestRefresh();
+}
+
+// ---- Регистрация пользователя --------------------------------------------------
+// In the АТИС window's dress - the olive card, the shaded title bar and the
+// light rounded edge - and over the middle of the radar, since the panel does
+// not open until it is closed.
+void CGalaxyATMSystemRadarScreen::DrawNameWindow(HDC hDC)
+{
+    const int kTitleH = 24, kPad = 12, kLine = 18, kFieldH = 24, kBtnW = 96, kBtnH = 22, kGap = 8;
+    const int W = 400;
+    const int H = kTitleH + kPad + 2 * kLine + 6 + kFieldH + 6 + kLine + kGap + kBtnH + kPad;
+
+    RECT ra = GetRadarArea();
+    RECT win;
+    win.left   = ra.left + max(0, ((ra.right - ra.left) - W) / 2);
+    win.top    = ra.top + max(0, ((ra.bottom - ra.top) - H) / 3);
+    win.right  = win.left + W;
+    win.bottom = win.top + H;
+
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+
+    HRGN rgn = Theme::WinRegion(win);
+    SelectClipRgn(hDC, rgn);
+    Theme::FlatFill(hDC, win, Theme::WinBody);
+    RECT title = { win.left, win.top, win.right, win.top + kTitleH };
+    Theme::VGradient(hDC, title, Theme::WinTitleTop, Theme::WinTitleBot);
+    Theme::DrawLine(hDC, title, L"Регистрация пользователя", m_fonts.WinTitle, Theme::WinTitleText,
+        DT_CENTER | DT_VCENTER);
+    SelectClipRgn(hDC, NULL);
+    DeleteObject(rgn);
+    Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
+
+    // First, so the field and the buttons registered after it win the click,
+    // and a click anywhere else on the card goes nowhere.
+    AddScreenObject(SO_NAME_WINDOW, "NAME_WINDOW", win, false, "");
+
+    std::wstring message;
+    const CGalaxyATMSystemPlugin::NameSubmitState state = Plugin()->MyNameSubmit(&message);
+    const bool sending = (state == CGalaxyATMSystemPlugin::NameSubmitState::Sending);
+
+    const int left = win.left + kPad, right = win.right - kPad;
+    int y = title.bottom + kPad;
+    RECT intro1 = { left, y, right, y + kLine };
+    Theme::DrawLine(hDC, intro1, L"Вас нет в базе пользователей КСА.", m_fonts.Body, Theme::Text,
+        DT_LEFT | DT_VCENTER);
+    y += kLine;
+    RECT intro2 = { left, y, right, y + kLine };
+    Theme::DrawLine(hDC, intro2, L"Введите фамилию, имя и отчество по-русски:", m_fonts.Body, Theme::Text,
+        DT_LEFT | DT_VCENTER);
+    y += kLine + 6;
+
+    RECT field = { left, y, right, y + kFieldH };
+    Theme::OutlineBox(hDC, field, Theme::ControlFill, Theme::BorderStrong);
+    RECT fieldText = { field.left + 6, field.top, field.right - 6, field.bottom };
+    if (m_nameTyped.empty())
+        Theme::DrawLine(hDC, fieldText, L"Иванов Иван Иванович", m_fonts.Body, Theme::MenuTextDisabled,
+            DT_LEFT | DT_VCENTER);
+    else
+        Theme::DrawLine(hDC, fieldText, m_nameTyped, m_fonts.Body, Theme::Text,
+            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+    if (!sending)
+        AddScreenObject(SO_NAME_FIELD, "NAME_FIELD", field, false, "Нажмите, чтобы ввести имя");
+    y += kFieldH + 6;
+
+    // Under the field, whichever matters most: the send under way, why it did
+    // not go, or how what is typed will read on the Пользователь block.
+    std::wstring problem;
+    const std::wstring normalized = NormalizeEnteredName(m_nameTyped, problem);
+    std::wstring status;
+    COLORREF statusColor = Theme::TextDim;
+    if (sending)
+    {
+        status = L"Отправка...";
+        statusColor = Theme::DuplicateText;
+    }
+    else if (!m_nameProblem.empty())
+    {
+        status = m_nameProblem;
+        statusColor = Theme::DistressText;
+    }
+    else if (state == CGalaxyATMSystemPlugin::NameSubmitState::Failed)
+    {
+        status = message;
+        statusColor = Theme::DistressText;
+    }
+    else if (!normalized.empty())
+    {
+        const std::wstring shown = RussianShortName(normalized);
+        status = L"В блоке \"Пользователь\": " + (shown.empty() ? normalized : shown);
+    }
+    else if (!m_nameTyped.empty())
+    {
+        status = problem;
+        statusColor = Theme::DistressText;
+    }
+    else
+    {
+        status = L"Без отчества: Иванов Иван";
+    }
+    RECT statusR = { left, y, right, y + kLine };
+    Theme::DrawLine(hDC, statusR, status, m_fonts.Small, statusColor, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+    y += kLine + kGap;
+
+    // The АТИС window's OK, twice. A button that cannot be pressed yet is
+    // drawn dark and registers nothing.
+    auto button = [&](const RECT& b, const wchar_t* text, bool enabled,
+        int objType, const char* objId, const char* tooltip)
+    {
+        Theme::FlatFill(hDC, b, enabled ? Theme::ButtonFace : Theme::ScrollEdge);
+        Theme::FlatFrame(hDC, b, 1, Theme::WinFrame);
+        Theme::DrawLine(hDC, b, text, m_fonts.Body, enabled ? Theme::ButtonText : Theme::MenuTextDisabled,
+            DT_CENTER | DT_VCENTER);
+        if (enabled)
+            AddScreenObject(objType, objId, b, false, tooltip);
+    };
+    RECT later = { right - kBtnW, y, right, y + kBtnH };
+    RECT send  = { later.left - kGap - kBtnW, y, later.left - kGap, y + kBtnH };
+    button(send, L"Отправить", !sending && !normalized.empty(), SO_NAME_SEND, "NAME_SEND", "Записать имя в базу");
+    button(later, L"Позже", !sending, SO_NAME_LATER, "NAME_LATER", "Войти без регистрации");
+
+    RestoreDC(hDC, saved);
+}
+
 int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
 {
     const bool checking = (m_authState == AuthState::Checking);
@@ -5310,10 +5562,12 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
     // lands on the bar's own object.
     const int kBtnLead = 40;         // last item -> LOGIN, at the least
     const int kBtnPastCentre = 440;  // the middle of the bar -> LOGIN
-    const int kBtnPadX = 8;    // text -> frame, either side
+    // A size under the panel's own text, so the two sit a little lighter on
+    // the bar than the menu items beside them.
+    const int kBtnPadX = 6;    // text -> frame, either side
     const int kBtnGap  = 6;    // between the two
-    const int kBtnH    = 20;
-    HFONT btnFont = m_fonts.Body;
+    const int kBtnH    = 18;
+    HFONT btnFont = m_fonts.Small;
     SIZE szLogin  = Theme::MeasureText(hDC, btnFont, L"LOGIN");
     SIZE szBypass = Theme::MeasureText(hDC, btnFont, L"Bypass");
     const int loginW  = szLogin.cx + 2 * kBtnPadX;
@@ -6974,13 +7228,46 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
+    // LOGIN starts the check straight away - unless the server has told us it
+    // has no name for this controller, and then the Регистрация window comes
+    // first. With no answer to go on (off the network, no server, or not asked
+    // yet) nobody is held up by it.
     case SO_AUTH_LOGIN:
-        if (m_authState == AuthState::LoggedOut)
+        if (m_authState == AuthState::LoggedOut && !m_nameWindowOpen)
         {
-            m_authState = AuthState::Checking;
-            m_authStartTick = GetTickCount64();
+            if (Plugin()->MyRegisteredName() == CGalaxyATMSystemPlugin::RegisteredNameState::Missing)
+            {
+                m_nameWindowOpen = true;
+                m_nameProblem.clear();
+                Plugin()->ResetNameSubmit();
+            }
+            else
+            {
+                StartAuthCheck();
+            }
         }
         RequestRefresh();
+        break;
+
+    case SO_NAME_WINDOW:
+        break;
+    case SO_NAME_FIELD:
+        GetPlugIn()->OpenPopupEdit(Area, FN_NAME_ENTRY, Narrow(m_nameTyped).c_str());
+        break;
+    case SO_NAME_SEND:
+    {
+        std::wstring problem;
+        const std::wstring name = NormalizeEnteredName(m_nameTyped, problem);
+        if (name.empty())
+            m_nameProblem = problem;
+        else
+            Plugin()->SubmitMyName(name);
+        RequestRefresh();
+        break;
+    }
+    case SO_NAME_LATER:
+        m_nameWindowOpen = false;
+        StartAuthCheck();
         break;
 
     case SO_TIMER_TOGGLE:
@@ -7257,6 +7544,17 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
     // ignores ids that are not its own and drops a duplicate of one click.
     Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
+
+    // The Регистрация field. What it was, and any send that failed, are
+    // forgotten along with the old text.
+    if (FunctionId == FN_NAME_ENTRY)
+    {
+        m_nameTyped = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
+        m_nameProblem.clear();
+        Plugin()->ResetNameSubmit();
+        RequestRefresh();
+        return;
+    }
 
     if (FunctionId == FN_RC_FILTER)
     {
@@ -7546,6 +7844,7 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     if (cmd == ".logout")
     {
         m_authState = AuthState::LoggedOut;
+        m_nameWindowOpen = false;
         m_openDropdown = DropdownKind::None;
         RequestRefresh();
         return true;
