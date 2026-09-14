@@ -114,12 +114,25 @@ public:
     std::wstring MyUserName() const;
 
     // Whether the squawk server's name table has a name for the controller
-    // logged in. Unknown until the network has given us a CID and the server
-    // has answered for it - and for as long as there is no server, or only one
-    // without the table, since there is nowhere to send a name then. A name in
-    // the config's "UserNames" counts as one.
-    enum class RegisteredNameState { Unknown, Missing, Known };
+    // logged in - which is what opens the panel. Offline: not controlling on
+    // the live network, so there is no CID to look for. Waiting: the feed does
+    // not list us yet, or the server has not answered yet. NoServer: no server
+    // configured, or one without the table. Missing: the server has answered,
+    // and has no name for us. Only the server's answer counts - a name in the
+    // config's "UserNames" changes how the name is shown, never who is let in.
+    enum class RegisteredNameState { Offline, Waiting, NoServer, Missing, Known };
     RegisteredNameState MyRegisteredName() const;
+
+    // The server had a name for our CID and has answered since that it has
+    // none - the admin has taken us out of the base. For the rest of the
+    // session LOGIN answers "Доступ приостановлен" instead of offering the
+    // Регистрация window, and a panel that is open is shut. Cleared again
+    // once the server has a name for us.
+    bool AccessSuspended() const;
+
+    // A sweatbox, a simulator or a playback - the trainer, where the panel is
+    // open to whoever sits at it and the Пользователь block says "user".
+    bool TrainingSession() const;
 
     // The Регистрация window's "Отправить": enters 'name' (as
     // NormalizeEnteredName made it) for our CID, on a worker thread. Done once
@@ -238,7 +251,11 @@ private:
     std::thread m_identityFetch;
     mutable std::mutex m_identityMutex;
     VatsimIdentity m_identity;
+    bool m_accessSuspended = false;   // under m_identityMutex - see AccessSuspended
     std::string m_identityAskedFor;   // main thread only
+
+    // Inter looked for and, if it is missing, said so - once a session.
+    bool m_fontChecked = false;
 
     // The Регистрация window's name on its way to the server - one send at a
     // time, its state under m_identityMutex, since what comes back is written
@@ -392,13 +409,13 @@ struct RulerLine
     RECT  labelRect = { 0, 0, 0, 0 };  // where it was actually drawn, for hit testing
 };
 
-// One line of the "Список РЦ" window: the twelve cells as they will be
+// One line of the "Список РЦ" window: the fourteen cells as they will be
 // printed, plus the two things that are read by colour rather than by text.
 // Built fresh every frame from the live flight plans - nothing here is state.
 struct SectorListRow
 {
-    std::wstring cells[12];
-    bool mine = false;      // I am the tracking controller: orange ground, white callsign
+    std::wstring cells[14];
+    bool mine = false;      // I am the tracking controller: yellow ground, lower pane
     int  crdState = 0;      // COORDINATION_STATE_... - colours the "Крд" cell
     std::string callsign;   // for the click that selects the aircraft
 };
@@ -554,6 +571,12 @@ private:
     // diverging variant on RAM or CLAM, the uncontrolled one for a VFR flight
     // nobody has assumed).
     void  DrawTargetSymbols(HDC hDC);
+    // What the last DrawTargetSymbols did with the targets, for ".symbols".
+    struct SymbolStats
+    {
+        int targets = 0, offRadar = 0, filtered = 0, noSymbol = 0, drawn = 0;
+    };
+    SymbolStats m_symbolStats;
     void  FormularClick(const char* sCallsign, POINT pt, int button);
 
     // AHDG pulled with the button held: a line from the aircraft to the cursor
@@ -668,26 +691,47 @@ private:
     bool  m_visible;            // panel shown at all (".ulll")
     bool  m_collapsed;          // collapsed to the small clock/date window
 
-    // Авторизация. Cosmetic only: no login, no password, nothing is checked -
-    // "Вход" runs a short staged "проверка" and then opens the panel. Until it
-    // has, the panel is the header and the Авторизация block alone, and the
-    // things the panel drives (its windows, the ruler, the vectors) stay off.
-    // Deliberately not saved to the ASR, so every session starts at the login.
+    // Авторизация. LOGIN opens the panel for a controller the squawk server's
+    // base has a name for, after a short staged "проверка". Until it has, the
+    // panel is the header and the Авторизация block alone, and the things the
+    // panel drives (its windows, the ruler, the vectors) stay off. In the
+    // trainer nobody is asked: the panel is simply open. Deliberately not saved
+    // to the ASR, so every session starts at the login.
     enum class AuthState { LoggedOut, Checking, LoggedIn };
     AuthState m_authState;
     ULONGLONG m_authStartTick;  // when "Вход" was pressed
-    bool Authorized() const { return m_authState == AuthState::LoggedIn; }
+    std::wstring m_authMessage; // why LOGIN did not open the panel - on the Авторизация card until the next LOGIN
+    bool Authorized() { return m_authState == AuthState::LoggedIn || Plugin()->TrainingSession(); }
     void TickAuth();            // fast timer: animates the check and ends it
     void StartAuthCheck();      // LOGIN - or the Регистрация window closing
+
+    // Bypass - past the base, for when the base is what is broken. Only once
+    // the last LOGIN was turned away by an error (no network, no server, no
+    // answer yet) or the Регистрация window could not send: pressed before
+    // that, it tells the controller to register instead. Never past a
+    // suspension. A panel opened this way is not shut for having no name.
+    bool m_authFailed;          // the last LOGIN, or the name sent after it, ended in an error
+    bool m_authBypassed;        // this panel was opened by Bypass
+    bool BypassAvailable();
+
+    // A notice over the middle of the radar - "Пожалуйста, зарегистрируйтесь...",
+    // "Доступ приостановлен" - until its "OK" or "x". Empty text: none up.
+    std::wstring m_noticeText;
+    void ShowNotice(const std::wstring& text);
+    void DrawNoticeWindow(HDC hDC);
 
     // Регистрация пользователя: the window LOGIN opens instead of starting the
     // check when the squawk server's table has no name for this CID (see
     // CGalaxyATMSystemPlugin::MyRegisteredName). A field that opens EuroScope's
     // edit box, a line saying how the name will read or why it cannot be sent,
-    // and "Отправить" / "Позже" - the check starts once it closes either way.
+    // and "Отправить". There is no other way past it: the check starts only once
+    // the server holds a name, and the panel does not open without one. Its
+    // "x" closes it and leaves the panel shut, until LOGIN opens it again.
     bool m_nameWindowOpen;
     std::wstring m_nameTyped;     // as it came back from the edit box
     std::wstring m_nameProblem;   // why "Отправить" did not send it, until the next edit
+    RECT m_nameArea;              // where it stands - dragged by its title bar
+    bool m_namePositioned;        // put in the middle of the radar once, then left where it is dragged
     void DrawNameWindow(HDC hDC);
     POINT m_dragOffset;         // cursor->window offset captured on an АТИС drag
     UINT_PTR m_timerId;         // 1s tick that keeps the clock live
@@ -753,16 +797,26 @@ private:
 
     // "Список РЦ". The rows themselves are never stored - they are rebuilt from
     // the live flight plans on every frame - so all that lives here is how the
-    // window is arranged: where it stands, how far it is scrolled, what it is
-    // sorted by and what has been typed into its filter.
+    // window is arranged: where it stands, which page each pane is turned to
+    // and what it is sorted by.
     bool m_rcOpen;
     RECT m_rcArea;
     bool m_rcPositioned;
-    int  m_rcScroll;        // first visible row of the upper pane
+    int  m_rcScroll;        // first visible row of the upper pane, a page at a time
     int  m_rcScrollMine;    // and of the lower one
-    int  m_rcSortKey;       // index into kRcSortKeys
+    int  m_rcSortKey;       // the column it is sorted by, index into kRcColumns
     bool m_rcSortAsc;
-    std::wstring m_rcFilter;   // substring match on the callsign, empty = everything
+
+    // How big it is drawn: percent of "New Window.svg"'s own size, 40 being
+    // the two fifths it started at. Set by pulling the grip in its bottom
+    // right corner, or by ".rc <percent>"; remembered in the ASR. Its fonts
+    // are made for the size and made again when it changes.
+    int   m_rcScale;
+    bool  m_rcResizing;     // the grip is being pulled
+    int   m_rcResizeGrab;   // the window's right edge minus the cursor when the pull began
+    HFONT m_rcFont;         // caption and headings
+    HFONT m_rcRowFont;      // the values in the rows
+    int   m_rcFontScale;    // the scale those two were made for, 0 for none
 
     bool m_atisOpen;
     int  m_atisScrollPx;
@@ -847,6 +901,12 @@ const int SO_PANEL_COLLAPSE = 2;   // "-"/"+" in the top-right corner - collapse
 const int SO_TIMER_TOGGLE = 5;     // "C" chip - start/stop the Таймер stopwatch
 
 const int SO_AUTH_LOGIN   = 90;    // "LOGIN" on the menu bar - starts the Авторизация check
+const int SO_AUTH_BYPASS  = 96;    // "Bypass" beside it - past the base, after a LOGIN that failed
+
+// The notice window - see CGalaxyATMSystemRadarScreen::ShowNotice.
+const int SO_NOTICE_WINDOW = 84;   // the whole card, so a click on it never reaches the radar
+const int SO_NOTICE_OK     = 85;
+const int SO_NOTICE_CLOSE  = 86;
 
 const int SO_MENU_BAR     = 91;    // the whole menu bar, so a click on it never reaches TopSky's menu below
 
@@ -854,7 +914,8 @@ const int SO_MENU_BAR     = 91;    // the whole menu bar, so a click on it never
 const int SO_NAME_WINDOW  = 93;    // the whole card, so a click on it never reaches the radar
 const int SO_NAME_FIELD   = 94;    // the name field - opens EuroScope's edit box
 const int SO_NAME_SEND    = 95;    // "Отправить"
-const int SO_NAME_LATER   = 96;    // "Позже" - logs in without a name
+const int SO_NAME_HEADER  = 97;    // its title bar - drag handle
+const int SO_NAME_CLOSE   = 98;    // the "x" on that bar - closes it, the panel stays shut
 
 const int SO_ALTFILTER_FROM     = 6;
 const int SO_ALTFILTER_TO       = 7;
@@ -908,13 +969,9 @@ const int SO_ATIS_LINE_DN  = 36;
 // "Список РЦ" window.
 const int SO_RC_HEADER     = 80;   // title bar - drag handle
 const int SO_RC_CLOSE      = 81;   // its "x"
-const int SO_RC_SORT       = 82;   // the sort chip's right half - steps through the columns
-const int SO_RC_SORT_DIR   = 88;   // its left half - reverses the order
-const int SO_RC_FILTER     = 83;   // the callsign filter field
-const int SO_RC_FILTER_CLR = 84;   // the button that empties it
-const int SO_RC_UP         = 85;   // scroll one row; sObjectId is the pane ("0" upper, "1" lower)
-const int SO_RC_DOWN       = 86;
-const int SO_RC_ROW        = 87;   // one row; sObjectId is its callsign
+const int SO_RC_RESIZE     = 83;   // the grip in its bottom right corner - pulled to scale the window
+const int SO_RC_SORT       = 82;   // a column heading - sorts by it; sObjectId is the column index
+const int SO_RC_ROW        = 87;   // one row - left selects it, right turns its pane a page; sObjectId is its callsign
 
 const int SO_FORMULAR      = 89;   // one aircraft's формуляр - drag to move, click an item; sObjectId is its callsign
 const int SO_FORMULAR_AHDG = 92;   // its AHDG item - pull for a heading, click for the list; sObjectId is the callsign
@@ -932,5 +989,4 @@ const int SO_ZONE_AREA     = 71;   // same, for a запретная/огран�
 const int FN_ALTFILTER_FROM = 300;
 const int FN_ALTFILTER_TO   = 301;
 const int FN_CODE_FILTER    = 302;   // the code block's inline entry field
-const int FN_RC_FILTER      = 303;   // the sector list's callsign filter
 const int FN_NAME_ENTRY     = 304;   // the Регистрация window's name field

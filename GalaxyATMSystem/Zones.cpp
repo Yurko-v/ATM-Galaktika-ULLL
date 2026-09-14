@@ -524,7 +524,11 @@ bool FetchAup(const std::string& url, std::vector<ZoneBooking>& out)
 
     std::vector<ZoneBooking> parsed;
     if (!ParseAup(body, parsed))
+    {
+        Log::Error("aup", "plan " + url + " could not be read (" + std::to_string(body.size())
+            + " bytes): " + Log::Snippet(body, 120));
         return false;
+    }
 
     out = std::move(parsed);
     return true;
@@ -747,13 +751,20 @@ bool FetchNotams(const std::string& source, std::vector<ZoneBooking>& out)
         // by hand and pastes it in - which beats no NOTAMs at all.
         std::ifstream f(Json::Utf8ToWide(source), std::ios::binary);
         if (!f)
+        {
+            Log::Error("notam", "cannot open " + source + " - " + Log::SystemError(GetLastError()));
             return false;
+        }
         body.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     }
 
     std::vector<ZoneBooking> parsed;
     if (!ParseNotams(body, parsed))
+    {
+        Log::Error("notam", "NOTAMs from " + source + " could not be read (" + std::to_string(body.size())
+            + " bytes): " + Log::Snippet(body, 120));
         return false;
+    }
 
     out = std::move(parsed);
     return true;

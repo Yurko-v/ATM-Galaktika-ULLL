@@ -211,7 +211,17 @@ bool FetchVatsimIdentity(const std::string& callsign, VatsimIdentity& out)
     if (!Net::HttpGet(kFeedUrl, body, kMaxBytes, kTimeoutMs))
         return false;
 
-    return ParseVatsimIdentity(body, callsign, out);
+    if (ParseVatsimIdentity(body, callsign, out))
+        return true;
+
+    Json::Value root;
+    if (!Json::ParseUtf8(body, root) || root.kind != Json::Value::Kind::Object || root.Find(L"controllers") == NULL)
+        Log::Error("identity", std::string("feed ") + kFeedUrl + " has no \"controllers\" list ("
+            + std::to_string(body.size()) + " bytes): " + Log::Snippet(body, 120));
+    else
+        Log::Warn("identity", "the VATSIM feed does not list " + callsign
+            + " yet - no CID to look the name up by (a new logon takes a minute or two to appear)");
+    return false;
 }
 
 namespace
@@ -250,24 +260,37 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
     if (!ServerRequestParts(baseUrl, apiKey, position, url, pos, headers))
         return false;
 
+    const std::string endpoint = url + "/name.php?position=" + pos;
     Net::HttpResponse response;
-    if (!Net::HttpRequest("GET", url + "/name.php?position=" + pos, headers, std::string(), response))
+    if (!Net::HttpRequest("GET", endpoint, headers, std::string(), response))
+    {
+        Log::Error("auth", "user base: no answer from " + endpoint + " - see the [net] line before this");
         return false;
+    }
 
     // A server set up before the table existed: there is no name to be had
     // from it, and asking again every minute would not change that.
     if (response.status == 404)
     {
+        Log::Error("auth", "user base: " + endpoint + " answered 404 - the server has no name table (name.php)");
         name.clear();
         hasTable = false;
         return true;
     }
     if (response.status != 200)
+    {
+        Log::Error("auth", "user base: " + endpoint + " answered HTTP " + std::to_string(response.status)
+            + " - " + Log::Snippet(response.body));
         return false;
+    }
 
     Json::Value root;
     if (!Json::ParseUtf8(response.body, root) || root.kind != Json::Value::Kind::Object)
+    {
+        Log::Error("auth", "user base: " + endpoint + " answered something that is not a JSON object - "
+            + Log::Snippet(response.body));
         return false;
+    }
 
     const Json::Value* v = root.Find(L"name");
     name = (v != NULL) ? v->AsString() : L"";
@@ -304,6 +327,7 @@ bool SubmitRegisteredName(const std::string& baseUrl, const std::string& apiKey,
     Net::HttpResponse response;
     if (!Net::HttpRequest("POST", url + "/name.php", headers, body, response))
     {
+        Log::Error("auth", "registration: no answer from " + url + "/name.php - see the [net] line before this");
         error = "network";
         return false;
     }
@@ -324,6 +348,8 @@ bool SubmitRegisteredName(const std::string& baseUrl, const std::string& apiKey,
     error = (e != NULL) ? Json::WideToUtf8(e->AsString()) : std::string();
     if (error.empty())
         error = "http_" + std::to_string(response.status);
+    Log::Error("auth", "registration: " + url + "/name.php refused the name for " + pos + " - HTTP "
+        + std::to_string(response.status) + ", " + error + ", body: " + Log::Snippet(response.body));
     return false;
 }
 

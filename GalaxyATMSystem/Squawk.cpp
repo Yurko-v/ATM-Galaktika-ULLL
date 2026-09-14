@@ -321,6 +321,8 @@ SquawkAnswer SquawkClient::Send(const Request& request, const std::string& url, 
     if (!Net::HttpRequest("POST", url + endpoint, headers, body, response))
     {
         Log("  -> no answer at all (network, DNS or timeout)");
+        ::Log::Error("squawk", "POST " + url + endpoint + " for " + request.callsign
+            + ": no answer - see the [net] line before this");
         answer.error = "network";
         return answer;
     }
@@ -395,21 +397,26 @@ void SquawkClient::Poll(const std::string& url, const std::string& key, const st
     if (!Net::HttpRequest("GET", url + endpoint, headers, std::string(), response, 1024 * 1024))
     {
         Log("GET " + url + endpoint + " -> no answer at all (network, DNS or timeout)");
+        ::Log::Error("squawk", "state: no answer from " + url + endpoint + " - see the [net] line before this");
         return;
     }
     if (response.status != 200)
     {
         Log("GET " + url + endpoint + " -> " + std::to_string(response.status)
             + " " + response.body.substr(0, 200));
+        ::Log::Error("squawk", "state: " + url + endpoint + " answered HTTP " + std::to_string(response.status)
+            + " - " + ::Log::Snippet(response.body));
         return;
     }
 
     Json::Value parsed;
-    if (!Json::ParseUtf8(response.body, parsed))
-        return;
-    const Json::Value* list = parsed.Find(L"assignments");
+    const Json::Value* list = Json::ParseUtf8(response.body, parsed) ? parsed.Find(L"assignments") : nullptr;
     if (list == nullptr || list->kind != Json::Value::Kind::Object)
+    {
+        ::Log::Error("squawk", "state: " + url + endpoint + " answered without an \"assignments\" object - "
+            + ::Log::Snippet(response.body));
         return;
+    }
 
     auto held = std::make_shared<std::map<std::string, std::string>>();
     for (const auto& entry : list->obj)

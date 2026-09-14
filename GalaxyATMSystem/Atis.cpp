@@ -125,5 +125,16 @@ bool FetchVatsimAtis(const std::string& icao, AtisReport& out)
     if (!Net::HttpGet(kFeedUrl, body, kMaxBytes, kTimeoutMs))
         return false;
 
-    return ParseVatsimAtis(body, icao, out);
+    if (ParseVatsimAtis(body, icao, out))
+        return true;
+
+    // Either the feed could not be read as one, or there is simply no ATIS on
+    // the air for the aerodrome - only the first is an error.
+    Json::Value root;
+    if (!Json::ParseUtf8(body, root) || root.kind != Json::Value::Kind::Object || root.Find(L"atis") == NULL)
+        Log::Error("atis", std::string("feed ") + kFeedUrl + " has no \"atis\" list ("
+            + std::to_string(body.size()) + " bytes): " + Log::Snippet(body, 120));
+    else
+        Log::Info("atis", "no ATIS on the air for " + icao + " - the config's letter stands");
+    return false;
 }

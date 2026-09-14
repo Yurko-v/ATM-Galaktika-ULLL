@@ -97,7 +97,8 @@ namespace Theme
 
     // The menu bar across the top of the radar: the panel's own card, so the
     // bar and the panel read as one frame. What works on it is white, and
-    // what does not yet - every menu item, and Bypass - is grey.
+    // what does not yet - every menu item, and Bypass until a LOGIN has
+    // failed - is grey.
     const COLORREF MenuBarFill      = Background;
     const COLORREF MenuText         = RGB(0xFF, 0xFF, 0xFF);
     const COLORREF MenuTextDisabled = RGB(0x9A, 0x9A, 0x9A);
@@ -106,27 +107,27 @@ namespace Theme
     // same lime - the one thing on the block that says it went through.
     const COLORREF AuthGranted   = AtisIndexText;
 
-    // "Список РЦ" - the sector list. Every colour here is "SPISKIRC.svg"'s own:
-    // a white card with the panel's dark ground inset in it, two near-black
-    // panes ruled in white, a grey heading row, and rows whose ground says
-    // whose flight it is - orange for the ones I am tracking, lavender for
-    // everyone else's. Only the callsign and the coordination flag are
-    // coloured on top of that.
-    const COLORREF ListCard      = RGB(0xFE, 0xFA, 0xFB);  // #FEFAFB - the card
-    const COLORREF ListTitleText = RGB(0x8E, 0x8E, 0x8E);  // its caption
-    const COLORREF ListPaneFill  = RGB(0x10, 0x10, 0x11);  // #101011 - a pane, and the filter field
-    const COLORREF ListHeadFill  = RGB(0x3C, 0x3C, 0x3C);  // #3C3C3C - heading row, and the scroll thumb
-    const COLORREF ListThumb     = RGB(0x3C, 0x3C, 0x3C);
-    const COLORREF ListRule      = RGB(0xFF, 0xFF, 0xFF);  // every white rule, frame and control edge
+    // "Список РЦ" - the sector list. Every colour here is "New Window.svg"'s
+    // own: the panel's olive ground at 80 % so the radar shows through round
+    // the window, a grey title bar, two black panes each headed by a row of
+    // grey plates standing on a light band, and rows whose ground says whose
+    // flight it is - yellow for the ones I am tracking, blue for everyone
+    // else's. Values are black; only the coordination flag is coloured.
+    const COLORREF ListGround      = Background;                // #21271C
+    const BYTE     ListGroundAlpha = 204;                       // 80%
+    const COLORREF ListTitleFill = RGB(0x3C, 0x3C, 0x3C);  // #3C3C3C - the title bar
+    const COLORREF ListTitleText = RGB(0xFF, 0xFF, 0xFF);  // its caption and close mark
+    const COLORREF ListPaneFill  = RGB(0x00, 0x00, 0x00);  // a pane, and the rule between two rows
+    const COLORREF ListHeadRule  = RGB(0xD9, 0xD9, 0xD9);  // #D9D9D9 - the band the plates stand on
+    const COLORREF ListHeadFill  = RGB(0x3C, 0x3C, 0x3C);  // #3C3C3C - a heading plate
     const COLORREF ListHeadText  = RGB(0xFF, 0xFF, 0xFF);
-    const COLORREF ListRowMine   = RGB(0xE5, 0xB4, 0x6F);  // #E5B46F - tracked by me
-    const COLORREF ListRowOther  = RGB(0xA7, 0xA8, 0xE0);  // #A7A8E0 - someone else's
-    const COLORREF ListRowRule   = RGB(0x1E, 0x1E, 0x1E);  // #1E1E1E - between two rows
-    const COLORREF ListText      = RGB(0x11, 0x11, 0x11);
-    const COLORREF ListCsMine    = RGB(0xFF, 0xFF, 0xFF);  // callsign, tracked by me
-    const COLORREF ListCsOther   = RGB(0x11, 0x53, 0xC0);  // callsign, anyone else
+    const COLORREF ListRowMine   = RGB(0xF5, 0xE0, 0x87);  // #F5E087 - tracked by me
+    const COLORREF ListRowOther  = RGB(0xC5, 0xE0, 0xF3);  // #C5E0F3 - someone else's
+    const COLORREF ListRowRule   = RGB(0x00, 0x00, 0x00);  // the line between ВыхЭш and ПВО
+    const COLORREF ListText      = RGB(0x00, 0x00, 0x00);
     const COLORREF ListCrdReq    = RGB(0xD8, 0x1B, 0x14);  // coordination asked for, not answered
     const COLORREF ListCrdOk     = RGB(0x0C, 0x9E, 0x2E);  // coordination agreed
+    const COLORREF ListConflict  = RGB(0xD8, 0x1B, 0x14);  // КФ - a конфликтная ситуация
 
     // Ruler (distance/bearing/time measuring line drawn on the radar).
     const COLORREF Ruler        = RGB(0xE0, 0xC9, 0x9A);  // beige
@@ -257,14 +258,58 @@ namespace Theme
     const COLORREF ScrollThumb  = RGB(0x9C, 0x9C, 0x98);
     const COLORREF ScrollEdge   = RGB(0x5C, 0x5C, 0x58);
 
+    // "Список РЦ" is set in Inter, the face "New Window.svg" was drawn in. It
+    // does not come with Windows, so the face is looked for once: "Inter" as
+    // the static fonts install it, "Inter Variable" as the variable one does.
+    // NULL when neither is there - the window falls back to Arial and says so
+    // on its title bar, and the plugin says so in the message window.
+    inline const wchar_t* InterFace()
+    {
+        static int state = -1;   // -1 not looked yet, 0 none, 1 "Inter", 2 "Inter Variable"
+        if (state < 0)
+        {
+            state = 0;
+            HDC dc = GetDC(NULL);
+            if (dc != NULL)
+            {
+                for (int i = 1; i <= 2 && state == 0; i++)
+                {
+                    LOGFONTW lf = {};
+                    lf.lfCharSet = DEFAULT_CHARSET;
+                    wcscpy_s(lf.lfFaceName, i == 1 ? L"Inter" : L"Inter Variable");
+                    bool found = false;
+                    EnumFontFamiliesExW(dc, &lf,
+                        [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int
+                        {
+                            *(bool*)p = true;
+                            return 0;
+                        }, (LPARAM)&found, 0);
+                    if (found)
+                        state = i;
+                }
+                ReleaseDC(NULL, dc);
+            }
+        }
+        return state == 1 ? L"Inter" : state == 2 ? L"Inter Variable" : NULL;
+    }
+
+    // A "Список РЦ" font 'px' tall, in Inter when it is installed.
+    inline HFONT ListFont(int px)
+    {
+        const wchar_t* inter = InterFace();
+        return CreateFontW(-px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, inter != NULL ? inter : L"Arial");
+    }
+
     // Fonts. One plain sans-serif size carries the whole panel; the header
     // clock is the single exception, set a couple of steps larger so the time
-    // can be read from across the desk rather than only up close.
+    // can be read from across the desk rather than only up close. "Список РЦ"
+    // makes its own, at the size it is scaled to - see ListFont.
     struct FontSet
     {
         HFONT Body   = NULL;   // everything on the panel
         HFONT Clock  = NULL;   // the header clock, the one oversized item
-        HFONT List   = NULL;   // "Список РЦ" - its headings and callsigns
         HFONT Small  = NULL;   // ATIS body text; fallback for over-long field values
         HFONT Tiny   = NULL;   // last-resort size for an unusually long callsign/name
         HFONT Large  = NULL;   // ATIS index letter
@@ -293,9 +338,6 @@ namespace Theme
             // namespace L is scaled to match (see GalaxyATMSystem.cpp).
             Body  = mk(-14, FW_NORMAL);
             Clock = mk(-20, FW_BOLD);   // the reference sets the time in bold
-            // The export's heading text brought down to the two fifths the
-            // whole "Список РЦ" window is drawn at.
-            List  = mk(-14, FW_BOLD);
             Small = mk(-12, FW_NORMAL);
             Tiny  = mk(-11, FW_NORMAL);
             Large = mk(-19, FW_SEMIBOLD);
@@ -317,7 +359,7 @@ namespace Theme
 
         void Destroy()
         {
-            for (HFONT* f : { &Body, &Clock, &List, &Small, &Tiny, &Large, &Ruler,
+            for (HFONT* f : { &Body, &Clock, &Small, &Tiny, &Large, &Ruler,
                               &Mono, &MonoBig, &MonoHuge, &WinTitle, &WinTitleSmall,
                               &Menu })
             {

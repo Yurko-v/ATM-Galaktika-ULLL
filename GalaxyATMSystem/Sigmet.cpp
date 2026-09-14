@@ -100,7 +100,13 @@ bool FetchSigmets(const std::vector<std::wstring>& firFilter, std::vector<Sigmet
     if (!Net::HttpGet(kFeedUrl, body, kMaxBytes, kTimeoutMs))
         return false;
 
-    return ParseSigmets(body, firFilter, out);
+    if (!ParseSigmets(body, firFilter, out))
+    {
+        Log::Error("sigmet", std::string("feed ") + kFeedUrl + " is not a JSON array ("
+            + std::to_string(body.size()) + " bytes): " + Log::Snippet(body, 120));
+        return false;
+    }
+    return true;
 }
 
 bool ParseSigmets(const std::string& body,
