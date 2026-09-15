@@ -1,6 +1,9 @@
 #include "pch.h"
 #include "GalaxyATMSystem.h"
 
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
+
 #include <string>
 #include <map>
 #include <set>
@@ -501,8 +504,8 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
         m_atisFetch.join();
     if (m_identityFetch.joinable())
         m_identityFetch.join();
-    if (m_nameSubmit.joinable())
-        m_nameSubmit.join();
+    if (m_login.joinable())
+        m_login.join();
     if (m_aupFetch.joinable())
         m_aupFetch.join();
     if (m_notamFetch.joinable())
@@ -697,15 +700,13 @@ void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
                 }
                 found.registeredName = name;
                 found.registeredTable = table;
-                found.registeredAsked = true;
             }
             else if (_stricmp(m_identity.callsign.c_str(), callsign.c_str()) == 0)
             {
-                // No answer: the last one stands - including a name the
-                // Регистрация window has stored while this was out.
+                // No answer: the last one stands - including a name a LOGIN
+                // has brought back while this was out.
                 found.registeredName = m_identity.registeredName;
                 found.registeredTable = m_identity.registeredTable;
-                found.registeredAsked = m_identity.registeredAsked;
             }
             m_identity = found;
         });
@@ -748,23 +749,11 @@ std::wstring CGalaxyATMSystemPlugin::MyUserName() const
     return !name.empty() ? name : id.cid;
 }
 
-CGalaxyATMSystemPlugin::RegisteredNameState CGalaxyATMSystemPlugin::MyRegisteredName() const
+bool CGalaxyATMSystemPlugin::LiveConnection() const
 {
     // The same test OnTimer asks the feed by: only a live connection has a CID.
     const int ct = GetConnectionType();
-    const std::string position = MyPosition();
-    if ((ct != CONNECTION_TYPE_DIRECT && ct != CONNECTION_TYPE_VIA_PROXY) || position.empty())
-        return RegisteredNameState::Offline;
-
-    std::lock_guard<std::mutex> lock(m_identityMutex);
-    if (m_identity.Empty() || _stricmp(m_identity.callsign.c_str(), position.c_str()) != 0
-        || !m_identity.registeredAsked)
-        return RegisteredNameState::Waiting;
-    if (!m_identity.registeredName.empty())
-        return RegisteredNameState::Known;
-    if (!m_identity.registeredTable)
-        return RegisteredNameState::NoServer;
-    return RegisteredNameState::Missing;
+    return (ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !MyPosition().empty();
 }
 
 bool CGalaxyATMSystemPlugin::AccessSuspended() const
@@ -784,83 +773,117 @@ bool CGalaxyATMSystemPlugin::TrainingSession() const
 
 namespace
 {
-    // The Регистрация window's line for a name the server did not take.
-    std::wstring NameSubmitMessage(const std::string& error)
+    // The Вход window's line for a LOGIN the server did not let in - and
+    // whether it was the service that failed rather than what was typed, which
+    // is what opens Bypass.
+    std::wstring LoginMessage(const std::string& error, bool& serverFault)
     {
+        serverFault = false;
+        if (error == "wrong_credentials")
+            return L"Неверные фамилия, имя, отчество или пароль";
+        if (error == "not_registered")
+            return L"Вы не зарегистрированы в системе КСА";
+        if (error == "rate_limited")
+            return L"Слишком много попыток - подождите минуту";
+        if (error == "bad_request" || error == "bad_json")
+            return L"Сервер не принял запрос - проверьте введённое";
+
+        serverFault = true;
         if (error == "network")
             return L"Нет связи с сервером";
         if (error == "not_online")
             return L"Сервер пока не видит вас в сети - повторите через минуту";
         if (error == "network_stale")
             return L"Сервер не получает данные VATSIM - повторите позже";
-        if (error == "bad_name")
-            return L"Сервер не принял имя - проверьте, как оно написано";
-        if (error == "rate_limited")
-            return L"Слишком часто - повторите через минуту";
-        // A server from before names could be sent: GET only.
-        if (error == "method_not_allowed" || error == "http_404")
-            return L"Сервер ещё не принимает имена";
-        return L"Сервер не принял имя (" + Widen(error.c_str()) + L")";
+        if (error == "no_server")
+            return L"База пользователей недоступна";
+        // A server from before registration, with no login.php.
+        if (error == "http_404" || error == "method_not_allowed")
+            return L"Сервер ещё не поддерживает вход по паролю";
+        return L"Ошибка сервера (" + Widen(error.c_str()) + L")";
     }
 }
 
-void CGalaxyATMSystemPlugin::SubmitMyName(const std::wstring& name)
+void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& surname, const std::wstring& firstName,
+    const std::wstring& patronymic, const std::wstring& password)
 {
     const std::string position = MyPosition();
     {
         std::lock_guard<std::mutex> lock(m_identityMutex);
-        if (m_nameSubmitState == NameSubmitState::Sending)
+        if (m_loginState == LoginState::Sending)
             return;
-        m_nameSubmitState = NameSubmitState::Sending;
-        m_nameSubmitMessage.clear();
+        m_loginState = LoginState::Sending;
+        m_loginMessage.clear();
+        m_loginServerFault = false;
     }
-    if (m_nameSubmit.joinable())
-        m_nameSubmit.join();   // the previous send is finished - it set its state last
+    if (m_login.joinable())
+        m_login.join();   // the previous attempt is finished - it set its state last
 
     std::string url = m_config.SquawkServerUrl();
     std::string key = m_config.SquawkApiKey();
-    m_nameSubmit = std::thread([this, name, position, url, key]()
+    // The password as a copy of its own, not const, so it can be wiped once sent.
+    m_login = std::thread([this, surname, firstName, patronymic, password = std::wstring(password),
+        position, url, key]() mutable
         {
-            std::wstring stored;
+            std::wstring name;
             std::string error;
-            const bool ok = SubmitRegisteredName(url, key, position, name, stored, error);
+            const bool ok = SubmitLogin(url, key, position, surname, firstName, patronymic, password, name, error);
+            if (!password.empty())
+                SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
 
             std::lock_guard<std::mutex> lock(m_identityMutex);
             if (ok)
             {
-                // Straight onto the Пользователь block, without waiting for a
-                // reconnect to ask the server again.
-                if (_stricmp(m_identity.callsign.c_str(), position.c_str()) == 0)
-                    m_identity.registeredName = stored;
+                // Straight onto the Пользователь block, without waiting for the
+                // next minute's question to the server.
+                if (!name.empty() && _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0)
+                    m_identity.registeredName = name;
                 m_accessSuspended = false;
-                m_nameSubmitState = NameSubmitState::Done;
-                Log::Info("auth", "registration: the user base now has \"" + Log::Utf8(stored) + "\" for " + position);
+                m_loginState = LoginState::Done;
+                Log::Info("auth", "LOGIN " + position + ": let in by the user base as \"" + Log::Utf8(name) + "\"");
             }
             else
             {
-                Log::Error("auth", "registration for " + position + " failed: " + error);
-                m_nameSubmitState = NameSubmitState::Failed;
-                m_nameSubmitMessage = NameSubmitMessage(error);
+                m_loginState = LoginState::Failed;
+                m_loginMessage = LoginMessage(error, m_loginServerFault);
+                Log::Error("auth", "LOGIN " + position + " refused: " + error);
             }
         });
 }
 
-CGalaxyATMSystemPlugin::NameSubmitState CGalaxyATMSystemPlugin::MyNameSubmit(std::wstring* message) const
+CGalaxyATMSystemPlugin::LoginState CGalaxyATMSystemPlugin::MyLogin(std::wstring* message, bool* serverFault) const
 {
     std::lock_guard<std::mutex> lock(m_identityMutex);
     if (message != NULL)
-        *message = m_nameSubmitMessage;
-    return m_nameSubmitState;
+        *message = m_loginMessage;
+    if (serverFault != NULL)
+        *serverFault = m_loginServerFault;
+    return m_loginState;
 }
 
-void CGalaxyATMSystemPlugin::ResetNameSubmit()
+void CGalaxyATMSystemPlugin::ResetLogin()
 {
     std::lock_guard<std::mutex> lock(m_identityMutex);
-    if (m_nameSubmitState != NameSubmitState::Sending)
+    if (m_loginState != LoginState::Sending)
     {
-        m_nameSubmitState = NameSubmitState::Idle;
-        m_nameSubmitMessage.clear();
+        m_loginState = LoginState::Idle;
+        m_loginMessage.clear();
+        m_loginServerFault = false;
     }
+}
+
+std::string CGalaxyATMSystemPlugin::RegisterPageUrl() const
+{
+    std::string url = m_config.SquawkServerUrl();
+    while (!url.empty() && (url.back() == '/' || url.back() == ' '))
+        url.pop_back();
+    if (url.empty())
+        return url;
+
+    const size_t api = 4;   // "/api"
+    if (url.size() > api && _stricmp(url.c_str() + url.size() - api, "/api") == 0)
+        url.resize(url.size() - api);
+    return url + "/register/";
 }
 
 std::shared_ptr<const std::vector<Sigmet>> CGalaxyATMSystemPlugin::Sigmets() const
@@ -1710,9 +1733,16 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 {
     m_panelArea = { 0, 0, 0, 0 };
     m_visible = true;
-    m_nameWindowOpen = false;
-    m_nameArea = { 0, 0, 0, 0 };
-    m_namePositioned = false;
+    m_loginWindowOpen = false;
+    m_loginArea = { 0, 0, 0, 0 };
+    m_loginPositioned = false;
+    m_loginDrawnTick = 0;
+    for (RECT& field : m_loginFields)
+        field = { 0, 0, 0, 0 };
+    m_entryField = -1;
+    m_entryPending = -1;
+    m_entryPendingTick = 0;
+    m_entryView = NULL;
     m_collapsed = false;
     m_dragOffset = { 0, 0 };
 
@@ -1833,6 +1863,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
             {
                 it->second->PollRulerButton();
                 it->second->TickAuth();
+                it->second->TickEntry();
             }
         });
     g_pollTimers[pollId] = this;
@@ -2391,42 +2422,21 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
     // Access goes with the base - except in the trainer, which asks nobody. A
     // controller the server has taken out of the base is shut out with
-    // "Доступ приостановлен", Bypass or not. One it has answered it has no
-    // name for is logged out on the spot and handed the Регистрация window -
-    // unless Bypass opened the panel, which is past the base by design. A
-    // server that cannot be asked for a while throws nobody out. A LOGIN
-    // turned away stops saying why once the base knows the controller after all.
-    const CGalaxyATMSystemPlugin::RegisteredNameState nameState = Plugin()->MyRegisteredName();
-    if (m_authState != AuthState::LoggedOut && !Plugin()->TrainingSession())
+    // "Доступ приостановлен", Bypass or not. A server that cannot be asked for
+    // a while throws nobody out.
+    if (m_authState != AuthState::LoggedOut && !Plugin()->TrainingSession() && Plugin()->AccessSuspended())
     {
-        const bool suspended = Plugin()->AccessSuspended();
-        const bool missing = (nameState == CGalaxyATMSystemPlugin::RegisteredNameState::Missing && !m_authBypassed);
-        if (suspended || missing)
-        {
-            m_authState = AuthState::LoggedOut;
-            m_authBypassed = false;
-            m_authFailed = false;
-            m_openDropdown = DropdownKind::None;
-            m_rulerArmed = false;
-            m_rulerPlacing = false;
-        }
-        if (suspended)
-        {
-            m_nameWindowOpen = false;
-            m_authMessage = L"Доступ приостановлен";
-            ShowNotice(m_authMessage);
-            Log::Warn("auth", "panel closed: access suspended - the name was removed from the user base");
-        }
-        else if (missing)
-        {
-            m_nameWindowOpen = true;
-            m_nameProblem.clear();
-            Plugin()->ResetNameSubmit();
-            Log::Warn("auth", "panel closed: the user base has no name for this controller - registration window opened");
-        }
+        m_authState = AuthState::LoggedOut;
+        m_authBypassed = false;
+        m_authFailed = false;
+        m_openDropdown = DropdownKind::None;
+        m_rulerArmed = false;
+        m_rulerPlacing = false;
+        CloseLoginWindow();
+        m_authMessage = L"Доступ приостановлен";
+        ShowNotice(m_authMessage);
+        Log::Warn("auth", "panel closed: access suspended - the name was removed from the user base");
     }
-    if (nameState == CGalaxyATMSystemPlugin::RegisteredNameState::Known)
-        m_authMessage.clear();
 
     DrawPanel(hDC);
 
@@ -2435,24 +2445,29 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
     if (!m_collapsed)
         DrawMenuBar(hDC);
 
-    // Регистрация, over the bar whose LOGIN opened it. Once the server holds a
-    // name for us it closes by itself and the check goes on.
-    if (m_nameWindowOpen && !Authorized())
+    // Вход, over the bar whose LOGIN opened it. Once the server has let the
+    // controller in it closes by itself and the check goes on.
+    if (m_loginWindowOpen && !Authorized())
     {
-        const CGalaxyATMSystemPlugin::NameSubmitState submit = Plugin()->MyNameSubmit();
-        if (submit == CGalaxyATMSystemPlugin::NameSubmitState::Done)
+        bool serverFault = false;
+        const CGalaxyATMSystemPlugin::LoginState login = Plugin()->MyLogin(NULL, &serverFault);
+        if (login == CGalaxyATMSystemPlugin::LoginState::Done)
         {
-            m_nameWindowOpen = false;
+            CloseLoginWindow();
             StartAuthCheck();
         }
         else
         {
-            // A name the server would not take is an attempt that failed, and
-            // Bypass opens for it.
-            if (submit == CGalaxyATMSystemPlugin::NameSubmitState::Failed)
-                m_authFailed = true;
-            DrawNameWindow(hDC);
+            // Only a failure of the service's opens Bypass - never a wrong
+            // name or password.
+            if (login == CGalaxyATMSystemPlugin::LoginState::Failed)
+                m_authFailed = serverFault;
+            DrawLoginWindow(hDC);
         }
+    }
+    else if (m_loginWindowOpen)
+    {
+        CloseLoginWindow();   // the panel is open under it - the trainer needs no login
     }
 
     // The panel's windows open only once it has been logged into.
@@ -5001,8 +5016,8 @@ void CGalaxyATMSystemRadarScreen::ShowNotice(const std::wstring& text)
 
 namespace
 {
-    // The "x" at the end of a dark title bar - the Регистрация window's and
-    // the notice's, drawn as the sector list's is.
+    // The "x" at the end of a dark title bar - the Вход window's and the
+    // notice's, drawn as the sector list's is.
     void DrawCloseCross(HDC hDC, const RECT& close, COLORREF ink)
     {
         const int cx = (close.left + close.right) / 2, cy = (close.top + close.bottom) / 2;
@@ -5019,7 +5034,7 @@ namespace
 }
 
 // ---- Уведомление ---------------------------------------------------------------
-// The Регистрация window's card with nothing in it but the text, wrapped to
+// The Вход window's card with nothing in it but the text, wrapped to
 // the width and as tall as it comes out, and "OK" under it. Over the middle of
 // the radar, and not moved: it is read and closed.
 void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
@@ -5079,30 +5094,33 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// ---- Регистрация пользователя --------------------------------------------------
+// ---- Вход в систему КСА --------------------------------------------------------
 // In the menu bar's colours - its dark card from edge to edge, title included,
 // and buttons framed like LOGIN - with the АТИС window's light rounded edge,
 // over the middle of the radar, since the panel does not open until it closes.
-void CGalaxyATMSystemRadarScreen::DrawNameWindow(HDC hDC)
+// A label and a field a row for Фамилия, Имя, Отчество and Пароль, a line for
+// how it is going, the registration page's address, and "Войти".
+void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
 {
-    const int kTitleH = 24, kPad = 12, kLine = 18, kFieldH = 24, kBtnW = 96, kBtnH = 22, kGap = 8;
-    const int W = 400;
-    const int H = kTitleH + kPad + 2 * kLine + 6 + kFieldH + 6 + kLine + kGap + kBtnH + kPad;
+    const int kTitleH = 24, kPad = 12, kLine = 18, kRowH = 24, kRowGap = 6, kLabelW = 84;
+    const int kBtnW = 96, kBtnH = 22, kGap = 8;
+    const int W = 420;
+    const int H = kTitleH + kPad + kLine + kRowGap + LF_COUNT * (kRowH + kRowGap) + 2 * kLine + kGap + kBtnH + kPad;
 
     // In the middle of the radar the first time, then wherever its title bar
     // was dragged to - kept inside the radar area, so a resize cannot lose it.
     RECT ra = GetRadarArea();
-    if (!m_namePositioned)
+    if (!m_loginPositioned)
     {
-        m_nameArea.left = ra.left + max(0, ((ra.right - ra.left) - W) / 2);
-        m_nameArea.top  = ra.top + max(0, ((ra.bottom - ra.top) - H) / 3);
-        m_namePositioned = true;
+        m_loginArea.left = ra.left + max(0, ((ra.right - ra.left) - W) / 2);
+        m_loginArea.top  = ra.top + max(0, ((ra.bottom - ra.top) - H) / 3);
+        m_loginPositioned = true;
     }
-    m_nameArea.left   = max(ra.left, min(m_nameArea.left, ra.right - W));
-    m_nameArea.top    = max(ra.top, min(m_nameArea.top, ra.bottom - H));
-    m_nameArea.right  = m_nameArea.left + W;
-    m_nameArea.bottom = m_nameArea.top + H;
-    const RECT win = m_nameArea;
+    m_loginArea.left   = max(ra.left, min(m_loginArea.left, ra.right - W));
+    m_loginArea.top    = max(ra.top, min(m_loginArea.top, ra.bottom - H));
+    m_loginArea.right  = m_loginArea.left + W;
+    m_loginArea.bottom = m_loginArea.top + H;
+    const RECT win = m_loginArea;
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
@@ -5111,7 +5129,7 @@ void CGalaxyATMSystemRadarScreen::DrawNameWindow(HDC hDC)
     SelectClipRgn(hDC, rgn);
     Theme::FlatFill(hDC, win, Theme::MenuBarFill);
     RECT title = { win.left, win.top, win.right, win.top + kTitleH };
-    Theme::DrawLine(hDC, title, L"Регистрация пользователя", m_fonts.WinTitle, Theme::MenuText,
+    Theme::DrawLine(hDC, title, L"Вход в систему КСА", m_fonts.WinTitle, Theme::MenuText,
         DT_CENTER | DT_VCENTER);
     // Everything under the title on a sunken dark plate in a light frame, the
     // way the ФС block's list sits in its box.
@@ -5128,94 +5146,253 @@ void CGalaxyATMSystemRadarScreen::DrawNameWindow(HDC hDC)
 
     // The card first, so everything registered after it wins the click and a
     // click anywhere else on it goes nowhere; the "x" after the bar it is on.
-    AddScreenObject(SO_NAME_WINDOW, "NAME_WINDOW", win, false, "");
-    AddScreenObject(SO_NAME_HEADER, "NAME_HEADER", title, true, "Перетащите окно");
-    AddScreenObject(SO_NAME_CLOSE, "NAME_CLOSE", close, false, "Закрыть");
+    AddScreenObject(SO_LOGIN_WINDOW, "LOGIN_WINDOW", win, false, "");
+    AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", title, true, "Перетащите окно");
+    AddScreenObject(SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, false, "Закрыть");
 
     std::wstring message;
-    const CGalaxyATMSystemPlugin::NameSubmitState state = Plugin()->MyNameSubmit(&message);
-    const bool sending = (state == CGalaxyATMSystemPlugin::NameSubmitState::Sending);
+    const CGalaxyATMSystemPlugin::LoginState state = Plugin()->MyLogin(&message);
+    const bool sending = (state == CGalaxyATMSystemPlugin::LoginState::Sending);
 
     const int left = win.left + kPad, right = win.right - kPad;
     int y = title.bottom + kPad;
-    RECT intro1 = { left, y, right, y + kLine };
-    Theme::DrawLine(hDC, intro1, L"Вас нет в базе пользователей КСА.", m_fonts.Body, Theme::Text,
+    RECT intro = { left, y, right, y + kLine };
+    Theme::DrawLine(hDC, intro, L"Введите данные, указанные при регистрации:", m_fonts.Body, Theme::Text,
         DT_LEFT | DT_VCENTER);
-    y += kLine;
-    RECT intro2 = { left, y, right, y + kLine };
-    Theme::DrawLine(hDC, intro2, L"Введите фамилию, имя и отчество по-русски:", m_fonts.Body, Theme::Text,
-        DT_LEFT | DT_VCENTER);
-    y += kLine + 6;
+    y += kLine + kRowGap;
 
-    RECT field = { left, y, right, y + kFieldH };
-    Theme::OutlineBox(hDC, field, Theme::ControlFill, Theme::BorderStrong);
-    RECT fieldText = { field.left + 6, field.top, field.right - 6, field.bottom };
-    if (m_nameTyped.empty())
-        Theme::DrawLine(hDC, fieldText, L"Иванов Иван Иванович", m_fonts.Body, Theme::MenuTextDisabled,
-            DT_LEFT | DT_VCENTER);
-    else
-        Theme::DrawLine(hDC, fieldText, m_nameTyped, m_fonts.Body, Theme::Text,
-            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-    if (!sending)
-        AddScreenObject(SO_NAME_FIELD, "NAME_FIELD", field, false, "Нажмите, чтобы ввести имя");
-    y += kFieldH + 6;
+    static const wchar_t* const kLabels[LF_COUNT] = { L"Фамилия", L"Имя", L"Отчество", L"Пароль" };
+    static const wchar_t* const kHints[LF_COUNT]  = { L"Иванов", L"Иван", L"если есть", L"" };
+    for (int i = 0; i < LF_COUNT; i++)
+    {
+        RECT label = { left, y, left + kLabelW, y + kRowH };
+        Theme::DrawLine(hDC, label, kLabels[i], m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
 
-    // Under the field, whichever matters most: the send under way, why it did
-    // not go, or how what is typed will read on the Пользователь block.
-    std::wstring problem;
-    const std::wstring normalized = NormalizeEnteredName(m_nameTyped, problem);
-    std::wstring status;
+        RECT field = { left + kLabelW, y, right, y + kRowH };
+        m_loginFields[i] = field;
+        Theme::OutlineBox(hDC, field, Theme::ControlFill, m_entryField == i ? Theme::Text : Theme::BorderStrong);
+
+        // The edit box covers the field while it is typed in.
+        RECT text = { field.left + 6, field.top, field.right - 6, field.bottom };
+        const std::wstring& value = m_loginValues[i];
+        if (m_entryField != i)
+        {
+            if (value.empty())
+                Theme::DrawLine(hDC, text, kHints[i], m_fonts.Body, Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
+            else
+                Theme::DrawLine(hDC, text, i == LF_PASSWORD ? std::wstring(value.size(), L'\x2022') : value,
+                    m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+        }
+        if (!sending)
+            AddScreenObject(SO_LOGIN_FIELD, std::to_string(i).c_str(), field, false,
+                i == LF_PASSWORD ? "Нажмите, чтобы ввести пароль" : "Нажмите, чтобы ввести");
+        y += kRowH + kRowGap;
+    }
+
+    // Under the fields, whichever matters most: the check under way, why it
+    // did not go, or how to move between the fields.
+    std::wstring status = L"Enter - следующее поле, Esc - отмена";
     COLORREF statusColor = Theme::TextDim;
     if (sending)
     {
-        status = L"Отправка...";
+        status = L"Проверка...";
         statusColor = Theme::DuplicateText;
     }
-    else if (!m_nameProblem.empty())
+    else if (!m_loginProblem.empty())
     {
-        status = m_nameProblem;
+        status = m_loginProblem;
         statusColor = Theme::DistressText;
     }
-    else if (state == CGalaxyATMSystemPlugin::NameSubmitState::Failed)
+    else if (state == CGalaxyATMSystemPlugin::LoginState::Failed)
     {
         status = message;
         statusColor = Theme::DistressText;
     }
-    else if (!normalized.empty())
+    RECT statusR = { left, y, right, y + kLine };
+    Theme::DrawLine(hDC, statusR, status, m_fonts.Small, statusColor, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+    y += kLine;
+
+    // Where to register, for whoever has not - a click opens it in the browser.
+    const std::string registerUrl = Plugin()->RegisterPageUrl();
+    if (!registerUrl.empty())
     {
-        const std::wstring shown = RussianShortName(normalized);
-        status = L"В блоке \"Пользователь\": " + (shown.empty() ? normalized : shown);
+        std::wstring shown = Widen(registerUrl.c_str());
+        for (const wchar_t* scheme : { L"http://", L"https://" })
+            if (shown.compare(0, wcslen(scheme), scheme) == 0)
+                shown.erase(0, wcslen(scheme));
+        RECT linkR = { left, y, right, y + kLine };
+        Theme::DrawLine(hDC, linkR, L"Регистрация: " + shown, m_fonts.Small, Theme::Text,
+            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+        AddScreenObject(SO_LOGIN_REGISTER, "LOGIN_REGISTER", linkR, false, "Открыть страницу регистрации в браузере");
     }
-    else if (!m_nameTyped.empty())
+    y += kLine + kGap;
+
+    // Framed as LOGIN is on the menu bar; grey, frame and all, while the check
+    // is under way.
+    RECT send = { right - kBtnW, y, right, y + kBtnH };
+    const COLORREF ink = sending ? Theme::MenuTextDisabled : Theme::MenuText;
+    Theme::OutlineBox(hDC, send, Theme::MenuBarFill, ink);
+    Theme::DrawLine(hDC, send, L"Войти", m_fonts.Body, ink, DT_CENTER | DT_VCENTER);
+    if (!sending)
+        AddScreenObject(SO_LOGIN_SEND, "LOGIN_SEND", send, false, "Войти в систему");
+
+    RestoreDC(hDC, saved);
+
+    // A box being typed in stays over its field when the window is dragged.
+    if (m_entryField >= 0)
+        m_entry.Move(m_loginFields[m_entryField]);
+    m_loginDrawnTick = GetTickCount64();
+}
+
+namespace
+{
+    // A password in memory is overwritten, not just let go.
+    void Wipe(std::wstring& s)
     {
-        status = problem;
-        statusColor = Theme::DistressText;
+        if (!s.empty())
+            SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
+        s.clear();
+    }
+
+    std::wstring TrimSpaces(const std::wstring& s)
+    {
+        const size_t from = s.find_first_not_of(L" \t");
+        if (from == std::wstring::npos)
+            return std::wstring();
+        return s.substr(from, s.find_last_not_of(L" \t") - from + 1);
+    }
+}
+
+void CGalaxyATMSystemRadarScreen::EditLoginField(int field)
+{
+    CommitEntry();
+    if (field < 0 || field >= LF_COUNT)
+        return;
+
+    // Found from a click, which has the cursor over the view; Enter moving on
+    // to the next field keeps the view the last click found.
+    POINT cursor;
+    HWND view = NULL;
+    if (CursorRadarPoint(cursor, &view))
+        m_entryView = view;
+
+    m_entryPending = field;
+    m_entryPendingTick = GetTickCount64();
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::TickEntry()
+{
+    // A box whose window is no longer on screen - closed, or the panel hidden
+    // with .ulll - is not left floating over EuroScope.
+    if (m_entry.IsOpen() && (!m_loginWindowOpen || GetTickCount64() - m_loginDrawnTick > 2500))
+        CommitEntry();
+
+    // Opened only over a frame drawn since it was asked for, so the field is
+    // where it is now - on LOGIN, the window has not been drawn at all yet.
+    if (m_entryPending < 0 || !m_loginWindowOpen || m_loginDrawnTick < m_entryPendingTick)
+        return;
+    const int field = m_entryPending;
+    m_entryPending = -1;
+    if (Plugin()->MyLogin() == CGalaxyATMSystemPlugin::LoginState::Sending)
+        return;
+
+    // Enter on a name goes on to the next field and on the password logs in;
+    // Tab goes round the fields; Esc leaves the field as it was.
+    const bool opened = m_entryView != NULL && m_entry.Open(m_entryView, m_loginFields[field], m_fonts.Body,
+        m_loginValues[field], field == LF_PASSWORD, field == LF_PASSWORD ? 128 : 40,
+        [this, field](TextEntry::End end)
+        {
+            if (end == TextEntry::End::Cancel)
+            {
+                m_entry.Close();
+                m_entryField = -1;
+                RequestRefresh();
+            }
+            else if (end == TextEntry::End::Submit && field == LF_PASSWORD)
+            {
+                SendLogin();
+            }
+            else
+            {
+                EditLoginField((field + 1) % LF_COUNT);
+            }
+        });
+
+    if (opened)
+    {
+        m_entryField = field;
     }
     else
     {
-        status = L"Без отчества: Иванов Иван";
+        // No window of EuroScope's to lay a box over: its own edit box, which
+        // shows a password as it is typed, is still better than no way in.
+        Log::Warn("entry", "no edit box of our own over login field " + std::to_string(field)
+            + " - EuroScope's popup edit used instead");
+        GetPlugIn()->OpenPopupEdit(m_loginFields[field], FN_LOGIN_FIELD + field, Narrow(m_loginValues[field]).c_str());
     }
-    RECT statusR = { left, y, right, y + kLine };
-    Theme::DrawLine(hDC, statusR, status, m_fonts.Small, statusColor, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-    y += kLine + kGap;
+    RequestRefresh();
+}
 
-    // Framed as LOGIN is on the menu bar. A button that cannot be pressed yet
-    // is grey, frame and all, as Bypass is, and registers nothing.
-    auto button = [&](const RECT& b, const wchar_t* text, bool enabled,
-        int objType, const char* objId, const char* tooltip)
+void CGalaxyATMSystemRadarScreen::CommitEntry()
+{
+    m_entryPending = -1;
+    if (m_entry.IsOpen() && m_entryField >= 0 && m_entryField < LF_COUNT)
     {
-        const COLORREF ink = enabled ? Theme::MenuText : Theme::MenuTextDisabled;
-        Theme::OutlineBox(hDC, b, Theme::MenuBarFill, ink);
-        Theme::DrawLine(hDC, b, text, m_fonts.Body, ink, DT_CENTER | DT_VCENTER);
-        if (enabled)
-            AddScreenObject(objType, objId, b, false, tooltip);
-    };
-    // "Отправить" alone: there is no way past the window but a name, since the
-    // panel is not for anyone the base does not know.
-    RECT send = { right - kBtnW, y, right, y + kBtnH };
-    button(send, L"Отправить", !sending && !normalized.empty(), SO_NAME_SEND, "NAME_SEND", "Записать имя в базу");
+        std::wstring text = m_entry.Text();
+        if (m_entryField != LF_PASSWORD)
+            text = TrimSpaces(text);
 
-    RestoreDC(hDC, saved);
+        std::wstring& value = m_loginValues[m_entryField];
+        if (text != value)
+        {
+            // What was said about the last attempt no longer holds for this one.
+            Wipe(value);
+            value = text;
+            m_loginProblem.clear();
+            Plugin()->ResetLogin();
+        }
+        Wipe(text);
+    }
+    m_entry.Close();
+    m_entryField = -1;
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::SendLogin()
+{
+    CommitEntry();
+    if (Plugin()->MyLogin() == CGalaxyATMSystemPlugin::LoginState::Sending)
+        return;
+
+    if (m_loginValues[LF_SURNAME].empty() || m_loginValues[LF_FIRST_NAME].empty())
+    {
+        m_loginProblem = L"Введите фамилию и имя";
+    }
+    else if (m_loginValues[LF_PASSWORD].empty())
+    {
+        m_loginProblem = L"Введите пароль";
+    }
+    else
+    {
+        m_loginProblem.clear();
+        Plugin()->StartLogin(m_loginValues[LF_SURNAME], m_loginValues[LF_FIRST_NAME],
+            m_loginValues[LF_PATRONYMIC], m_loginValues[LF_PASSWORD]);
+        // Typed again for another attempt, as a password is everywhere.
+        Wipe(m_loginValues[LF_PASSWORD]);
+    }
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::CloseLoginWindow()
+{
+    m_entryPending = -1;
+    m_entry.Close();
+    m_entryField = -1;
+    Wipe(m_loginValues[LF_PASSWORD]);
+    m_loginProblem.clear();
+    m_loginWindowOpen = false;
+    RequestRefresh();
 }
 
 int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
@@ -7261,7 +7438,7 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
 // owner - are tried in turn, and whichever of them puts the cursor inside this
 // screen's radar area is the right one. Returns false when the cursor is over
 // another application, over EuroScope's own chrome, or over another display.
-bool CGalaxyATMSystemRadarScreen::CursorRadarPoint(POINT& out)
+bool CGalaxyATMSystemRadarScreen::CursorRadarPoint(POINT& out, HWND* view)
 {
     POINT scr;
     if (!GetCursorPos(&scr))
@@ -7287,6 +7464,8 @@ bool CGalaxyATMSystemRadarScreen::CursorRadarPoint(POINT& out)
         if (PtInRect(&ra, p))
         {
             out = p;
+            if (view != NULL)
+                *view = h;
             return true;
         }
     }
@@ -7642,15 +7821,15 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
-    // LOGIN opens the panel only for a controller the server's base knows. One
-    // it has no name for gets the Регистрация window, one it has taken out of
-    // the base is told "Доступ приостановлен"; anyone it cannot be asked
-    // about - off the network, no server, no answer yet - is told why on the
-    // Авторизация card and stays out, and that failure is what opens Bypass.
+    // LOGIN opens the Вход window, where the controller types the name and
+    // password they registered with on the site; the panel opens once the
+    // server has taken them. One taken out of the base is told "Доступ
+    // приостановлен"; one who cannot be checked at all - off the network, no
+    // server - is told why on the Авторизация card and stays out, and that
+    // failure is what opens Bypass.
     case SO_AUTH_LOGIN:
-        if (m_authState == AuthState::LoggedOut && !m_nameWindowOpen && !Plugin()->TrainingSession())
+        if (m_authState == AuthState::LoggedOut && !m_loginWindowOpen && !Plugin()->TrainingSession())
         {
-            using State = CGalaxyATMSystemPlugin::RegisteredNameState;
             const char* callsign = GetPlugIn()->ControllerMyself().GetCallsign();
             const std::string who = (callsign != NULL && *callsign != '\0') ? callsign : "(no callsign)";
 
@@ -7663,41 +7842,37 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
                 ShowNotice(m_authMessage);
                 Log::Warn("auth", "LOGIN " + who + " refused: access suspended - the name was removed from the user base");
             }
+            else if (!Plugin()->LiveConnection())
+            {
+                m_authMessage = L"Нет подключения к VATSIM";
+                m_authFailed = true;
+                Log::Error("auth", "LOGIN " + who + " failed: not controlling on the live VATSIM network"
+                    " (EuroScope connection type " + std::to_string(GetPlugIn()->GetConnectionType()) + ")");
+            }
+            else if (Plugin()->GetConfig().SquawkServerUrl().empty())
+            {
+                m_authMessage = L"База пользователей недоступна";
+                m_authFailed = true;
+                Log::Error("auth", "LOGIN " + who + " failed: Squawk.ServerUrl is not set in GalaxyATMSystem.json");
+            }
             else
             {
-                switch (Plugin()->MyRegisteredName())
+                Log::Info("auth", "LOGIN " + who + ": login window opened");
+                m_loginWindowOpen = true;
+                m_loginProblem.clear();
+                Plugin()->ResetLogin();
+
+                // Straight into the first field still to fill in.
+                int first = LF_PASSWORD;
+                for (int field : { LF_SURNAME, LF_FIRST_NAME })
                 {
-                case State::Known:
-                    Log::Info("auth", "LOGIN " + who + ": known to the user base - access granted");
-                    StartAuthCheck();
-                    break;
-                case State::Missing:
-                    Log::Info("auth", "LOGIN " + who + ": not in the user base - registration window opened");
-                    m_nameWindowOpen = true;
-                    m_nameProblem.clear();
-                    Plugin()->ResetNameSubmit();
-                    break;
-                case State::Offline:
-                    m_authMessage = L"Нет подключения к VATSIM";
-                    m_authFailed = true;
-                    Log::Error("auth", "LOGIN " + who + " failed: not controlling on the live VATSIM network"
-                        " (EuroScope connection type " + std::to_string(GetPlugIn()->GetConnectionType()) + ")");
-                    break;
-                case State::NoServer:
-                    m_authMessage = L"База пользователей недоступна";
-                    m_authFailed = true;
-                    Log::Error("auth", "LOGIN " + who + " failed: " + (Plugin()->GetConfig().SquawkServerUrl().empty()
-                        ? std::string("Squawk.ServerUrl is not set in GalaxyATMSystem.json")
-                        : std::string("the squawk server has no name table (name.php answered 404)")));
-                    break;
-                case State::Waiting:
-                    m_authMessage = L"Проверка в базе - повторите";
-                    m_authFailed = true;
-                    Log::Error("auth", "LOGIN " + who + " failed: no answer about this controller yet -"
-                        " the VATSIM feed does not list the callsign, or the user base has not answered"
-                        " (see the [identity], [auth] and [net] lines before this)");
-                    break;
+                    if (m_loginValues[field].empty())
+                    {
+                        first = field;
+                        break;
+                    }
                 }
+                EditLoginField(first);
             }
         }
         RequestRefresh();
@@ -7712,7 +7887,7 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             {
                 Log::Warn("auth", "Bypass: panel opened past the user base after a failed attempt"
                     + (m_authMessage.empty() ? std::string(" to register") : " - \"" + Log::Utf8(m_authMessage) + "\""));
-                m_nameWindowOpen = false;
+                CloseLoginWindow();
                 m_authMessage.clear();
                 m_authFailed = false;
                 m_authBypassed = true;
@@ -7740,24 +7915,28 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
-    case SO_NAME_WINDOW:
+    // A click on the Вход window beside the box being typed in ends the typing.
+    case SO_LOGIN_WINDOW:
+        CommitEntry();
         break;
-    case SO_NAME_CLOSE:
-        m_nameWindowOpen = false;
-        RequestRefresh();
+    case SO_LOGIN_CLOSE:
+        CloseLoginWindow();
         break;
-    case SO_NAME_FIELD:
-        GetPlugIn()->OpenPopupEdit(Area, FN_NAME_ENTRY, Narrow(m_nameTyped).c_str());
+    case SO_LOGIN_FIELD:
+        EditLoginField(atoi(sObjectId));
         break;
-    case SO_NAME_SEND:
+    case SO_LOGIN_SEND:
+        SendLogin();
+        break;
+    case SO_LOGIN_REGISTER:
     {
-        std::wstring problem;
-        const std::wstring name = NormalizeEnteredName(m_nameTyped, problem);
-        if (name.empty())
-            m_nameProblem = problem;
-        else
-            Plugin()->SubmitMyName(name);
-        RequestRefresh();
+        CommitEntry();
+        const std::string url = Plugin()->RegisterPageUrl();
+        if (url.compare(0, 7, "http://") == 0 || url.compare(0, 8, "https://") == 0)
+        {
+            Log::Info("auth", "registration page opened in the browser: " + url);
+            ShellExecuteA(NULL, "open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
+        }
         break;
     }
 
@@ -8046,13 +8225,15 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
     Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
 
-    // The Регистрация field. What it was, and any send that failed, are
-    // forgotten along with the old text.
-    if (FunctionId == FN_NAME_ENTRY)
+    // A Вход field typed into EuroScope's own edit box, where ours could not be
+    // opened. Any attempt that failed is forgotten along with the old text.
+    if (FunctionId >= FN_LOGIN_FIELD && FunctionId < FN_LOGIN_FIELD + LF_COUNT)
     {
-        m_nameTyped = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
-        m_nameProblem.clear();
-        Plugin()->ResetNameSubmit();
+        const int field = FunctionId - FN_LOGIN_FIELD;
+        std::wstring typed = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
+        m_loginValues[field] = (field == LF_PASSWORD) ? typed : TrimSpaces(typed);
+        m_loginProblem.clear();
+        Plugin()->ResetLogin();
         RequestRefresh();
         return;
     }
@@ -8266,7 +8447,7 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
-    // The АТИС report, the sector list and the Регистрация window are the only
+    // The АТИС report, the sector list and the Вход window are the only
     // windows that can be dragged - the panel is docked to the right edge of
     // the radar area, and the АТИС index strip is docked to the panel.
     RECT* target = NULL;
@@ -8274,8 +8455,8 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         target = &m_rcArea;
     else if (ObjectType == SO_ATIS_HEADER)
         target = &m_atisArea;
-    else if (ObjectType == SO_NAME_HEADER)
-        target = &m_nameArea;
+    else if (ObjectType == SO_LOGIN_HEADER)
+        target = &m_loginArea;
     else
         return;
 
@@ -8415,7 +8596,7 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         m_authMessage.clear();
         m_authFailed = false;
         m_authBypassed = false;
-        m_nameWindowOpen = false;
+        CloseLoginWindow();
         m_openDropdown = DropdownKind::None;
         RequestRefresh();
         return true;

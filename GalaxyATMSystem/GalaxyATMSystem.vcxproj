@@ -117,6 +117,7 @@
     <ClInclude Include="Zones.h" />
     <ClInclude Include="Apw.h" />
     <ClInclude Include="Squawk.h" />
+    <ClInclude Include="TextEntry.h" />
     <ClInclude Include="GalaxyATMSystem.h" />
   </ItemGroup>
   <ItemGroup>
@@ -133,6 +134,7 @@
     <ClCompile Include="Zones.cpp" />
     <ClCompile Include="Apw.cpp" />
     <ClCompile Include="Squawk.cpp" />
+    <ClCompile Include="TextEntry.cpp" />
     <ClCompile Include="GalaxyATMSystem.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

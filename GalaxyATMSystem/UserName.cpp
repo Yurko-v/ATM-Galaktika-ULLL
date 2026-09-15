@@ -300,8 +300,36 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
     return true;
 }
 
-bool SubmitRegisteredName(const std::string& baseUrl, const std::string& apiKey,
-    const std::string& position, const std::wstring& name, std::wstring& stored, std::string& error)
+namespace
+{
+    // A JSON string, quotes and all. A character below a space is written as
+    // \u00XX rather than dropped: a password has to arrive exactly as typed.
+    std::string JsonString(const std::wstring& value)
+    {
+        static const char kHex[] = "0123456789abcdef";
+        std::string out = "\"";
+        for (char c : Json::WideToUtf8(value))
+        {
+            const unsigned char u = (unsigned char)c;
+            if (u < 0x20)
+            {
+                out += "\\u00";
+                out += kHex[u >> 4];
+                out += kHex[u & 0xF];
+                continue;
+            }
+            if (c == '"' || c == '\\')
+                out += '\\';
+            out += c;
+        }
+        out += '"';
+        return out;
+    }
+}
+
+bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const std::string& position,
+    const std::wstring& surname, const std::wstring& firstName, const std::wstring& patronymic,
+    const std::wstring& password, std::wstring& name, std::string& error)
 {
     std::string url, pos, headers;
     if (!ServerRequestParts(baseUrl, apiKey, position, url, pos, headers))
@@ -310,45 +338,37 @@ bool SubmitRegisteredName(const std::string& baseUrl, const std::string& apiKey,
         return false;
     }
 
-    // Letters, spaces, hyphens and full stops are all NormalizeEnteredName lets
-    // through, but the value is escaped all the same.
-    std::string body = "{\"position\":\"" + pos + "\",\"name\":\"";
-    for (char c : Json::WideToUtf8(name))
-    {
-        if ((unsigned char)c < 0x20)
-            continue;
-        if (c == '"' || c == '\\')
-            body += '\\';
-        body += c;
-    }
-    body += "\"}";
+    std::string body = "{\"position\":\"" + pos + "\",\"surname\":" + JsonString(surname)
+        + ",\"first_name\":" + JsonString(firstName) + ",\"patronymic\":" + JsonString(patronymic)
+        + ",\"password\":" + JsonString(password) + "}";
     headers += "Content-Type: application/json\r\n";
 
     Net::HttpResponse response;
-    if (!Net::HttpRequest("POST", url + "/name.php", headers, body, response))
+    const bool answered = Net::HttpRequest("POST", url + "/login.php", headers, body, response);
+    SecureZeroMemory(&body[0], body.size());
+    if (!answered)
     {
-        Log::Error("auth", "registration: no answer from " + url + "/name.php - see the [net] line before this");
+        Log::Error("auth", "login: no answer from " + url + "/login.php - see the [net] line before this");
         error = "network";
         return false;
     }
 
     Json::Value root;
     const bool isObject = Json::ParseUtf8(response.body, root) && root.kind == Json::Value::Kind::Object;
-    const Json::Value* v = isObject ? root.Find(L"name") : NULL;
-    stored = (v != NULL) ? v->AsString() : L"";
-    if (stored.size() > 100)
-        stored.resize(100);
-
-    // 409 is a name that was already there - the admin's, or one sent from
-    // another machine. The server keeps it, so it is the one we have now.
-    if ((response.status == 200 || response.status == 409) && !stored.empty())
+    if (response.status == 200 && isObject)
+    {
+        const Json::Value* v = root.Find(L"name");
+        name = (v != NULL) ? v->AsString() : L"";
+        if (name.size() > 100)
+            name.resize(100);
         return true;
+    }
 
     const Json::Value* e = isObject ? root.Find(L"error") : NULL;
     error = (e != NULL) ? Json::WideToUtf8(e->AsString()) : std::string();
     if (error.empty())
         error = "http_" + std::to_string(response.status);
-    Log::Error("auth", "registration: " + url + "/name.php refused the name for " + pos + " - HTTP "
+    Log::Error("auth", "login: " + url + "/login.php refused " + pos + " - HTTP "
         + std::to_string(response.status) + ", " + error + ", body: " + Log::Snippet(response.body));
     return false;
 }
@@ -487,107 +507,5 @@ std::wstring RussianShortName(const std::wstring& fullName)
         if (!p.empty())
             out += p.substr(0, 1) + L".";
     }
-    return out;
-}
-
-namespace
-{
-    // "римская-КОРСАКОВА" -> "Римская-Корсакова".
-    std::wstring CapitalizeName(std::wstring word)
-    {
-        if (word.empty())
-            return word;
-        CharLowerBuffW(&word[0], (DWORD)word.size());
-        for (size_t i = 0; i < word.size(); i++)
-            if (i == 0 || word[i - 1] == L'-')
-                CharUpperBuffW(&word[i], 1);
-        return word;
-    }
-}
-
-std::wstring NormalizeEnteredName(const std::wstring& typed, std::wstring& problem)
-{
-    problem.clear();
-
-    // Words, split on spaces and on the full stops of initials.
-    std::vector<std::wstring> words;
-    size_t pos = 0;
-    while (pos < typed.size())
-    {
-        size_t from = typed.find_first_not_of(L" \t.", pos);
-        if (from == std::wstring::npos)
-            break;
-        size_t to = typed.find_first_of(L" \t.", from);
-        words.push_back(typed.substr(from, to == std::wstring::npos ? std::wstring::npos : to - from));
-        pos = (to == std::wstring::npos) ? typed.size() : to;
-    }
-    if (words.empty())
-    {
-        problem = L"Введите фамилию, имя и отчество";
-        return L"";
-    }
-
-    for (const std::wstring& w : words)
-    {
-        for (wchar_t c : w)
-        {
-            // A "?" is a Cyrillic letter EuroScope's edit box could not pass
-            // through the Windows code page.
-            if (IsLatin(c) || c == L'?')
-            {
-                problem = L"Пишите русскими буквами";
-                return L"";
-            }
-            if (!IsCyrillic(c) && c != L'-')
-            {
-                problem = L"Только буквы, дефис и точки";
-                return L"";
-            }
-        }
-        if (w.front() == L'-' || w.back() == L'-')
-        {
-            problem = L"Дефис - только внутри двойной фамилии";
-            return L"";
-        }
-    }
-    if (words.size() < 2)
-    {
-        problem = L"Нужны фамилия и имя, и отчество, если есть";
-        return L"";
-    }
-    if (words.size() > 3)
-    {
-        problem = L"Не больше трёх слов: фамилия, имя, отчество";
-        return L"";
-    }
-
-    for (std::wstring& w : words)
-        w = CapitalizeName(w);
-
-    // "Имя Отчество Фамилия", told by where the patronymic is.
-    if (words.size() == 3 && words[1].size() > 1 && IsPatronymic(words[1]) && !IsPatronymic(words[2]))
-        std::rotate(words.begin(), words.begin() + 2, words.end());
-
-    if (words[0].size() < 2)
-    {
-        problem = L"Сначала фамилия, полностью";
-        return L"";
-    }
-
-    // In full only when RussianShortName can read it back the same way: a
-    // patronymic in last place says which word is the surname, and a plain
-    // surname is not lowered to "Римская-корсакова" on the way. Otherwise it is
-    // shortened here, while the order is still known.
-    bool full = words.size() == 3 && IsPatronymic(words[2])
-        && words[0].find(L'-') == std::wstring::npos;
-    for (size_t i = 1; i < words.size(); i++)
-        if (words[i].size() < 2)
-            full = false;
-    if (full)
-        return words[0] + L" " + words[1] + L" " + words[2];
-
-    std::wstring out = words[0] + L" ";
-    for (size_t i = 1; i < words.size(); i++)
-        out += words[i].substr(0, 1) + L".";
     return out;
 }

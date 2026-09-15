@@ -17,14 +17,11 @@ struct VatsimIdentity
     std::wstring name;       // "Yuriy Velbovets" - or the CID again, for a hidden name
 
     // The name entered for this CID on the squawk server, "Велбовец Юрий
-    // Владимирович" - empty when none is. 'registeredAsked' is whether that is
-    // an answer: the server has replied, or there is no server to ask.
+    // Владимирович" - empty when none is.
     std::wstring registeredName;
-    bool registeredAsked = false;
 
-    // The server has the name table at all, so a name can be sent to it - a
-    // server set up before the table was added answers the question too, but
-    // with nowhere to put one.
+    // The server has the name table at all - a server set up before the table
+    // was added answers the question too, but with nothing to go on.
     bool registeredTable = false;
 
     bool Empty() const { return cid.empty(); }
@@ -40,8 +37,8 @@ bool FetchVatsimIdentity(const std::string& callsign, VatsimIdentity& out);
 // the feed without going near the network.
 bool ParseVatsimIdentity(const std::string& body, const std::string& callsign, VatsimIdentity& out);
 
-// The name the admin has entered for us in the squawk server's user_names
-// table (server/public/api/name.php), found by the CID the network lists for
+// The name the squawk server's user_names table has for us
+// (server/public/api/name.php), found by the CID the network lists for
 // 'position' - the server only ever tells a controller their own. 'baseUrl' and
 // 'apiKey' are the squawk client's. Blocking - a worker thread's job.
 //
@@ -53,25 +50,18 @@ bool ParseVatsimIdentity(const std::string& body, const std::string& callsign, V
 bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
     const std::string& position, std::wstring& name, bool& hasTable);
 
-// Enters our own name in that table, for a controller it has none for - what
-// the Регистрация window sends. 'name' as NormalizeEnteredName made it.
-// Blocking - a worker thread's job.
+// LOGIN: what the Вход в систему КСА window holds, sent to api/login.php, which
+// checks it against the registration of the CID the network lists for
+// 'position'. Blocking - a worker thread's job.
 //
-// True when the table holds a name for us afterwards, and 'stored' is then that
-// name: the one sent, or the one that was already there, which the server keeps.
-// False otherwise, with the server's reason in 'error' ("not_online",
-// "bad_name", "network_stale", ...), "network" when no answer came at all, or
-// "http_<status>" when the answer carried no reason.
-bool SubmitRegisteredName(const std::string& baseUrl, const std::string& apiKey,
-    const std::string& position, const std::wstring& name, std::wstring& stored, std::string& error);
-
-// What was typed into the Регистрация window, put the way it is sent: surname,
-// first name and patronymic in full, capitalised - "Велбовец Юрий
-// Владимирович" - or shortened to "Велбовец Ю." when there is no patronymic to
-// tell the words apart by. "Имя Отчество Фамилия" is turned round, and initials
-// typed with or without full stops are accepted. Empty when it cannot be a
-// name, with the reason, in Russian, for the window in 'problem'.
-std::wstring NormalizeEnteredName(const std::wstring& typed, std::wstring& problem);
+// True when the server lets us in, and 'name' is then the name it has for us.
+// False otherwise, with the server's reason in 'error' ("wrong_credentials",
+// "not_registered", "not_online", "network_stale", "rate_limited", ...),
+// "network" when no answer came at all, or "http_<status>" when the answer
+// carried no reason. The password never goes into the log.
+bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const std::string& position,
+    const std::wstring& surname, const std::wstring& firstName, const std::wstring& patronymic,
+    const std::wstring& password, std::wstring& name, std::string& error);
 
 // The name the way the Пользователь block prints it, "Фамилия И.О.", in Russian:
 // "Yuriy Velbovets" -> "Велбовец Ю.", "Велбовец Юрий Владимирович" ->

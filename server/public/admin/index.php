@@ -1,11 +1,15 @@
 <?php
-// Админ-страница: the user_names table - who may open the plug-in's panel, and
-// under what name - behind a login of its own, so a person can be handed the
-// list of controllers without the database password, the codes or anything
+// Админ-страница: the user_names table - who may log in to the plug-in's panel,
+// and under what name - behind a login of its own, so a person can be handed
+// the list of controllers without the database password, the codes or anything
 // else in the database.
 //
 // Logins are config.php's 'admins', login => password_hash(). Taking a login
 // out, or changing its hash, ends every session it has open on the next click.
+//
+// Controllers register themselves on public/register/. Here a name can be
+// corrected (the one shown - LOGIN still checks the registered parts), a
+// password reset so the CID can register again, or a controller taken out.
 //
 // The service has no SSL, so the password goes over plain http like everything
 // else does: hand out passwords that are used nowhere else.
@@ -13,52 +17,12 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
+require __DIR__ . '/../../lib/page.php';
 
 const ADMIN_IDLE_SEC = 2 * 3600;        // a session nobody has clicked in for this long is over
 const ADMIN_LOGIN_TRIES_PER_MIN = 5;    // per address, right or wrong
 
-// An HTML page, not the API's JSON: a failure here is a page too.
-set_exception_handler(function (Throwable $e): void {
-    error_log('squawk admin: ' . $e->getMessage());
-    if (!headers_sent()) {
-        http_response_code(500);
-        header('Content-Type: text/html; charset=utf-8');
-    }
-    echo '<!doctype html><meta charset="utf-8"><p>Ошибка сервера. Подробности — в журнале ошибок сайта.</p>';
-    exit;
-});
-
-header('Content-Type: text/html; charset=utf-8');
-header('Cache-Control: no-store');
-header('X-Frame-Options: DENY');
-header('X-Content-Type-Options: nosniff');
-header('Referrer-Policy: no-referrer');
-
-function h($value): string
-{
-    return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
-
-// The two logos side by side in white - AZIMUT x ULLL FIR - drawn here rather
-// than served as files: AZIMUT's ring over a half-disc with the word beside
-// it, and the FIR's airliner in a dashed square beside "ULLL FIR" / "VATSIM".
-function brand_logo(): string
-{
-    return '<div class="brand" aria-label="AZIMUT x ULLL FIR">'
-        . '<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">'
-        . '<path d="M3 16 A13 13 0 0 1 29 16" fill="none" stroke="#fff" stroke-width="5"/>'
-        . '<path d="M0.8 19 H31.2 A15.5 15.5 0 0 1 0.8 19 Z" fill="#fff"/>'
-        . '</svg>'
-        . '<span class="word">AZIMUT</span>'
-        . '<span class="cross" aria-hidden="true">&times;</span>'
-        . '<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">'
-        . '<rect x="1" y="1" width="30" height="30" rx="3" fill="none" stroke="#fff" stroke-width="0.8" stroke-dasharray="1.6 1.2"/>'
-        . '<path d="M16 5 C17 5 17.5 6.2 17.5 7.4 V13 L26 18 V20 L17.5 17.4 V22.6 L20.5 24.8 V26.3 L16 25.2'
-        . ' L11.5 26.3 V24.8 L14.5 22.6 V17.4 L6 20 V18 L14.5 13 V7.4 C14.5 6.2 15 5 16 5 Z" fill="#fff"/>'
-        . '</svg>'
-        . '<span class="fir"><span class="word">ULLL FIR</span><small>VATSIM</small></span>'
-        . '</div>';
-}
+html_page_setup('squawk admin');
 
 // login => hash, keeping only entries that really are password_hash() output -
 // a plain password pasted in by mistake lets nobody in.
@@ -72,28 +36,6 @@ function admin_accounts(): array
         }
     }
     return $accounts;
-}
-
-function client_ip(): string
-{
-    return (string)($_SERVER['REMOTE_ADDR'] ?? '');
-}
-
-// The API's rolling-minute counter, on a bucket of its own per address.
-function admin_login_allowed(): bool
-{
-    $bucket = 'adm:' . substr(hash('sha256', client_ip()), 0, 32);
-    $pdo = db();
-    $pdo->prepare(
-        'INSERT INTO rate_limit (bucket, window_start, hits) VALUES (?, NOW(), 1)
-         ON DUPLICATE KEY UPDATE
-             hits         = IF(window_start < NOW() - INTERVAL 60 SECOND, 1, hits + 1),
-             window_start = IF(window_start < NOW() - INTERVAL 60 SECOND, NOW(), window_start)'
-    )->execute([$bucket]);
-
-    $st = $pdo->prepare('SELECT hits FROM rate_limit WHERE bucket = ?');
-    $st->execute([$bucket]);
-    return (int)$st->fetchColumn() <= ADMIN_LOGIN_TRIES_PER_MIN;
 }
 
 // Who is logged in: a login config.php still has, with the same hash it had at
@@ -110,34 +52,14 @@ function current_admin(array $accounts): ?string
     return $login;
 }
 
-function flash(string $kind, string $text): void
-{
-    $_SESSION['flash'] = [$kind, $text];
-}
-
-// After every POST, back to a plain GET of the page, so a reload never sends
-// the form again.
-function back_to_page(): void
-{
-    header('Location: ' . $_SERVER['SCRIPT_NAME'], true, 303);
-    exit;
-}
-
-session_name('galaxy_admin');
-// Lax rather than Strict, so the page opened from a link in a messenger still
-// finds the session; the forms carry their own CSRF token either way.
-session_set_cookie_params(['lifetime' => 0, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
-session_start();
-if (!isset($_SESSION['csrf'])) {
-    $_SESSION['csrf'] = bin2hex(random_bytes(16));
-}
+start_page_session('galaxy_admin');
 
 $accounts = admin_accounts();
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $action = (string)($_POST['action'] ?? '');
 
-    if (!hash_equals((string)$_SESSION['csrf'], (string)($_POST['csrf'] ?? ''))) {
+    if (!csrf_ok()) {
         flash('error', 'Страница устарела — попробуйте ещё раз.');
         back_to_page();
     }
@@ -145,7 +67,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     if ($action === 'login') {
         $login = trim((string)($_POST['login'] ?? ''));
         $password = (string)($_POST['password'] ?? '');
-        if (!admin_login_allowed()) {
+        if (!within_rate_limit(client_bucket('adm:'), ADMIN_LOGIN_TRIES_PER_MIN)) {
             flash('error', 'Слишком много попыток входа — подождите минуту.');
         } elseif (isset($accounts[$login]) && password_verify($password, $accounts[$login])) {
             session_regenerate_id(true);
@@ -194,9 +116,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         );
         $st->execute([$cid, $name]);
         $rows = $st->rowCount();
-        flash('ok', ($rows === 1 ? 'Добавлен: ' : ($rows === 2 ? 'Имя изменено: ' : 'Без изменений: '))
-            . $cid . ' — ' . $name);
+        flash('ok', ($rows === 1 ? 'Добавлен: ' . $cid . ' — ' . $name . '. Войти он сможет после регистрации на сайте.'
+            : ($rows === 2 ? 'Имя изменено: ' : 'Без изменений: ') . $cid . ' — ' . $name));
         error_log('squawk admin: ' . $admin . ' saved ' . $cid . ' as "' . $name . '"');
+        back_to_page();
+    }
+
+    // The password goes, the row and its name stay: the CID can register on
+    // the site again, and until then LOGIN turns it away.
+    if ($action === 'reset') {
+        $st = db()->prepare('UPDATE user_names SET password_hash = NULL WHERE cid = ? AND password_hash IS NOT NULL');
+        $st->execute([$cid]);
+        flash('ok', $st->rowCount() > 0
+            ? 'Пароль ' . $cid . ' сброшен — диспетчер может зарегистрироваться на сайте заново.'
+            : 'У ' . $cid . ' пароля и так нет.');
+        error_log('squawk admin: ' . $admin . ' reset the password of ' . $cid);
         back_to_page();
     }
 
@@ -214,14 +148,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 }
 
 $admin = current_admin($accounts);
-$flash = $_SESSION['flash'] ?? null;
-unset($_SESSION['flash']);
+$flash = take_flash();
 $form = $_SESSION['form'] ?? ['cid' => '', 'name' => ''];
 unset($_SESSION['form']);
 
 $rows = [];
 if ($admin !== null) {
-    $rows = db()->query('SELECT cid, name, updated_at FROM user_names ORDER BY name')->fetchAll();
+    $rows = db()->query(
+        'SELECT cid, name, password_hash IS NOT NULL AS has_password, updated_at FROM user_names ORDER BY name'
+    )->fetchAll();
 }
 $csrf = (string)$_SESSION['csrf'];
 ?>
@@ -233,40 +168,10 @@ $csrf = (string)$_SESSION['csrf'];
 <meta name="robots" content="noindex, nofollow">
 <title>АРМ инженера системы — Galaxy ATM System</title>
 <style>
-    :root {
-        --ground: #1b2017; --card: #262d20; --line: #3f4836; --text: #eef0ea;
-        --dim: #a3aa9a; --accent: #9eff3d; --danger: #ff6b5e; --field: #11140e;
-    }
-    * { box-sizing: border-box; }
-    body {
-        margin: 0; padding: 24px 16px; background: var(--ground); color: var(--text);
-        font: 15px/1.45 "Segoe UI", Roboto, Arial, sans-serif;
-    }
-    main { max-width: 820px; margin: 0 auto; }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    .sub { color: var(--dim); margin: 0 0 20px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    .card h2 { font-size: 15px; margin: 0 0 12px; }
-    label { display: block; color: var(--dim); font-size: 13px; margin-bottom: 4px; }
-    input {
-        width: 100%; padding: 8px 10px; background: var(--field); color: var(--text);
-        border: 1px solid var(--line); border-radius: 6px; font: inherit;
-    }
-    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-    button {
-        padding: 8px 14px; border-radius: 6px; border: 1px solid var(--text); background: transparent;
-        color: var(--text); font: inherit; cursor: pointer; white-space: nowrap;
-    }
-    button:hover { background: rgba(255,255,255,.08); }
-    button.danger { border-color: var(--danger); color: var(--danger); }
-    button.link { border: 0; padding: 0; color: var(--dim); text-decoration: underline; }
+<?= page_css() ?>
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
     .row .cid { flex: 0 1 160px; }
     .row .name { flex: 1 1 260px; }
-    .hint { color: var(--dim); font-size: 13px; margin: 8px 0 0; }
-    .flash { padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
-    .flash.ok { background: rgba(158,255,61,.12); border: 1px solid rgba(158,255,61,.4); }
-    .flash.error { background: rgba(255,107,94,.12); border: 1px solid rgba(255,107,94,.45); }
     .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -274,14 +179,11 @@ $csrf = (string)$_SESSION['csrf'];
     th { color: var(--dim); font-weight: 600; font-size: 13px; }
     td.num { font-variant-numeric: tabular-nums; }
     td.when { color: var(--dim); font-size: 13px; white-space: nowrap; }
+    td.pass { font-size: 13px; white-space: nowrap; }
+    td.pass .no { color: var(--dim); }
     td.actions { text-align: right; white-space: nowrap; }
     td.actions form { display: inline; }
     .empty { color: var(--dim); padding: 12px 0 0; }
-    .brand { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 18px; color: #fff; }
-    .brand .word { font: 800 20px/1 "Montserrat", "Segoe UI", Arial, sans-serif; letter-spacing: .06em; }
-    .brand .cross { font: 300 22px/1 "Segoe UI", Arial, sans-serif; opacity: .75; margin: 0 2px; }
-    .brand .fir { display: flex; flex-direction: column; align-items: center; gap: 3px; }
-    .brand small { font: 500 9px/1 "Montserrat", "Segoe UI", Arial, sans-serif; letter-spacing: .4em; margin-right: -.4em; }
     .login { max-width: 360px; margin: 10vh auto 0; }
     .login input { margin-bottom: 12px; }
 </style>
@@ -314,7 +216,7 @@ $csrf = (string)$_SESSION['csrf'];
     <div class="top">
         <div>
             <h1>АРМ инженера системы</h1>
-            <p class="sub">Кто может открыть панель плагина. Вошли как <?= h($admin) ?>.</p>
+            <p class="sub">Кто может войти в панель плагина. Вошли как <?= h($admin) ?>.</p>
         </div>
         <form method="post">
             <input type="hidden" name="action" value="logout">
@@ -328,7 +230,7 @@ $csrf = (string)$_SESSION['csrf'];
     <?php endif; ?>
 
     <form method="post" class="card" id="edit">
-        <h2>Добавить или исправить</h2>
+        <h2>Добавить или исправить имя</h2>
         <input type="hidden" name="action" value="save">
         <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
         <div class="row">
@@ -344,7 +246,11 @@ $csrf = (string)$_SESSION['csrf'];
             </div>
             <button type="submit">Сохранить</button>
         </div>
-        <p class="hint">Без отчества — сокращённо: «Иванов И.». Для CID, который уже есть, имя заменится.</p>
+        <p class="hint">
+            Меняет только имя в блоке «Пользователь»; при входе диспетчер вводит ФИО и пароль, указанные при
+            регистрации. Без отчества — сокращённо: «Иванов И.». Диспетчеры регистрируются сами на
+            <a href="../register/" style="color: inherit">странице регистрации</a>.
+        </p>
     </form>
 
     <div class="card">
@@ -357,18 +263,30 @@ $csrf = (string)$_SESSION['csrf'];
         <?php else: ?>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>CID</th><th>Имя</th><th>Изменено, UTC</th><th></th></tr></thead>
+                <thead><tr><th>CID</th><th>Имя</th><th>Пароль</th><th>Изменено, UTC</th><th></th></tr></thead>
                 <tbody>
                 <?php foreach ($rows as $row): ?>
                     <tr data-search="<?= h($row['cid'] . ' ' . $row['name']) ?>">
                         <td class="num"><?= h($row['cid']) ?></td>
                         <td><?= h($row['name']) ?></td>
+                        <td class="pass"><?= $row['has_password'] ? 'задан' : '<span class="no">не зарегистрирован</span>' ?></td>
                         <td class="when"><?= h(substr((string)$row['updated_at'], 0, 16)) ?></td>
                         <td class="actions">
                             <button type="button" class="link js-edit"
                                     data-cid="<?= h($row['cid']) ?>" data-name="<?= h($row['name']) ?>">Изменить</button>
+                            <?php if ($row['has_password']): ?>
                             &nbsp;
-                            <form method="post" class="js-delete" data-name="<?= h($row['name']) ?>">
+                            <form method="post" class="js-confirm"
+                                  data-question="Сбросить пароль «<?= h($row['name']) ?>»? Войти можно будет только после новой регистрации на сайте.">
+                                <input type="hidden" name="action" value="reset">
+                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                <input type="hidden" name="cid" value="<?= h($row['cid']) ?>">
+                                <button type="submit">Сбросить пароль</button>
+                            </form>
+                            <?php endif; ?>
+                            &nbsp;
+                            <form method="post" class="js-confirm"
+                                  data-question="Удалить «<?= h($row['name']) ?>»? Доступ к панели у него закроется.">
                                 <input type="hidden" name="action" value="delete">
                                 <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
                                 <input type="hidden" name="cid" value="<?= h($row['cid']) ?>">
@@ -392,9 +310,9 @@ $csrf = (string)$_SESSION['csrf'];
                 document.getElementById('name').focus();
             });
         });
-        document.querySelectorAll('.js-delete').forEach(function (f) {
+        document.querySelectorAll('.js-confirm').forEach(function (f) {
             f.addEventListener('submit', function (e) {
-                if (!confirm('Удалить «' + f.dataset.name + '»? Доступ к панели у него закроется.')) e.preventDefault();
+                if (!confirm(f.dataset.question)) e.preventDefault();
             });
         });
         var filter = document.getElementById('filter');

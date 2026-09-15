@@ -182,16 +182,11 @@ function refresh_controllers_if_due(): void
     }
 }
 
-// No more than this many requests a minute from one position. Not security -
-// the online check is that - just a bound on what a plug-in stuck in a loop, or
-// someone poking at the service, can cost the database.
-function check_rate_limit(string $position): void
+// Counts one more hit on a bucket over a rolling minute, and says whether it is
+// still within $limit. Buckets are up to 40 characters: a position, or a
+// prefix and a hash for anything else.
+function within_rate_limit(string $bucket, int $limit): bool
 {
-    $limit = (int)(app_config()['rate_limit_per_min'] ?? 120);
-    if ($limit <= 0) {
-        return;
-    }
-
     $pdo = db();
     // The window starts over once it is a minute old; MySQL takes the
     // assignments left to right, so hits still sees the old window_start.
@@ -200,11 +195,20 @@ function check_rate_limit(string $position): void
          ON DUPLICATE KEY UPDATE
              hits         = IF(window_start < NOW() - INTERVAL 60 SECOND, 1, hits + 1),
              window_start = IF(window_start < NOW() - INTERVAL 60 SECOND, NOW(), window_start)'
-    )->execute([$position]);
+    )->execute([$bucket]);
 
     $st = $pdo->prepare('SELECT hits FROM rate_limit WHERE bucket = ?');
-    $st->execute([$position]);
-    if ((int)$st->fetchColumn() > $limit) {
+    $st->execute([$bucket]);
+    return (int)$st->fetchColumn() <= $limit;
+}
+
+// No more than this many requests a minute from one position. Not security -
+// the online check is that - just a bound on what a plug-in stuck in a loop, or
+// someone poking at the service, can cost the database.
+function check_rate_limit(string $position): void
+{
+    $limit = (int)(app_config()['rate_limit_per_min'] ?? 120);
+    if ($limit > 0 && !within_rate_limit($position, $limit)) {
         json_out(429, ['error' => 'rate_limited']);
     }
 }
@@ -269,11 +273,11 @@ function clean_code($value): ?string
     return preg_match('/^[0-7]{4}$/', $s) ? $s : null;
 }
 
-// A controller's name for user_names, the way NormalizeEnteredName in the
-// plug-in's UserName.cpp puts it: "Фамилия Имя Отчество" in full, or shortened
-// to "Фамилия И.О." / "Фамилия И." - Cyrillic only, with a hyphen allowed inside
-// a double surname. Anything else is not a name the plug-in can show, and is
-// turned down rather than stored. Shared by api/name.php and the admin page.
+// A controller's name for user_names: "Фамилия Имя Отчество" in full, or
+// shortened to "Фамилия И.О." / "Фамилия И." - Cyrillic only, with a hyphen
+// allowed inside a double surname. Anything else is not a name the plug-in's
+// RussianShortName can show, and is turned down rather than stored. For the
+// admin page; registration builds the name from its parts (user_display_name).
 function clean_user_name($value): ?string
 {
     $s = preg_replace('/\s+/u', ' ', trim((string)$value));
@@ -284,4 +288,52 @@ function clean_user_name($value): ?string
     $full = ' \p{Cyrillic}{2,} \p{Cyrillic}{2,}';
     $short = ' \p{Cyrillic}\.(?:\p{Cyrillic}\.)?';
     return preg_match("/^$word(?:$full|$short)$/u", $s) ? $s : null;
+}
+
+// ---- Registration and LOGIN -------------------------------------------------
+
+// One part of a name as typed on the registration page - surname, first name
+// or patronymic: Cyrillic letters, at least two, with a hyphen inside a double
+// word - put in capitals the usual way: "римская-КОРСАКОВА" -> "Римская-Корсакова".
+// Null when it is not that.
+function clean_name_part($value): ?string
+{
+    $s = trim((string)$value);
+    if (!preg_match('/^\p{Cyrillic}+(?:-\p{Cyrillic}+)*$/u', $s)) {
+        return null;
+    }
+    $length = mb_strlen($s, 'UTF-8');
+    if ($length < 2 || $length > 40) {
+        return null;
+    }
+    $words = [];
+    foreach (explode('-', $s) as $word) {
+        $words[] = mb_strtoupper(mb_substr($word, 0, 1, 'UTF-8'), 'UTF-8')
+            . mb_strtolower(mb_substr($word, 1, null, 'UTF-8'), 'UTF-8');
+    }
+    return implode('-', $words);
+}
+
+// How a name part typed at LOGIN is matched against the registered one: case,
+// ё or е, and spaces around it make no difference.
+function name_key($value): string
+{
+    return str_replace('ё', 'е', mb_strtolower(trim((string)$value), 'UTF-8'));
+}
+
+// The name the Пользователь block is to show, from the registered parts. In
+// full only where the plug-in's RussianShortName reads it back the same way:
+// a patronymic with a patronymic's ending tells it which word is the surname,
+// and a double surname would lose its second capital there. Otherwise
+// shortened here, while the order is still known: "Римская-Корсакова И.П.".
+function user_display_name(string $surname, string $firstName, string $patronymic): string
+{
+    $initial = function (string $word): string {
+        return mb_substr($word, 0, 1, 'UTF-8') . '.';
+    };
+    $isPatronymic = preg_match('/\p{Cyrillic}{2}(?:вич|вна|чна|ич)$/u', mb_strtolower($patronymic, 'UTF-8')) === 1;
+    if ($isPatronymic && strpos($surname, '-') === false) {
+        return $surname . ' ' . $firstName . ' ' . $patronymic;
+    }
+    return $surname . ' ' . $initial($firstName) . ($patronymic !== '' ? $initial($patronymic) : '');
 }

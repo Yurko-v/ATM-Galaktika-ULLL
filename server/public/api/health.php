@@ -20,6 +20,12 @@ try {
 } catch (PDOException $e) {
     $observers = null;
 }
+// null while user_names has no password column - the ALTER in schema.sql not run.
+try {
+    $registered = (int)db()->query('SELECT COUNT(*) FROM user_names WHERE password_hash IS NOT NULL')->fetchColumn();
+} catch (PDOException $e) {
+    $registered = null;
+}
 
 json_out(200, [
     'ok'                  => true,
@@ -36,4 +42,6 @@ json_out(200, [
     'active'              => $active,
     // How many controllers have a name entered - a count, not the names.
     'user_names'          => $userNames,
+    // Of them, how many have registered with a password and can log in.
+    'registered'          => $registered,
 ]);

@@ -15,6 +15,7 @@
 #include "Sigmet.h"
 #include "Atis.h"
 #include "UserName.h"
+#include "TextEntry.h"
 #include "Apw.h"
 #include "Squawk.h"
 
@@ -113,36 +114,36 @@ public:
     // empty with no CID either.
     std::wstring MyUserName() const;
 
-    // Whether the squawk server's name table has a name for the controller
-    // logged in - which is what opens the panel. Offline: not controlling on
-    // the live network, so there is no CID to look for. Waiting: the feed does
-    // not list us yet, or the server has not answered yet. NoServer: no server
-    // configured, or one without the table. Missing: the server has answered,
-    // and has no name for us. Only the server's answer counts - a name in the
-    // config's "UserNames" changes how the name is shown, never who is let in.
-    enum class RegisteredNameState { Offline, Waiting, NoServer, Missing, Known };
-    RegisteredNameState MyRegisteredName() const;
+    // Controlling on the live network - the only connection with a CID for the
+    // server to check a LOGIN against.
+    bool LiveConnection() const;
 
     // The server had a name for our CID and has answered since that it has
     // none - the admin has taken us out of the base. For the rest of the
-    // session LOGIN answers "Доступ приостановлен" instead of offering the
-    // Регистрация window, and a panel that is open is shut. Cleared again
-    // once the server has a name for us.
+    // session LOGIN answers "Доступ приостановлен" instead of opening the Вход
+    // window, and a panel that is open is shut. Cleared again once the server
+    // has a name for us.
     bool AccessSuspended() const;
 
     // A sweatbox, a simulator or a playback - the trainer, where the panel is
     // open to whoever sits at it and the Пользователь block says "user".
     bool TrainingSession() const;
 
-    // The Регистрация window's "Отправить": enters 'name' (as
-    // NormalizeEnteredName made it) for our CID, on a worker thread. Done once
-    // the table holds a name for us - the one sent, or one that was there
-    // already - and the Пользователь block shows it from then on; Failed with a
-    // line for the window saying why.
-    enum class NameSubmitState { Idle, Sending, Done, Failed };
-    void SubmitMyName(const std::wstring& name);
-    NameSubmitState MyNameSubmit(std::wstring* message = NULL) const;
-    void ResetNameSubmit();
+    // The Вход в систему КСА window's "Войти": the name and password, checked
+    // by the squawk server on a worker thread (see SubmitLogin in UserName.h).
+    // Done once the server has let us in, and the Пользователь block shows the
+    // name it has for us from then on. Failed with a line for the window saying
+    // why - and 'serverFault' when it is the service that failed rather than
+    // what was typed, the kind of failure that opens Bypass.
+    enum class LoginState { Idle, Sending, Done, Failed };
+    void StartLogin(const std::wstring& surname, const std::wstring& firstName,
+        const std::wstring& patronymic, const std::wstring& password);
+    LoginState MyLogin(std::wstring* message = NULL, bool* serverFault = NULL) const;
+    void ResetLogin();
+
+    // The site's registration page, beside the squawk API: "http://host/api" ->
+    // "http://host/register/". Empty with no server configured.
+    std::string RegisterPageUrl() const;
 
     // The bookings that decide which restricted areas are up right now. Handed
     // over whole, like the сигметы, so a frame that starts reading them cannot
@@ -257,12 +258,13 @@ private:
     // Inter looked for and, if it is missing, said so - once a session.
     bool m_fontChecked = false;
 
-    // The Регистрация window's name on its way to the server - one send at a
-    // time, its state under m_identityMutex, since what comes back is written
-    // into m_identity too.
-    std::thread m_nameSubmit;
-    NameSubmitState m_nameSubmitState = NameSubmitState::Idle;
-    std::wstring m_nameSubmitMessage;
+    // LOGIN on its way to the server - one at a time, its state under
+    // m_identityMutex, since the name that comes back is written into
+    // m_identity too.
+    std::thread m_login;
+    LoginState m_loginState = LoginState::Idle;
+    std::wstring m_loginMessage;
+    bool m_loginServerFault = false;
 
     // And once more for the day's airspace use plan, which is what says whether
     // a restricted area exists at this moment.
@@ -622,7 +624,7 @@ private:
     void   PlaceRulerPoint(POINT pt);   // one click: anchor the start, or fix the end
     void   DrawRulerCursor(HDC hDC);    // armed crosshair, shown until the start is placed
     void   UpdateRulerEnd(POINT pt);
-    bool   CursorRadarPoint(POINT& out);   // cursor in this screen's radar pixels
+    bool   CursorRadarPoint(POINT& out, HWND* view = NULL);   // cursor in this screen's radar pixels, and the window they belong to
     bool   FindNearbyTarget(POINT pt, std::string& callsignOut);
     EuroScopePlugIn::CPosition ResolveRulerPoint(bool snapped, const std::string& callsign,
         EuroScopePlugIn::CPosition& fixed);
@@ -691,8 +693,9 @@ private:
     bool  m_visible;            // panel shown at all (".ulll")
     bool  m_collapsed;          // collapsed to the small clock/date window
 
-    // Авторизация. LOGIN opens the panel for a controller the squawk server's
-    // base has a name for, after a short staged "проверка". Until it has, the
+    // Авторизация. LOGIN opens the Вход window, and the panel opens once the
+    // squawk server has taken the name and password typed there, after a short
+    // staged "проверка". Until it has, the
     // panel is the header and the Авторизация block alone, and the things the
     // panel drives (its windows, the ruler, the vectors) stay off. In the
     // trainer nobody is asked: the panel is simply open. Deliberately not saved
@@ -703,14 +706,14 @@ private:
     std::wstring m_authMessage; // why LOGIN did not open the panel - on the Авторизация card until the next LOGIN
     bool Authorized() { return m_authState == AuthState::LoggedIn || Plugin()->TrainingSession(); }
     void TickAuth();            // fast timer: animates the check and ends it
-    void StartAuthCheck();      // LOGIN - or the Регистрация window closing
+    void StartAuthCheck();      // the server let the controller in - or Bypass
 
     // Bypass - past the base, for when the base is what is broken. Only once
-    // the last LOGIN was turned away by an error (no network, no server, no
-    // answer yet) or the Регистрация window could not send: pressed before
-    // that, it tells the controller to register instead. Never past a
-    // suspension. A panel opened this way is not shut for having no name.
-    bool m_authFailed;          // the last LOGIN, or the name sent after it, ended in an error
+    // the last LOGIN was turned away by an error of the service's (no network,
+    // no server, no answer) - never for a wrong name or password: pressed
+    // before that, it tells the controller to register instead. Never past a
+    // suspension.
+    bool m_authFailed;          // the last LOGIN ended in an error of the service's
     bool m_authBypassed;        // this panel was opened by Bypass
     bool BypassAvailable();
 
@@ -720,19 +723,35 @@ private:
     void ShowNotice(const std::wstring& text);
     void DrawNoticeWindow(HDC hDC);
 
-    // Регистрация пользователя: the window LOGIN opens instead of starting the
-    // check when the squawk server's table has no name for this CID (see
-    // CGalaxyATMSystemPlugin::MyRegisteredName). A field that opens EuroScope's
-    // edit box, a line saying how the name will read or why it cannot be sent,
-    // and "Отправить". There is no other way past it: the check starts only once
-    // the server holds a name, and the panel does not open without one. Its
-    // "x" closes it and leaves the panel shut, until LOGIN opens it again.
-    bool m_nameWindowOpen;
-    std::wstring m_nameTyped;     // as it came back from the edit box
-    std::wstring m_nameProblem;   // why "Отправить" did not send it, until the next edit
-    RECT m_nameArea;              // where it stands - dragged by its title bar
-    bool m_namePositioned;        // put in the middle of the radar once, then left where it is dragged
-    void DrawNameWindow(HDC hDC);
+    // Вход в систему КСА: the window LOGIN opens. Фамилия, Имя, Отчество and
+    // Пароль, as registered on the site, typed into edit boxes laid over its
+    // fields (TextEntry), and "Войти", which sends them to the server
+    // (CGalaxyATMSystemPlugin::StartLogin). There is no other way past it but
+    // Bypass after a failure of the service's. Its "x" closes it and leaves
+    // the panel shut, until LOGIN opens it again.
+    enum LoginField { LF_SURNAME, LF_FIRST_NAME, LF_PATRONYMIC, LF_PASSWORD, LF_COUNT };
+    bool m_loginWindowOpen;
+    std::wstring m_loginValues[LF_COUNT];   // as typed; the password is wiped once sent, and with the window
+    std::wstring m_loginProblem;            // why "Войти" did not send, until the next edit
+    RECT m_loginFields[LF_COUNT];           // where each field was drawn last, in radar pixels
+    RECT m_loginArea;                       // where the window stands - dragged by its title bar
+    bool m_loginPositioned;                 // put in the middle of the radar once, then left where it is dragged
+    ULONGLONG m_loginDrawnTick;             // when it was last drawn - a box is not left over a window no longer on screen
+    void DrawLoginWindow(HDC hDC);
+    void CloseLoginWindow();
+    void SendLogin();
+
+    // The edit box over one of the Вход window's fields. Opened on the fast
+    // tick after the click rather than in it, so EuroScope, finishing with the
+    // click, cannot take the focus straight back from it.
+    TextEntry m_entry;
+    int  m_entryField;          // the field the box is over, or -1
+    int  m_entryPending;        // the field to open it over on the next tick, or -1
+    ULONGLONG m_entryPendingTick;   // when that was asked for - the box waits for a frame drawn since
+    HWND m_entryView;           // the radar view, found under the cursor at the click
+    void EditLoginField(int field);
+    void TickEntry();           // fast timer: opens the box that is pending
+    void CommitEntry();         // the open box's text into its field, and the box closed
     POINT m_dragOffset;         // cursor->window offset captured on an АТИС drag
     UINT_PTR m_timerId;         // 1s tick that keeps the clock live
     UINT_PTR m_pollTimerId;     // fast tick that watches the side mouse buttons
@@ -922,12 +941,13 @@ const int SO_NOTICE_CLOSE  = 86;
 
 const int SO_MENU_BAR     = 91;    // the whole menu bar, so a click on it never reaches TopSky's menu below
 
-// Регистрация пользователя - the window LOGIN opens for a controller the server has no name for.
-const int SO_NAME_WINDOW  = 93;    // the whole card, so a click on it never reaches the radar
-const int SO_NAME_FIELD   = 94;    // the name field - opens EuroScope's edit box
-const int SO_NAME_SEND    = 95;    // "Отправить"
-const int SO_NAME_HEADER  = 97;    // its title bar - drag handle
-const int SO_NAME_CLOSE   = 98;    // the "x" on that bar - closes it, the panel stays shut
+// Вход в систему КСА - the window LOGIN opens.
+const int SO_LOGIN_WINDOW   = 93;  // the whole card, so a click on it never reaches the radar
+const int SO_LOGIN_FIELD    = 94;  // one of its fields - sObjectId is its LoginField
+const int SO_LOGIN_SEND     = 95;  // "Войти"
+const int SO_LOGIN_HEADER   = 97;  // its title bar - drag handle
+const int SO_LOGIN_CLOSE    = 98;  // the "x" on that bar - closes it, the panel stays shut
+const int SO_LOGIN_REGISTER = 99;  // the registration page's address - opens it in the browser
 
 const int SO_ALTFILTER_FROM     = 6;
 const int SO_ALTFILTER_TO       = 7;
@@ -1002,7 +1022,7 @@ const int SO_ZONE_AREA     = 71;   // same, for a запретная/огран�
 const int FN_ALTFILTER_FROM = 300;
 const int FN_ALTFILTER_TO   = 301;
 const int FN_CODE_FILTER    = 302;   // the code block's inline entry field
-const int FN_NAME_ENTRY     = 304;   // the Регистрация window's name field
+const int FN_LOGIN_FIELD    = 310;   // + LoginField: a Вход window field, typed into EuroScope's own edit box when ours cannot be opened
 const int FN_RC_FILTER_CALLSIGN = 305;   // "Список РЦ" filter strip: Рейс
 const int FN_RC_FILTER_BEFORE   = 306;   // До (мин)
 const int FN_RC_FILTER_AFTER    = 307;   // После (мин)
