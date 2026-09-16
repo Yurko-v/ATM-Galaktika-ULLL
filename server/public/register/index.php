@@ -10,6 +10,13 @@
 // nobody but the CID's owner, since LOGIN is only let in from a position the
 // network lists under that CID.
 //
+// The same page, under "?reset", takes the request that reopens it: a
+// controller who has forgotten their password leaves their CID, name and a way
+// to be reached, the request appears on the admin page, and the engineer there
+// decides whether to reset. Nothing on this side of it changes a password -
+// that is the whole point of going through a person: the site cannot tell the
+// owner of a CID from anyone who knows their name.
+//
 // The service has no SSL, so the password goes over plain http - the page
 // says as much.
 
@@ -19,28 +26,56 @@ require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/page.php';
 
 const REGISTER_TRIES_PER_MIN = 5;   // per address
+const RESET_TRIES_PER_MIN = 3;      // per address
 const PASSWORD_MIN_CHARS = 8;
 const PASSWORD_MAX_BYTES = 72;      // all bcrypt reads of a password - the rest would be ignored
 
 html_page_setup('squawk register');
 start_page_session('galaxy_register');
 
+// The three name fields both forms ask for, cleaned: surname, first name and
+// an optional patronymic, or a message saying which of them is not a name.
+// $refuse never returns.
+function posted_name_parts(callable $refuse): array
+{
+    $surname = clean_name_part($_POST['surname'] ?? '');
+    if ($surname === null) {
+        $refuse('Фамилия — русскими буквами, двойная — через дефис.');
+    }
+    $firstName = clean_name_part($_POST['first_name'] ?? '');
+    if ($firstName === null) {
+        $refuse('Имя — русскими буквами.');
+    }
+    $patronymic = '';
+    if (trim((string)($_POST['patronymic'] ?? '')) !== '') {
+        $patronymic = clean_name_part($_POST['patronymic']);
+        if ($patronymic === null) {
+            $refuse('Отчество — русскими буквами. Если отчества нет, оставьте поле пустым.');
+        }
+    }
+    return [$surname, $firstName, $patronymic];
+}
+
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $action = (string)($_POST['action'] ?? 'register');
+    $query = $action === 'reset' ? '?reset' : '';
+
     // Everything typed but the passwords comes back into the form after an error.
     $form = [];
-    foreach (['cid', 'surname', 'first_name', 'patronymic'] as $field) {
+    foreach (['cid', 'surname', 'first_name', 'patronymic', 'contact'] as $field) {
         $form[$field] = substr(trim((string)($_POST[$field] ?? '')), 0, 200);
     }
-    $refuse = function (string $text) use ($form): void {
+    $refuse = function (string $text) use ($form, $query): void {
         $_SESSION['form'] = $form;
         flash('error', $text);
-        back_to_page();
+        back_to_page($query);
     };
 
     if (!csrf_ok()) {
         $refuse('Страница устарела — отправьте форму ещё раз.');
     }
-    if (!within_rate_limit(client_bucket('reg:'), REGISTER_TRIES_PER_MIN)) {
+    $tries = $action === 'reset' ? RESET_TRIES_PER_MIN : REGISTER_TRIES_PER_MIN;
+    if (!within_rate_limit(client_bucket($action === 'reset' ? 'rst:' : 'reg:'), $tries)) {
         $refuse('Слишком много попыток — подождите минуту.');
     }
 
@@ -48,22 +83,65 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     if (!preg_match('/^\d{6,8}$/', $cid)) {
         $refuse('CID — ваш номер участника VATSIM, 6–8 цифр.');
     }
-    $surname = clean_name_part($form['surname']);
-    if ($surname === null) {
-        $refuse('Фамилия — русскими буквами, двойная — через дефис.');
-    }
-    $firstName = clean_name_part($form['first_name']);
-    if ($firstName === null) {
-        $refuse('Имя — русскими буквами.');
-    }
-    $patronymic = '';
-    if ($form['patronymic'] !== '') {
-        $patronymic = clean_name_part($form['patronymic']);
-        if ($patronymic === null) {
-            $refuse('Отчество — русскими буквами. Если отчества нет, оставьте поле пустым.');
+    [$surname, $firstName, $patronymic] = posted_name_parts($refuse);
+
+    // ---- Заявка на сброс пароля ---------------------------------------------
+    // Written down and left for the engineer; the password is untouched until
+    // they press "Сбросить пароль" on the admin page.
+    if ($action === 'reset') {
+        $st = db()->prepare('SELECT password_hash FROM user_names WHERE cid = ?');
+        $st->execute([$cid]);
+        $row = $st->fetch();
+        if (!$row) {
+            $refuse('CID ' . $cid . ' в системе не числится — заявка тут не нужна, просто зарегистрируйтесь.');
         }
+        if ((string)$row['password_hash'] === '') {
+            $refuse('У CID ' . $cid . ' пароля ещё нет — сбрасывать нечего, зарегистрируйтесь.');
+        }
+
+        // The contact is the only free text on the site: it goes into the admin
+        // page as it was typed, so line breaks and control characters come out.
+        $contact = preg_replace('/[\p{C}]+/u', ' ', $form['contact']);
+        $contact = trim(mb_substr((string)$contact, 0, 100, 'UTF-8'));
+
+        // One open request per CID: asking again refreshes the one that is
+        // already waiting instead of filling the engineer's list.
+        //
+        // The table came after the rest of the site, so a server whose
+        // schema.sql has not been imported again since has none. Better to say
+        // so than to show the error page: everything else here still works.
+        try {
+            db()->prepare(
+                'INSERT INTO password_resets (cid, asked_name, contact, requested_at, requested_ip)
+                 VALUES (?, ?, ?, NOW(), ?)
+                 ON DUPLICATE KEY UPDATE
+                     asked_name   = VALUES(asked_name),
+                     contact      = VALUES(contact),
+                     requested_at = VALUES(requested_at),
+                     requested_ip = VALUES(requested_ip)'
+            )->execute([
+                $cid,
+                user_display_name($surname, $firstName, $patronymic),
+                $contact,
+                substr(client_ip(), 0, 45),
+            ]);
+        } catch (PDOException $e) {
+            error_log('squawk register: cannot store a reset request - ' . $e->getMessage());
+            $refuse('Заявки сейчас не принимаются — напишите инженеру системы напрямую.');
+        }
+
+        error_log('squawk register: CID ' . $cid . ' asked for a password reset from ' . client_ip());
+        // What they typed, not what the row holds: the page is open to anyone,
+        // and it has no business reading a registered name back out.
+        $_SESSION['asked'] = [
+            'cid'     => $cid,
+            'name'    => user_display_name($surname, $firstName, $patronymic),
+            'contact' => $contact,
+        ];
+        back_to_page('?reset');
     }
 
+    // ---- Регистрация --------------------------------------------------------
     $password = (string)($_POST['password'] ?? '');
     if (mb_strlen($password, 'UTF-8') < PASSWORD_MIN_CHARS) {
         $refuse('Пароль — не короче ' . PASSWORD_MIN_CHARS . ' символов.');
@@ -95,8 +173,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     // MySQL counts 1 for a new row, 2 for a changed one, 0 for one left alone.
     if ($st->rowCount() === 0) {
         error_log('squawk register: CID ' . $cid . ' is already registered - refused from ' . client_ip());
-        $refuse('CID ' . $cid . ' уже зарегистрирован. Если вы забыли пароль или регистрировались не вы, '
-            . 'обратитесь к инженеру системы.');
+        $refuse('CID ' . $cid . ' уже зарегистрирован. Если вы забыли пароль, оставьте '
+            . 'заявку на сброс — ссылка под формой.');
     }
 
     error_log('squawk register: CID ' . $cid . ' registered as "' . $name . '" from ' . client_ip());
@@ -104,11 +182,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     back_to_page();
 }
 
+$reset = isset($_GET['reset']);
 $flash = take_flash();
-$form = $_SESSION['form'] ?? ['cid' => '', 'surname' => '', 'first_name' => '', 'patronymic' => ''];
+$form = ($_SESSION['form'] ?? []) + ['cid' => '', 'surname' => '', 'first_name' => '', 'patronymic' => '', 'contact' => ''];
 unset($_SESSION['form']);
 $registered = $_SESSION['registered'] ?? null;
 unset($_SESSION['registered']);
+$asked = $_SESSION['asked'] ?? null;
+unset($_SESSION['asked']);
+$done = $registered !== null || $asked !== null;
 $csrf = (string)$_SESSION['csrf'];
 ?>
 <!doctype html>
@@ -117,35 +199,45 @@ $csrf = (string)$_SESSION['csrf'];
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Регистрация в системе КСА — Galaxy ATM System</title>
+<title><?= $reset ? 'Сброс пароля' : 'Регистрация в системе КСА' ?> — Galaxy ATM System</title>
+<?= page_fonts() ?>
 <style>
 <?= page_css() ?>
-    main { max-width: 440px; margin-top: 6vh; }
-    .field { margin-bottom: 12px; }
-    .pair { display: flex; gap: 12px; flex-wrap: wrap; }
-    .pair .field { flex: 1 1 160px; }
-    .optional { color: var(--dim); font-weight: 400; }
-    form button[type=submit] { width: 100%; margin-top: 4px; }
-    .done { text-align: center; padding: 24px 16px; }
+    .shell { max-width: 560px; }
+    .foot { max-width: 560px; }
+    .pair { display: flex; gap: 16px; flex-wrap: wrap; }
+    .pair .field { flex: 1 1 180px; margin-bottom: 16px; }
+    .optional { font-weight: 400; color: var(--text-tertiary); }
+    form button[type=submit] { width: 100%; height: 56px; margin-top: 8px; }
+    .swap { text-align: center; margin: 0; padding: 4px 0 0; color: var(--text-secondary); font-size: 15px; }
+    .done { text-align: center; }
     .done .mark {
-        width: 44px; height: 44px; margin: 0 auto 12px; border-radius: 50%;
-        border: 2px solid var(--accent); color: var(--accent);
-        display: flex; align-items: center; justify-content: center; font-size: 24px; line-height: 1;
+        width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 50%;
+        background: var(--background-surface-accent); color: var(--text-accent);
+        display: flex; align-items: center; justify-content: center; font-size: 30px; line-height: 1;
     }
-    .done h1 { margin-bottom: 12px; }
-    .done dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; text-align: left; margin: 16px 0; }
-    .done dt { color: var(--dim); }
-    .done dd { margin: 0; }
-    .steps { text-align: left; color: var(--dim); margin: 0; padding-left: 20px; }
+    .done h1 { font-size: 28px; }
+    .done dl {
+        display: grid; grid-template-columns: auto 1fr; gap: 8px 20px; text-align: left;
+        margin: 24px 0; padding: 20px 24px; border-radius: var(--radius-s);
+        background: var(--background-section-light);
+    }
+    .done dt { color: var(--text-secondary); font-size: 14px; align-self: center; }
+    .done dd { margin: 0; color: var(--text-primary); }
+    .steps { text-align: left; color: var(--text-secondary); margin: 0; padding-left: 22px; }
+    .steps li { margin-bottom: 6px; }
 </style>
 </head>
 <body>
+<div class="shell">
+<?= page_header($done ? '' : ($reset
+        ? '<a class="nav-link" href="./">Регистрация</a>'
+        : '<a class="nav-link" href="?reset">Забыли пароль?</a>')) ?>
 <main>
-    <?= brand_logo() ?>
 <?php if ($registered): ?>
     <div class="card done" role="status">
-        <div class="mark" aria-hidden="true">&#10003;</div>
-        <h1>Вы успешно зарегистрированы в системе КСА</h1>
+        <div class="mark"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5 L9.5 18 L20 6.5"/></svg></div>
+        <h1>Вы зарегистрированы в системе КСА</h1>
         <dl>
             <dt>CID</dt><dd><?= h($registered['cid']) ?></dd>
             <dt>Фамилия</dt><dd><?= h($registered['surname']) ?></dd>
@@ -158,6 +250,69 @@ $csrf = (string)$_SESSION['csrf'];
             <li>Введите фамилию, имя, отчество и пароль.</li>
         </ol>
     </div>
+<?php elseif ($asked): ?>
+    <div class="card done" role="status">
+        <div class="mark"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 6.5 V12.5 L16 14.5"/></svg></div>
+        <h1>Заявка на сброс пароля принята</h1>
+        <dl>
+            <dt>CID</dt><dd><?= h($asked['cid']) ?></dd>
+            <dt>Заявитель</dt><dd><?= h($asked['name']) ?></dd>
+            <dt>Связь</dt><dd><?= $asked['contact'] !== '' ? h($asked['contact']) : '—' ?></dd>
+        </dl>
+        <ol class="steps">
+            <li>Инженер системы сверит заявку и сбросит пароль.</li>
+            <li>После этого вернитесь сюда и <a href="./">зарегистрируйтесь заново</a> с тем же CID.</li>
+            <li>Старый пароль перестанет работать, новый вводите в EuroScope при LOGIN.</li>
+        </ol>
+        <p class="hint">До сброса вход в панель работает со старым паролем — если вы его вспомните,
+            заявку можно не ждать.</p>
+    </div>
+<?php elseif ($reset): ?>
+    <h1>Сброс пароля</h1>
+    <p class="sub">Заявка инженеру системы: сайт не может отличить владельца CID от того, кто знает
+        его имя, поэтому пароль сбрасывает человек.</p>
+
+    <?php if ($flash): ?>
+        <div class="flash <?= h($flash[0]) ?>" role="alert"><?= h($flash[1]) ?></div>
+    <?php endif; ?>
+
+    <form method="post" class="card" autocomplete="off">
+        <input type="hidden" name="action" value="reset">
+        <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+        <div class="field">
+            <label for="cid">CID на VATSIM</label>
+            <input id="cid" name="cid" inputmode="numeric" pattern="\d{6,8}" maxlength="8" required autofocus
+                   value="<?= h($form['cid']) ?>" placeholder="1234567">
+        </div>
+        <div class="field">
+            <label for="surname">Фамилия</label>
+            <input id="surname" name="surname" maxlength="40" required
+                   value="<?= h($form['surname']) ?>" placeholder="Иванов">
+        </div>
+        <div class="pair">
+            <div class="field">
+                <label for="first_name">Имя</label>
+                <input id="first_name" name="first_name" maxlength="40" required
+                       value="<?= h($form['first_name']) ?>" placeholder="Иван">
+            </div>
+            <div class="field">
+                <label for="patronymic">Отчество <span class="optional">— если есть</span></label>
+                <input id="patronymic" name="patronymic" maxlength="40"
+                       value="<?= h($form['patronymic']) ?>" placeholder="Иванович">
+            </div>
+        </div>
+        <div class="field">
+            <label for="contact">Как с вами связаться <span class="optional">— если нужно</span></label>
+            <input id="contact" name="contact" maxlength="100"
+                   value="<?= h($form['contact']) ?>" placeholder="Discord, почта или телеграм">
+        </div>
+        <button type="submit">Отправить заявку</button>
+        <p class="hint">
+            Пароль этой заявкой не меняется: она появляется в АРМ инженера системы, и уже он решает,
+            сбрасывать ли. ФИО указывайте те же, что при регистрации — по ним инженер вас и узнает.
+        </p>
+    </form>
+    <p class="swap">Вспомнили пароль? Он продолжает работать. <a href="./">К регистрации</a></p>
 <?php else: ?>
     <h1>Регистрация в системе КСА</h1>
     <p class="sub">Galaxy ATM System · ULLL FIR</p>
@@ -167,6 +322,7 @@ $csrf = (string)$_SESSION['csrf'];
     <?php endif; ?>
 
     <form method="post" class="card" autocomplete="off">
+        <input type="hidden" name="action" value="register">
         <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
         <div class="field">
             <label for="cid">CID на VATSIM</label>
@@ -208,7 +364,10 @@ $csrf = (string)$_SESSION['csrf'];
             Сайт работает без шифрования: не используйте пароль от VATSIM или почты.
         </p>
     </form>
+    <p class="swap">Забыли пароль? <a href="?reset">Оставьте заявку инженеру системы</a></p>
 <?php endif; ?>
 </main>
+</div>
+<?= page_footer() ?>
 </body>
 </html>

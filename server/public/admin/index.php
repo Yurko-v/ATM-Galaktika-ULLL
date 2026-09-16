@@ -11,6 +11,13 @@
 // corrected (the one shown - LOGIN still checks the registered parts), a
 // password reset so the CID can register again, or a controller taken out.
 //
+// A controller who has forgotten their password leaves a request on the
+// registration page; the requests wait here, at the top, each with the name it
+// was made under beside the name the row holds, and are answered with the same
+// "Сбросить пароль" - or turned down. Nothing resets a password on its own:
+// the site cannot tell the owner of a CID from anyone who knows their name, so
+// a person looks at every request.
+//
 // The service has no SSL, so the password goes over plain http like everything
 // else does: hand out passwords that are used nowhere else.
 
@@ -50,6 +57,18 @@ function current_admin(array $accounts): ?string
     }
     $_SESSION['seen'] = time();
     return $login;
+}
+
+// The password_resets table came after the rest: a server whose schema.sql has
+// not been imported again since has none. That must not take the page down -
+// the list of controllers is what it is mainly for - so a missing table reads
+// here as "no requests", and the page says so once, below the list.
+function take_reset_request(string $cid): void
+{
+    try {
+        db()->prepare('DELETE FROM password_resets WHERE cid = ?')->execute([$cid]);
+    } catch (PDOException $e) {
+    }
 }
 
 start_page_session('galaxy_admin');
@@ -123,10 +142,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     }
 
     // The password goes, the row and its name stay: the CID can register on
-    // the site again, and until then LOGIN turns it away.
+    // the site again, and until then LOGIN turns it away. A request waiting for
+    // this CID is answered by the same click and leaves the list.
     if ($action === 'reset') {
         $st = db()->prepare('UPDATE user_names SET password_hash = NULL WHERE cid = ? AND password_hash IS NOT NULL');
         $st->execute([$cid]);
+        take_reset_request($cid);
         flash('ok', $st->rowCount() > 0
             ? 'Пароль ' . $cid . ' сброшен — диспетчер может зарегистрироваться на сайте заново.'
             : 'У ' . $cid . ' пароля и так нет.');
@@ -134,9 +155,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         back_to_page();
     }
 
+    // The request goes, the password stays: the old one keeps working, and the
+    // controller can ask again if it really was them.
+    if ($action === 'dismiss') {
+        take_reset_request($cid);
+        flash('ok', 'Заявка ' . $cid . ' отклонена — пароль не тронут.');
+        error_log('squawk admin: ' . $admin . ' dismissed the reset request of ' . $cid);
+        back_to_page();
+    }
+
     if ($action === 'delete') {
         $st = db()->prepare('DELETE FROM user_names WHERE cid = ?');
         $st->execute([$cid]);
+        take_reset_request($cid);
         flash('ok', $st->rowCount() > 0
             ? 'Удалён ' . $cid . ' — доступ к панели у него закроется в течение минуты.'
             : 'Записи ' . $cid . ' уже нет.');
@@ -153,10 +184,27 @@ $form = $_SESSION['form'] ?? ['cid' => '', 'name' => ''];
 unset($_SESSION['form']);
 
 $rows = [];
+$requests = [];
+$resetsTable = true;
 if ($admin !== null) {
     $rows = db()->query(
         'SELECT cid, name, password_hash IS NOT NULL AS has_password, updated_at FROM user_names ORDER BY name'
     )->fetchAll();
+
+    try {
+        $requests = db()->query(
+            'SELECT r.cid, r.asked_name, r.contact, r.requested_at, u.name AS current_name
+             FROM password_resets r
+             LEFT JOIN user_names u ON u.cid = r.cid
+             ORDER BY r.requested_at'
+        )->fetchAll();
+    } catch (PDOException $e) {
+        $resetsTable = false;
+    }
+}
+$waiting = [];
+foreach ($requests as $request) {
+    $waiting[(string)$request['cid']] = true;
 }
 $csrf = (string)$_SESSION['csrf'];
 ?>
@@ -167,36 +215,45 @@ $csrf = (string)$_SESSION['csrf'];
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>АРМ инженера системы — Galaxy ATM System</title>
+<?= page_fonts() ?>
 <style>
 <?= page_css() ?>
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-    .row .cid { flex: 0 1 160px; }
-    .row .name { flex: 1 1 260px; }
-    .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-    th { color: var(--dim); font-weight: 600; font-size: 13px; }
-    td.num { font-variant-numeric: tabular-nums; }
-    td.when { color: var(--dim); font-size: 13px; white-space: nowrap; }
-    td.pass { font-size: 13px; white-space: nowrap; }
-    td.pass .no { color: var(--dim); }
-    td.actions { text-align: right; white-space: nowrap; }
-    td.actions form { display: inline; }
-    .empty { color: var(--dim); padding: 12px 0 0; }
-    .login { max-width: 360px; margin: 10vh auto 0; }
-    .login input { margin-bottom: 12px; }
+    .shell, .foot { max-width: 1040px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+    .row .cid { flex: 0 1 180px; }
+    .row .name { flex: 1 1 280px; }
+    .row .field { margin-bottom: 0; }
+    .top { display: flex; justify-content: space-between; align-items: center; gap: 12px 20px; flex-wrap: wrap; }
+    .top h2 { margin-bottom: 0; }
+    .card .top { margin-bottom: 20px; }
+    .search { flex: 0 1 280px; }
+    .head { margin-bottom: 28px; }
+    .head h1 { margin-bottom: 4px; }
+    .head .sub { margin-bottom: 0; }
+    .count {
+        display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px;
+        padding: 0 10px; margin-left: 10px; border-radius: var(--radius-pill);
+        background: var(--background-primary); color: var(--text-main-alt); font-size: 14px; font-weight: 500;
+    }
+    .asked { display: flex; flex-direction: column; gap: 4px; }
+    .asked .mismatch { color: var(--text-error); font-size: 13px; }
+    .contact { color: var(--text-secondary); font-size: 14px; word-break: break-word; }
+    .card.requests { box-shadow: var(--shadow-m), inset 0 0 0 1px rgba(255,204,0,.5); }
+    .login { max-width: 420px; margin: 4vh auto 0; }
+    .login .field { margin-bottom: 16px; }
+    .login button { width: 100%; height: 56px; margin-top: 8px; }
+    .login .card { padding: 32px 28px; }
 </style>
 </head>
 <body>
-<main>
 <?php if ($admin === null): ?>
-    <div class="login">
-        <?= brand_logo() ?>
-        <h1>Galaxy ATM System</h1>
-        <p class="sub">АРМ инженера системы</p>
+<div class="shell">
+    <?= page_header('<a class="nav-link" href="../register/">Регистрация</a>') ?>
+    <main class="login">
+        <h1>АРМ инженера системы</h1>
+        <p class="sub">Galaxy ATM System · ULLL FIR</p>
         <?php if ($flash): ?>
-            <div class="flash <?= h($flash[0]) ?>"><?= h($flash[1]) ?></div>
+            <div class="flash <?= h($flash[0]) ?>" role="alert"><?= h($flash[1]) ?></div>
         <?php endif; ?>
         <?php if (!$accounts): ?>
             <div class="flash error">Логины не заданы: добавьте их в <code>'admins'</code> в config.php на сервере.</div>
@@ -204,29 +261,89 @@ $csrf = (string)$_SESSION['csrf'];
         <form method="post" class="card">
             <input type="hidden" name="action" value="login">
             <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
-            <label for="login">Логин</label>
-            <input id="login" name="login" autocomplete="username" required autofocus>
-            <label for="password">Пароль</label>
-            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <div class="field">
+                <label for="login">Логин</label>
+                <input id="login" name="login" autocomplete="username" required autofocus>
+            </div>
+            <div class="field">
+                <label for="password">Пароль</label>
+                <input id="password" name="password" type="password" autocomplete="current-password" required>
+            </div>
             <button type="submit">Войти</button>
         </form>
-    </div>
+    </main>
+</div>
 <?php else: ?>
-    <?= brand_logo() ?>
-    <div class="top">
-        <div>
-            <h1>АРМ инженера системы</h1>
-            <p class="sub">Кто может войти в панель плагина. Вошли как <?= h($admin) ?>.</p>
-        </div>
-        <form method="post">
-            <input type="hidden" name="action" value="logout">
-            <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
-            <button type="submit" class="link">Выйти</button>
-        </form>
+<div class="shell">
+    <?= page_header(
+        '<a class="nav-link" href="../register/">Страница регистрации</a>'
+        . '<form method="post">'
+        . '<input type="hidden" name="action" value="logout">'
+        . '<input type="hidden" name="csrf" value="' . h($csrf) . '">'
+        . '<button type="submit" class="secondary">Выйти</button>'
+        . '</form>'
+    ) ?>
+    <main>
+    <div class="head">
+        <h1>АРМ инженера системы</h1>
+        <p class="sub">Кто может войти в панель плагина. Вошли как <?= h($admin) ?>.</p>
     </div>
 
     <?php if ($flash): ?>
-        <div class="flash <?= h($flash[0]) ?>"><?= h($flash[1]) ?></div>
+        <div class="flash <?= h($flash[0]) ?>" role="alert"><?= h($flash[1]) ?></div>
+    <?php endif; ?>
+
+    <?php if ($requests): ?>
+    <div class="card requests">
+        <div class="top">
+            <h2>Заявки на сброс пароля <span class="count"><?= count($requests) ?></span></h2>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>CID</th><th>Кто просит</th><th>Связь</th><th>Подана, UTC</th><th></th></tr></thead>
+                <tbody>
+                <?php foreach ($requests as $request): ?>
+                    <?php $same = (string)$request['asked_name'] === (string)$request['current_name']; ?>
+                    <tr>
+                        <td class="num"><?= h($request['cid']) ?></td>
+                        <td>
+                            <div class="asked">
+                                <span><?= h($request['asked_name']) ?></span>
+                                <?php if (!$same): ?>
+                                    <span class="mismatch">в системе: <?= $request['current_name'] !== null
+                                        ? h($request['current_name']) : 'записи нет' ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                        <td class="contact"><?= $request['contact'] !== '' ? h($request['contact']) : '—' ?></td>
+                        <td class="when"><?= h(substr((string)$request['requested_at'], 0, 16)) ?></td>
+                        <td class="actions">
+                            <form method="post" class="js-confirm"
+                                  data-question="Сбросить пароль «<?= h($request['asked_name']) ?>» (CID <?= h($request['cid']) ?>)? Войти он сможет только после новой регистрации на сайте.">
+                                <input type="hidden" name="action" value="reset">
+                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                <input type="hidden" name="cid" value="<?= h($request['cid']) ?>">
+                                <button type="submit" class="small">Сбросить пароль</button>
+                            </form>
+                            &nbsp;
+                            <form method="post" class="js-confirm"
+                                  data-question="Отклонить заявку CID <?= h($request['cid']) ?>? Пароль останется прежним.">
+                                <input type="hidden" name="action" value="dismiss">
+                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                <input type="hidden" name="cid" value="<?= h($request['cid']) ?>">
+                                <button type="submit" class="small danger">Отклонить</button>
+                            </form>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <p class="hint">
+            Сайт ничьё право на CID не проверяет — сверьте, кто просит, прежде чем сбрасывать.
+            После сброса диспетчер регистрируется на сайте заново и сам задаёт новый пароль.
+        </p>
+    </div>
     <?php endif; ?>
 
     <form method="post" class="card" id="edit">
@@ -234,12 +351,12 @@ $csrf = (string)$_SESSION['csrf'];
         <input type="hidden" name="action" value="save">
         <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
         <div class="row">
-            <div class="cid">
+            <div class="field cid">
                 <label for="cid">CID на VATSIM</label>
                 <input id="cid" name="cid" inputmode="numeric" pattern="\d{1,12}" maxlength="12" required
                        value="<?= h($form['cid']) ?>" placeholder="1234567">
             </div>
-            <div class="name">
+            <div class="field name">
                 <label for="name">Фамилия Имя Отчество</label>
                 <input id="name" name="name" maxlength="100" required
                        value="<?= h($form['name']) ?>" placeholder="Иванов Иван Иванович">
@@ -249,14 +366,14 @@ $csrf = (string)$_SESSION['csrf'];
         <p class="hint">
             Меняет только имя в блоке «Пользователь»; при входе диспетчер вводит ФИО и пароль, указанные при
             регистрации. Без отчества — сокращённо: «Иванов И.». Диспетчеры регистрируются сами на
-            <a href="../register/" style="color: inherit">странице регистрации</a>.
+            <a href="../register/">странице регистрации</a>.
         </p>
     </form>
 
     <div class="card">
         <div class="top">
-            <h2>Диспетчеры: <?= count($rows) ?></h2>
-            <div style="flex: 0 1 240px"><input id="filter" type="search" placeholder="Поиск по имени или CID" aria-label="Поиск"></div>
+            <h2>Диспетчеры <span class="count"><?= count($rows) ?></span></h2>
+            <div class="search"><input id="filter" type="search" placeholder="Поиск по имени или CID" aria-label="Поиск"></div>
         </div>
         <?php if (!$rows): ?>
             <p class="empty">Пока никого нет.</p>
@@ -269,7 +386,15 @@ $csrf = (string)$_SESSION['csrf'];
                     <tr data-search="<?= h($row['cid'] . ' ' . $row['name']) ?>">
                         <td class="num"><?= h($row['cid']) ?></td>
                         <td><?= h($row['name']) ?></td>
-                        <td class="pass"><?= $row['has_password'] ? 'задан' : '<span class="no">не зарегистрирован</span>' ?></td>
+                        <td>
+                            <?php if (isset($waiting[(string)$row['cid']])): ?>
+                                <span class="chip wait">просит сброс</span>
+                            <?php elseif ($row['has_password']): ?>
+                                <span class="chip on">задан</span>
+                            <?php else: ?>
+                                <span class="chip off">не зарегистрирован</span>
+                            <?php endif; ?>
+                        </td>
                         <td class="when"><?= h(substr((string)$row['updated_at'], 0, 16)) ?></td>
                         <td class="actions">
                             <button type="button" class="link js-edit"
@@ -281,7 +406,7 @@ $csrf = (string)$_SESSION['csrf'];
                                 <input type="hidden" name="action" value="reset">
                                 <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
                                 <input type="hidden" name="cid" value="<?= h($row['cid']) ?>">
-                                <button type="submit">Сбросить пароль</button>
+                                <button type="submit" class="small secondary">Сбросить</button>
                             </form>
                             <?php endif; ?>
                             &nbsp;
@@ -290,7 +415,7 @@ $csrf = (string)$_SESSION['csrf'];
                                 <input type="hidden" name="action" value="delete">
                                 <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
                                 <input type="hidden" name="cid" value="<?= h($row['cid']) ?>">
-                                <button type="submit" class="danger">Удалить</button>
+                                <button type="submit" class="small danger">Удалить</button>
                             </form>
                         </td>
                     </tr>
@@ -298,6 +423,11 @@ $csrf = (string)$_SESSION['csrf'];
                 </tbody>
             </table>
         </div>
+        <?php endif; ?>
+        <?php if (!$resetsTable): ?>
+            <p class="hint">Заявки на сброс пароля не показываются: в базе нет таблицы
+                <code>password_resets</code> — импортируйте <code>schema.sql</code> ещё раз (README,
+                «Установка на уже работающий сервер»).</p>
         <?php endif; ?>
     </div>
 
@@ -319,11 +449,13 @@ $csrf = (string)$_SESSION['csrf'];
         if (filter) filter.addEventListener('input', function () {
             var q = filter.value.trim().toLowerCase();
             document.querySelectorAll('tbody tr').forEach(function (tr) {
-                tr.hidden = q !== '' && tr.dataset.search.toLowerCase().indexOf(q) === -1;
+                if (tr.dataset.search) tr.hidden = q !== '' && tr.dataset.search.toLowerCase().indexOf(q) === -1;
             });
         });
     </script>
+    </main>
+</div>
 <?php endif; ?>
-</main>
+<?= page_footer() ?>
 </body>
 </html>
