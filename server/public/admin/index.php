@@ -11,12 +11,11 @@
 // corrected (the one shown - LOGIN still checks the registered parts), a
 // password reset so the CID can register again, or a controller taken out.
 //
-// A controller who has forgotten their password leaves a request on the
-// registration page; the requests wait here, at the top, each with the name it
-// was made under beside the name the row holds, and are answered with the same
-// "Сбросить пароль" - or turned down. Nothing resets a password on its own:
-// the site cannot tell the owner of a CID from anyone who knows their name, so
-// a person looks at every request.
+// A controller who has forgotten their password sets a new one themselves on
+// the registration page, by the name they registered under - nothing here is
+// needed for that. "Сбросить" is for the other case: a CID taken by the wrong
+// person, or a registration to be undone, where the password has to go and the
+// CID register again from scratch.
 //
 // The service has no SSL, so the password goes over plain http like everything
 // else does: hand out passwords that are used nowhere else.
@@ -57,18 +56,6 @@ function current_admin(array $accounts): ?string
     }
     $_SESSION['seen'] = time();
     return $login;
-}
-
-// The password_resets table came after the rest: a server whose schema.sql has
-// not been imported again since has none. That must not take the page down -
-// the list of controllers is what it is mainly for - so a missing table reads
-// here as "no requests", and the page says so once, below the list.
-function take_reset_request(string $cid): void
-{
-    try {
-        db()->prepare('DELETE FROM password_resets WHERE cid = ?')->execute([$cid]);
-    } catch (PDOException $e) {
-    }
 }
 
 start_page_session('galaxy_admin');
@@ -142,12 +129,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     }
 
     // The password goes, the row and its name stay: the CID can register on
-    // the site again, and until then LOGIN turns it away. A request waiting for
-    // this CID is answered by the same click and leaves the list.
+    // the site again, and until then LOGIN turns it away.
     if ($action === 'reset') {
         $st = db()->prepare('UPDATE user_names SET password_hash = NULL WHERE cid = ? AND password_hash IS NOT NULL');
         $st->execute([$cid]);
-        take_reset_request($cid);
         flash('ok', $st->rowCount() > 0
             ? 'Пароль ' . $cid . ' сброшен — диспетчер может зарегистрироваться на сайте заново.'
             : 'У ' . $cid . ' пароля и так нет.');
@@ -155,19 +140,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         back_to_page();
     }
 
-    // The request goes, the password stays: the old one keeps working, and the
-    // controller can ask again if it really was them.
-    if ($action === 'dismiss') {
-        take_reset_request($cid);
-        flash('ok', 'Заявка ' . $cid . ' отклонена — пароль не тронут.');
-        error_log('squawk admin: ' . $admin . ' dismissed the reset request of ' . $cid);
-        back_to_page();
-    }
-
     if ($action === 'delete') {
         $st = db()->prepare('DELETE FROM user_names WHERE cid = ?');
         $st->execute([$cid]);
-        take_reset_request($cid);
         flash('ok', $st->rowCount() > 0
             ? 'Удалён ' . $cid . ' — доступ к панели у него закроется в течение минуты.'
             : 'Записи ' . $cid . ' уже нет.');
@@ -184,27 +159,10 @@ $form = $_SESSION['form'] ?? ['cid' => '', 'name' => ''];
 unset($_SESSION['form']);
 
 $rows = [];
-$requests = [];
-$resetsTable = true;
 if ($admin !== null) {
     $rows = db()->query(
         'SELECT cid, name, password_hash IS NOT NULL AS has_password, updated_at FROM user_names ORDER BY name'
     )->fetchAll();
-
-    try {
-        $requests = db()->query(
-            'SELECT r.cid, r.asked_name, r.contact, r.requested_at, u.name AS current_name
-             FROM password_resets r
-             LEFT JOIN user_names u ON u.cid = r.cid
-             ORDER BY r.requested_at'
-        )->fetchAll();
-    } catch (PDOException $e) {
-        $resetsTable = false;
-    }
-}
-$waiting = [];
-foreach ($requests as $request) {
-    $waiting[(string)$request['cid']] = true;
 }
 $csrf = (string)$_SESSION['csrf'];
 ?>
@@ -236,10 +194,6 @@ $csrf = (string)$_SESSION['csrf'];
         padding: 0 10px; border-radius: var(--radius-pill);
         background: var(--background-primary); color: var(--text-main-alt); font-size: 14px; font-weight: 500;
     }
-    .asked { display: flex; flex-direction: column; gap: 4px; }
-    .asked .mismatch { color: var(--text-error); font-size: 13px; }
-    .contact { color: var(--text-secondary); font-size: 14px; word-break: break-word; }
-    .card.requests { box-shadow: var(--shadow-m), inset 0 0 0 1px rgba(255,204,0,.5); }
     .login { max-width: 420px; margin: 4vh auto 0; }
     .login .field { margin-bottom: 16px; }
     .login button { width: 100%; height: 56px; margin-top: 8px; }
@@ -293,60 +247,6 @@ $csrf = (string)$_SESSION['csrf'];
         <div class="flash <?= h($flash[0]) ?>" role="alert"><?= h($flash[1]) ?></div>
     <?php endif; ?>
 
-    <?php if ($requests): ?>
-    <div class="card requests">
-        <div class="top">
-            <h2>Заявки на сброс пароля <span class="count"><?= count($requests) ?></span></h2>
-        </div>
-        <div class="table-wrap">
-            <table>
-                <thead><tr><th>CID</th><th>Кто просит</th><th>Связь</th><th>Подана, UTC</th><th></th></tr></thead>
-                <tbody>
-                <?php foreach ($requests as $request): ?>
-                    <?php $same = (string)$request['asked_name'] === (string)$request['current_name']; ?>
-                    <tr>
-                        <td class="num"><?= h($request['cid']) ?></td>
-                        <td>
-                            <div class="asked">
-                                <span><?= h($request['asked_name']) ?></span>
-                                <?php if (!$same): ?>
-                                    <span class="mismatch">в системе: <?= $request['current_name'] !== null
-                                        ? h($request['current_name']) : 'записи нет' ?></span>
-                                <?php endif; ?>
-                            </div>
-                        </td>
-                        <td class="contact"><?= $request['contact'] !== '' ? h($request['contact']) : '—' ?></td>
-                        <td class="when"><?= h(substr((string)$request['requested_at'], 0, 16)) ?></td>
-                        <td class="actions">
-                            <div class="acts">
-                            <form method="post" class="js-confirm"
-                                  data-question="Сбросить пароль «<?= h($request['asked_name']) ?>» (CID <?= h($request['cid']) ?>)? Войти он сможет только после новой регистрации на сайте.">
-                                <input type="hidden" name="action" value="reset">
-                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
-                                <input type="hidden" name="cid" value="<?= h($request['cid']) ?>">
-                                <button type="submit" class="small">Сбросить пароль</button>
-                            </form>
-                            <form method="post" class="js-confirm"
-                                  data-question="Отклонить заявку CID <?= h($request['cid']) ?>? Пароль останется прежним.">
-                                <input type="hidden" name="action" value="dismiss">
-                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
-                                <input type="hidden" name="cid" value="<?= h($request['cid']) ?>">
-                                <button type="submit" class="small danger">Отклонить</button>
-                            </form>
-                            </div>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-        <p class="hint">
-            Сайт ничьё право на CID не проверяет — сверьте, кто просит, прежде чем сбрасывать.
-            После сброса диспетчер регистрируется на сайте заново и сам задаёт новый пароль.
-        </p>
-    </div>
-    <?php endif; ?>
-
     <form method="post" class="card" id="edit">
         <h2>Добавить или исправить имя</h2>
         <input type="hidden" name="action" value="save">
@@ -388,9 +288,7 @@ $csrf = (string)$_SESSION['csrf'];
                         <td class="num"><?= h($row['cid']) ?></td>
                         <td><?= h($row['name']) ?></td>
                         <td>
-                            <?php if (isset($waiting[(string)$row['cid']])): ?>
-                                <span class="chip wait">просит сброс</span>
-                            <?php elseif ($row['has_password']): ?>
+                            <?php if ($row['has_password']): ?>
                                 <span class="chip on">задан</span>
                             <?php else: ?>
                                 <span class="chip off">не зарегистрирован</span>
@@ -424,11 +322,6 @@ $csrf = (string)$_SESSION['csrf'];
                 </tbody>
             </table>
         </div>
-        <?php endif; ?>
-        <?php if (!$resetsTable): ?>
-            <p class="hint">Заявки на сброс пароля не показываются: в базе нет таблицы
-                <code>password_resets</code> — импортируйте <code>schema.sql</code> ещё раз (README,
-                «Установка на уже работающий сервер»).</p>
         <?php endif; ?>
     </div>
 

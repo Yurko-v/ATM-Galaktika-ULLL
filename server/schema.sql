@@ -86,31 +86,6 @@ CREATE TABLE IF NOT EXISTS user_names (
     PRIMARY KEY (cid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Заявки на сброс пароля: what a controller who has forgotten their password
--- leaves on the registration page (public/register/?reset), waiting for the
--- engineer to answer it on the admin page.
---
--- Nothing here changes a password. The site cannot tell the owner of a CID
--- from anyone who knows their name, so a request is only a note: CID, the name
--- it was made under - kept apart from user_names.name so the admin page can
--- show the two side by side - and a way to reach the person back. The admin
--- page's "Сбросить пароль" clears the row along with password_hash;
--- "Отклонить" clears the row alone.
---
--- One open request per CID: asking again refreshes the one already waiting.
---
--- On a server set up before the requests, add the table with this file:
---   mysql -u ЛОГИН_squawk -p ЛОГИН_squawk < schema.sql
-CREATE TABLE IF NOT EXISTS password_resets (
-    cid          VARCHAR(12)  NOT NULL,
-    asked_name   VARCHAR(100) NOT NULL,
-    contact      VARCHAR(100) NOT NULL DEFAULT '',
-    requested_at DATETIME     NOT NULL,
-    requested_ip VARCHAR(45)  NOT NULL,
-    PRIMARY KEY (cid),
-    KEY idx_requested_at (requested_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- Requests counted per position over a rolling minute; see check_rate_limit().
 CREATE TABLE IF NOT EXISTS rate_limit (
     bucket       VARCHAR(40)  NOT NULL,

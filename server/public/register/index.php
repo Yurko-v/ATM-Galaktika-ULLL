@@ -10,12 +10,14 @@
 // nobody but the CID's owner, since LOGIN is only let in from a position the
 // network lists under that CID.
 //
-// The same page, under "?reset", takes the request that reopens it: a
-// controller who has forgotten their password leaves their CID, name and a way
-// to be reached, the request appears on the admin page, and the engineer there
-// decides whether to reset. Nothing on this side of it changes a password -
-// that is the whole point of going through a person: the site cannot tell the
-// owner of a CID from anyone who knows their name.
+// The same page, under "?reset", sets a new password on a registration that
+// already exists: CID, the surname, first name and patronymic it was made
+// under, and the new password. Matching the name is the whole of the check -
+// so anyone who knows a controller's CID and name can take their password
+// away and shut them out of the panel. What they cannot do is get in: LOGIN
+// still only accepts the position the network lists under that CID, so a
+// stolen registration opens nothing. That trade was made deliberately - the
+// alternative was a person answering every request by hand.
 //
 // The service has no SSL, so the password goes over plain http - the page
 // says as much.
@@ -26,7 +28,8 @@ require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/page.php';
 
 const REGISTER_TRIES_PER_MIN = 5;   // per address
-const RESET_TRIES_PER_MIN = 3;      // per address
+const RESET_TRIES_PER_MIN = 5;      // per address
+const RESET_TRIES_PER_CID_PER_MIN = 5;  // per CID, on top of the per-address one
 const PASSWORD_MIN_CHARS = 8;
 const PASSWORD_MAX_BYTES = 72;      // all bcrypt reads of a password - the rest would be ignored
 
@@ -56,13 +59,29 @@ function posted_name_parts(callable $refuse): array
     return [$surname, $firstName, $patronymic];
 }
 
+// The new password, twice, as both forms ask for it. $refuse never returns.
+function posted_password(callable $refuse): string
+{
+    $password = (string)($_POST['password'] ?? '');
+    if (mb_strlen($password, 'UTF-8') < PASSWORD_MIN_CHARS) {
+        $refuse('Пароль — не короче ' . PASSWORD_MIN_CHARS . ' символов.');
+    }
+    if (strlen($password) > PASSWORD_MAX_BYTES) {
+        $refuse('Пароль слишком длинный: не больше 72 латинских символов (русских — вдвое меньше).');
+    }
+    if (!hash_equals($password, (string)($_POST['password2'] ?? ''))) {
+        $refuse('Пароли не совпадают.');
+    }
+    return $password;
+}
+
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $action = (string)($_POST['action'] ?? 'register');
     $query = $action === 'reset' ? '?reset' : '';
 
     // Everything typed but the passwords comes back into the form after an error.
     $form = [];
-    foreach (['cid', 'surname', 'first_name', 'patronymic', 'contact'] as $field) {
+    foreach (['cid', 'surname', 'first_name', 'patronymic'] as $field) {
         $form[$field] = substr(trim((string)($_POST[$field] ?? '')), 0, 200);
     }
     $refuse = function (string $text) use ($form, $query): void {
@@ -85,73 +104,45 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     }
     [$surname, $firstName, $patronymic] = posted_name_parts($refuse);
 
-    // ---- Заявка на сброс пароля ---------------------------------------------
-    // Written down and left for the engineer; the password is untouched until
-    // they press "Сбросить пароль" on the admin page.
+    // ---- Сброс пароля -------------------------------------------------------
+    // A new password on a registration that exists already. The name is what
+    // is checked, exactly as LOGIN checks it - case, ё or е and the spaces
+    // around it make no difference - and the name is not a secret: see the top
+    // of the file for what this does and does not protect.
     if ($action === 'reset') {
-        $st = db()->prepare('SELECT password_hash FROM user_names WHERE cid = ?');
+        if (!within_rate_limit('reset:' . $cid, RESET_TRIES_PER_CID_PER_MIN)) {
+            $refuse('Слишком много попыток для этого CID — подождите минуту.');
+        }
+        $password = posted_password($refuse);
+
+        $st = db()->prepare('SELECT name, surname, first_name, patronymic, password_hash FROM user_names WHERE cid = ?');
         $st->execute([$cid]);
         $row = $st->fetch();
-        if (!$row) {
-            $refuse('CID ' . $cid . ' в системе не числится — заявка тут не нужна, просто зарегистрируйтесь.');
-        }
-        if ((string)$row['password_hash'] === '') {
-            $refuse('У CID ' . $cid . ' пароля ещё нет — сбрасывать нечего, зарегистрируйтесь.');
+        if (!$row || (string)$row['password_hash'] === '') {
+            $refuse('CID ' . $cid . ' не зарегистрирован — менять нечего, зарегистрируйтесь.');
         }
 
-        // The contact is the only free text on the site: it goes into the admin
-        // page as it was typed, so line breaks and control characters come out.
-        $contact = preg_replace('/[\p{C}]+/u', ' ', $form['contact']);
-        $contact = trim(mb_substr((string)$contact, 0, 100, 'UTF-8'));
-
-        // One open request per CID: asking again refreshes the one that is
-        // already waiting instead of filling the engineer's list.
-        //
-        // The table came after the rest of the site, so a server whose
-        // schema.sql has not been imported again since has none. Better to say
-        // so than to show the error page: everything else here still works.
-        try {
-            db()->prepare(
-                'INSERT INTO password_resets (cid, asked_name, contact, requested_at, requested_ip)
-                 VALUES (?, ?, ?, NOW(), ?)
-                 ON DUPLICATE KEY UPDATE
-                     asked_name   = VALUES(asked_name),
-                     contact      = VALUES(contact),
-                     requested_at = VALUES(requested_at),
-                     requested_ip = VALUES(requested_ip)'
-            )->execute([
-                $cid,
-                user_display_name($surname, $firstName, $patronymic),
-                $contact,
-                substr(client_ip(), 0, 45),
-            ]);
-        } catch (PDOException $e) {
-            error_log('squawk register: cannot store a reset request - ' . $e->getMessage());
-            $refuse('Заявки сейчас не принимаются — напишите инженеру системы напрямую.');
+        $sameName = name_key($surname) === name_key($row['surname'])
+            && name_key($firstName) === name_key($row['first_name'])
+            && name_key($patronymic) === name_key($row['patronymic']);
+        if (!$sameName) {
+            error_log('squawk register: wrong name for CID ' . $cid . ' on reset from ' . client_ip());
+            $refuse('ФИО не совпадает с регистрацией CID ' . $cid . '. Отчество — так же, как тогда: '
+                . 'было пусто — оставьте пусто.');
         }
 
-        error_log('squawk register: CID ' . $cid . ' asked for a password reset from ' . client_ip());
-        // What they typed, not what the row holds: the page is open to anyone,
-        // and it has no business reading a registered name back out.
-        $_SESSION['asked'] = [
-            'cid'     => $cid,
-            'name'    => user_display_name($surname, $firstName, $patronymic),
-            'contact' => $contact,
-        ];
+        // Only the password. The name stays as it was registered: this form
+        // proves nothing about who is typing, so it changes nothing else.
+        db()->prepare('UPDATE user_names SET password_hash = ? WHERE cid = ?')
+            ->execute([password_hash($password, PASSWORD_DEFAULT), $cid]);
+
+        error_log('squawk register: CID ' . $cid . ' changed its password from ' . client_ip());
+        $_SESSION['reset'] = ['cid' => $cid, 'name' => (string)$row['name']];
         back_to_page('?reset');
     }
 
     // ---- Регистрация --------------------------------------------------------
-    $password = (string)($_POST['password'] ?? '');
-    if (mb_strlen($password, 'UTF-8') < PASSWORD_MIN_CHARS) {
-        $refuse('Пароль — не короче ' . PASSWORD_MIN_CHARS . ' символов.');
-    }
-    if (strlen($password) > PASSWORD_MAX_BYTES) {
-        $refuse('Пароль слишком длинный: не больше 72 латинских символов (русских — вдвое меньше).');
-    }
-    if (!hash_equals($password, (string)($_POST['password2'] ?? ''))) {
-        $refuse('Пароли не совпадают.');
-    }
+    $password = posted_password($refuse);
 
     // A row the admin entered by name alone is taken over by the registration;
     // a row that already has a password is left exactly as it is. password_hash
@@ -173,8 +164,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     // MySQL counts 1 for a new row, 2 for a changed one, 0 for one left alone.
     if ($st->rowCount() === 0) {
         error_log('squawk register: CID ' . $cid . ' is already registered - refused from ' . client_ip());
-        $refuse('CID ' . $cid . ' уже зарегистрирован. Если вы забыли пароль, оставьте '
-            . 'заявку на сброс — ссылка под формой.');
+        $refuse('CID ' . $cid . ' уже зарегистрирован. Забыли пароль — смените его: '
+            . 'ссылка под формой.');
     }
 
     error_log('squawk register: CID ' . $cid . ' registered as "' . $name . '" from ' . client_ip());
@@ -184,13 +175,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
 $reset = isset($_GET['reset']);
 $flash = take_flash();
-$form = ($_SESSION['form'] ?? []) + ['cid' => '', 'surname' => '', 'first_name' => '', 'patronymic' => '', 'contact' => ''];
+$form = ($_SESSION['form'] ?? []) + ['cid' => '', 'surname' => '', 'first_name' => '', 'patronymic' => ''];
 unset($_SESSION['form']);
 $registered = $_SESSION['registered'] ?? null;
 unset($_SESSION['registered']);
-$asked = $_SESSION['asked'] ?? null;
-unset($_SESSION['asked']);
-$done = $registered !== null || $asked !== null;
+$changed = $_SESSION['reset'] ?? null;
+unset($_SESSION['reset']);
+$done = $registered !== null || $changed !== null;
 $csrf = (string)$_SESSION['csrf'];
 ?>
 <!doctype html>
@@ -232,7 +223,7 @@ $csrf = (string)$_SESSION['csrf'];
 <div class="shell">
 <?= page_header($done ? '' : ($reset
         ? '<a class="nav-link" href="./">Регистрация</a>'
-        : '<a class="nav-link" href="?reset">Забыли пароль?</a>')) ?>
+        : '<a class="nav-link" href="?reset">Сменить пароль</a>')) ?>
 <main>
 <?php if ($registered): ?>
     <div class="card done" role="status">
@@ -250,27 +241,24 @@ $csrf = (string)$_SESSION['csrf'];
             <li>Введите фамилию, имя, отчество и пароль.</li>
         </ol>
     </div>
-<?php elseif ($asked): ?>
+<?php elseif ($changed): ?>
     <div class="card done" role="status">
-        <div class="mark"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 6.5 V12.5 L16 14.5"/></svg></div>
-        <h1>Заявка на сброс пароля принята</h1>
+        <div class="mark"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5 L9.5 18 L20 6.5"/></svg></div>
+        <h1>Пароль изменён</h1>
         <dl>
-            <dt>CID</dt><dd><?= h($asked['cid']) ?></dd>
-            <dt>Заявитель</dt><dd><?= h($asked['name']) ?></dd>
-            <dt>Связь</dt><dd><?= $asked['contact'] !== '' ? h($asked['contact']) : '—' ?></dd>
+            <dt>CID</dt><dd><?= h($changed['cid']) ?></dd>
+            <dt>Диспетчер</dt><dd><?= h($changed['name']) ?></dd>
         </dl>
         <ol class="steps">
-            <li>Инженер системы сверит заявку и сбросит пароль.</li>
-            <li>После этого вернитесь сюда и <a href="./">зарегистрируйтесь заново</a> с тем же CID.</li>
-            <li>Старый пароль перестанет работать, новый вводите в EuroScope при LOGIN.</li>
+            <li>Старый пароль при входе больше не подойдёт.</li>
+            <li>В EuroScope нажмите LOGIN и введите те же ФИО и новый пароль.</li>
         </ol>
-        <p class="hint">До сброса вход в панель работает со старым паролем — если вы его вспомните,
-            заявку можно не ждать.</p>
+        <p class="hint">Панель, открытая со старым паролем, доработает до отключения от сети —
+            новый пароль понадобится при следующем входе.</p>
     </div>
 <?php elseif ($reset): ?>
     <h1>Сброс пароля</h1>
-    <p class="sub">Заявка инженеру системы: сайт не может отличить владельца CID от того, кто знает
-        его имя, поэтому пароль сбрасывает человек.</p>
+    <p class="sub">Введите CID и ФИО, указанные при регистрации, и придумайте новый пароль.</p>
 
     <?php if ($flash): ?>
         <div class="flash <?= h($flash[0]) ?>" role="alert"><?= h($flash[1]) ?></div>
@@ -301,18 +289,25 @@ $csrf = (string)$_SESSION['csrf'];
                        value="<?= h($form['patronymic']) ?>" placeholder="Иванович">
             </div>
         </div>
-        <div class="field">
-            <label for="contact">Как с вами связаться <span class="optional">— если нужно</span></label>
-            <input id="contact" name="contact" maxlength="100"
-                   value="<?= h($form['contact']) ?>" placeholder="Discord, почта или телеграм">
+        <div class="pair">
+            <div class="field">
+                <label for="password">Новый пароль</label>
+                <input id="password" name="password" type="password" minlength="<?= PASSWORD_MIN_CHARS ?>"
+                       autocomplete="new-password" required>
+            </div>
+            <div class="field">
+                <label for="password2">Новый пароль ещё раз</label>
+                <input id="password2" name="password2" type="password" minlength="<?= PASSWORD_MIN_CHARS ?>"
+                       autocomplete="new-password" required>
+            </div>
         </div>
-        <button type="submit">Отправить заявку</button>
+        <button type="submit">Сменить пароль</button>
         <p class="hint">
-            Пароль этой заявкой не меняется: она появляется в АРМ инженера системы, и уже он решает,
-            сбрасывать ли. ФИО указывайте те же, что при регистрации — по ним инженер вас и узнает.
+            ФИО — те же, что при регистрации: регистр букв и «ё» вместо «е» значения не имеют, а вот
+            отчество должно быть так же, как тогда. Старый пароль перестанет работать сразу.
         </p>
     </form>
-    <p class="swap">Вспомнили пароль? Он продолжает работать. <a href="./">К регистрации</a></p>
+    <p class="swap">Ещё не регистрировались? <a href="./">Зарегистрируйтесь</a></p>
 <?php else: ?>
     <h1>Регистрация в системе КСА</h1>
     <p class="sub">Galaxy ATM System · ULLL FIR</p>
@@ -364,7 +359,7 @@ $csrf = (string)$_SESSION['csrf'];
             Сайт работает без шифрования: не используйте пароль от VATSIM или почты.
         </p>
     </form>
-    <p class="swap">Забыли пароль? <a href="?reset">Оставьте заявку инженеру системы</a></p>
+    <p class="swap">Забыли пароль? <a href="?reset">Задайте новый</a></p>
 <?php endif; ?>
 </main>
 </div>

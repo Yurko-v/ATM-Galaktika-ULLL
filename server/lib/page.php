@@ -283,7 +283,6 @@ function page_css(): string
     }
     .chip.on { background: var(--background-surface-accent); color: var(--text-primary); }
     .chip.off { padding: 0; color: var(--text-tertiary); }
-    .chip.wait { background: rgba(255,204,0,.20); color: #6E5200; }
     .empty { color: var(--text-tertiary); margin: 0; }
 
     @media (max-width: 600px) {
