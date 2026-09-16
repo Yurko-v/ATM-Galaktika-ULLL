@@ -223,8 +223,9 @@ $csrf = (string)$_SESSION['csrf'];
     .row .cid { flex: 0 1 180px; }
     .row .name { flex: 1 1 280px; }
     .row .field { margin-bottom: 0; }
+    .row button { height: 52px; }
     .top { display: flex; justify-content: space-between; align-items: center; gap: 12px 20px; flex-wrap: wrap; }
-    .top h2 { margin-bottom: 0; }
+    .top h2 { display: flex; align-items: center; gap: 10px; margin-bottom: 0; }
     .card .top { margin-bottom: 20px; }
     .search { flex: 0 1 280px; }
     .head { margin-bottom: 28px; }
@@ -232,7 +233,7 @@ $csrf = (string)$_SESSION['csrf'];
     .head .sub { margin-bottom: 0; }
     .count {
         display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px;
-        padding: 0 10px; margin-left: 10px; border-radius: var(--radius-pill);
+        padding: 0 10px; border-radius: var(--radius-pill);
         background: var(--background-primary); color: var(--text-main-alt); font-size: 14px; font-weight: 500;
     }
     .asked { display: flex; flex-direction: column; gap: 4px; }
@@ -242,7 +243,6 @@ $csrf = (string)$_SESSION['csrf'];
     .login { max-width: 420px; margin: 4vh auto 0; }
     .login .field { margin-bottom: 16px; }
     .login button { width: 100%; height: 56px; margin-top: 8px; }
-    .login .card { padding: 32px 28px; }
 </style>
 </head>
 <body>
@@ -318,6 +318,7 @@ $csrf = (string)$_SESSION['csrf'];
                         <td class="contact"><?= $request['contact'] !== '' ? h($request['contact']) : '—' ?></td>
                         <td class="when"><?= h(substr((string)$request['requested_at'], 0, 16)) ?></td>
                         <td class="actions">
+                            <div class="acts">
                             <form method="post" class="js-confirm"
                                   data-question="Сбросить пароль «<?= h($request['asked_name']) ?>» (CID <?= h($request['cid']) ?>)? Войти он сможет только после новой регистрации на сайте.">
                                 <input type="hidden" name="action" value="reset">
@@ -325,7 +326,6 @@ $csrf = (string)$_SESSION['csrf'];
                                 <input type="hidden" name="cid" value="<?= h($request['cid']) ?>">
                                 <button type="submit" class="small">Сбросить пароль</button>
                             </form>
-                            &nbsp;
                             <form method="post" class="js-confirm"
                                   data-question="Отклонить заявку CID <?= h($request['cid']) ?>? Пароль останется прежним.">
                                 <input type="hidden" name="action" value="dismiss">
@@ -333,6 +333,7 @@ $csrf = (string)$_SESSION['csrf'];
                                 <input type="hidden" name="cid" value="<?= h($request['cid']) ?>">
                                 <button type="submit" class="small danger">Отклонить</button>
                             </form>
+                            </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -397,10 +398,10 @@ $csrf = (string)$_SESSION['csrf'];
                         </td>
                         <td class="when"><?= h(substr((string)$row['updated_at'], 0, 16)) ?></td>
                         <td class="actions">
+                            <div class="acts">
                             <button type="button" class="link js-edit"
                                     data-cid="<?= h($row['cid']) ?>" data-name="<?= h($row['name']) ?>">Изменить</button>
                             <?php if ($row['has_password']): ?>
-                            &nbsp;
                             <form method="post" class="js-confirm"
                                   data-question="Сбросить пароль «<?= h($row['name']) ?>»? Войти можно будет только после новой регистрации на сайте.">
                                 <input type="hidden" name="action" value="reset">
@@ -409,7 +410,6 @@ $csrf = (string)$_SESSION['csrf'];
                                 <button type="submit" class="small secondary">Сбросить</button>
                             </form>
                             <?php endif; ?>
-                            &nbsp;
                             <form method="post" class="js-confirm"
                                   data-question="Удалить «<?= h($row['name']) ?>»? Доступ к панели у него закроется.">
                                 <input type="hidden" name="action" value="delete">
@@ -417,6 +417,7 @@ $csrf = (string)$_SESSION['csrf'];
                                 <input type="hidden" name="cid" value="<?= h($row['cid']) ?>">
                                 <button type="submit" class="small danger">Удалить</button>
                             </form>
+                            </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>

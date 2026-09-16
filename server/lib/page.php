@@ -172,8 +172,14 @@ function page_css(): string
     a { color: var(--text-accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .shell { max-width: 900px; margin: 0 auto; }
-    h1 { font: 500 36px/1.15 inherit; margin: 0 0 8px; color: var(--text-primary); }
-    h2 { font: 500 24px/1.2 inherit; margin: 0 0 20px; color: var(--text-primary); }
+    h1 {
+        font-size: 36px; font-weight: 500; line-height: 1.15; margin: 0 0 8px;
+        color: var(--text-primary); text-wrap: balance;
+    }
+    h2 {
+        font-size: 24px; font-weight: 500; line-height: 1.2; margin: 0 0 20px;
+        color: var(--text-primary); text-wrap: balance;
+    }
     .sub { font-size: 18px; line-height: 24px; color: var(--text-secondary); margin: 0 0 28px; }
 
     /* The pill at the top, and the line at the bottom. */
@@ -190,7 +196,7 @@ function page_css(): string
     .brand .fir { display: flex; flex-direction: column; align-items: center; gap: 2px; }
     .brand small { font-weight: 500; font-size: 8px; letter-spacing: .4em; margin-right: -.4em; color: var(--text-secondary); }
     .foot {
-        max-width: 900px; margin: 32px auto 0; padding: 0 28px; display: flex;
+        max-width: 900px; margin: 32px auto 0; display: flex;
         flex-wrap: wrap; justify-content: space-between; gap: 4px 24px;
         color: var(--text-tertiary); font-size: 14px;
     }
@@ -219,7 +225,8 @@ function page_css(): string
         display: inline-flex; align-items: center; justify-content: center; gap: 8px;
         height: 48px; padding: 0 28px; border: none; border-radius: var(--radius-pill);
         background: var(--background-primary); color: var(--text-main-alt);
-        font: 500 16px/1 inherit; cursor: pointer; white-space: nowrap;
+        font-family: inherit; font-size: 16px; font-weight: 500; line-height: 1;
+        cursor: pointer; white-space: nowrap;
         transition: background-color .3s ease-in-out;
     }
     button:hover { background: var(--background-primary-hover); }
@@ -268,8 +275,8 @@ function page_css(): string
     tbody tr:last-child td { border-bottom: 0; }
     td.num { font-variant-numeric: tabular-nums; }
     td.when { color: var(--text-tertiary); font-size: 14px; white-space: nowrap; }
-    td.actions { text-align: right; white-space: nowrap; }
-    td.actions form { display: inline; }
+    td.actions { white-space: nowrap; }
+    td.actions .acts { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
     .chip {
         display: inline-flex; align-items: center; height: 28px; padding: 0 12px;
         border-radius: var(--radius-xs); font-size: 13px; font-weight: 500;
@@ -283,7 +290,6 @@ function page_css(): string
         .nav { border-radius: var(--radius-m); padding: 16px 20px; justify-content: center; }
         .nav-right { width: 100%; justify-content: center; }
         .card { padding: 24px 20px; border-radius: var(--radius-s); }
-        .foot { padding: 0 8px; }
         h1 { font-size: 28px; }
     }
 CSS;
