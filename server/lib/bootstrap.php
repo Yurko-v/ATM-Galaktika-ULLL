@@ -216,8 +216,39 @@ function check_rate_limit(string $position): void
 
 // Every endpoint that changes or reads the pool goes through here. Returns the
 // caller's CID, for the record kept against the codes they hand out.
-// $observerToo lets an observer in as well - only api/name.php does: an OBS may
-// open the plug-in's panel, but never hands out a code.
+// The optional observer lookup is kept in require_caller() for callers that
+// need to resolve a VATSIM observer. KSA endpoints use require_ksa_caller().
+function require_caller(string $position, bool $observerToo = false): ?string
+{
+    check_rate_limit($position);
+    check_api_key();
+
+    // A position let in without the online check - for testing the server from
+    // the command line. Empty in normal use; see config.sample.php.
+    if (in_array($position, (array)(app_config()['test_positions'] ?? []), true)) {
+        return null;
+    }
+
+    $cid = caller_cid($position, $observerToo);
+
+    if ($cid === null || !controllers_are_fresh()) {
+        refresh_controllers_if_due();
+        $cid = caller_cid($position, $observerToo);
+    }
+
+    if (!controllers_are_fresh()) {
+        // Nobody can be checked, so nobody is let in: the alternative is a
+        // service that quietly stops checking the moment VATSIM is unreachable.
+        json_out(503, ['error' => 'network_stale']);
+    }
+
+    if ($cid === null) {
+        json_out(401, ['error' => 'not_online']);
+    }
+
+    return $cid;
+}
+
 function require_ksa_caller(string $position): string
 {
     $cid = require_caller($position, true);
@@ -292,7 +323,7 @@ function clean_user_name($value): ?string
     return preg_match("/^$word(?:$full|$short)$/u", $s) ? $s : null;
 }
 
-// ---- Registration and LOGIN -------------------------------------------------
+//------------------------------- User data ------------------------------------
 
 // One part of a name as typed on the registration page - surname, first name
 // or patronymic: Cyrillic letters, at least two, with a hyphen inside a double
@@ -316,8 +347,8 @@ function clean_name_part($value): ?string
     return implode('-', $words);
 }
 
-// How a name part typed at LOGIN is matched against the registered one: case,
-// ё or е, and spaces around it make no difference.
+// Normalize a name part for case-insensitive comparison.
+// "е" and "ё" are treated as the same character.
 function name_key($value): string
 {
     return str_replace('ё', 'е', mb_strtolower(trim((string)$value), 'UTF-8'));
