@@ -9,9 +9,9 @@
 
 return [
     'db' => [
-        'dsn'  => 'mysql:host=localhost;dbname=CHANGE_ME;charset=utf8mb4',
-        'user' => 'CHANGE_ME',
-        'pass' => 'CHANGE_ME',
+        'dsn'  => '',
+        'user' => '',
+        'pass' => '',
     ],
 
     // Optional second lock, off when empty - a shared key every plug-in must
