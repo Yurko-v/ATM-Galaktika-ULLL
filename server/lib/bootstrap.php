@@ -9,7 +9,7 @@ date_default_timezone_set('UTC');
 // Reading the VATSIM feed: needed by the cron job, and by the check on who is
 // calling further down.
 require_once __DIR__ . '/vatsim.php';
-require_once __DIR__ . '/rating.php';
+require_once __DIR__ . '/ratings.php';
 
 set_exception_handler(function (Throwable $e): void {
     error_log('squawk: ' . $e->getMessage());
