@@ -6,13 +6,24 @@ declare(strict_types=1);
 
 date_default_timezone_set('UTC');
 
+// First of all, so that whatever goes wrong below is written down rather than
+// lost behind a blank 500.
+require_once __DIR__ . '/errors.php';
+
 // Reading the VATSIM feed: needed by the cron job, and by the check on who is
 // calling further down.
 require_once __DIR__ . '/vatsim.php';
 require_once __DIR__ . '/ratings.php';
 
 set_exception_handler(function (Throwable $e): void {
-    error_log('squawk: ' . $e->getMessage());
+    // With the file and the line: "SQLSTATE[42S22] unknown column" says little
+    // until it says which query asked for it.
+    error_log(sprintf(
+        'squawk: %s in %s:%d',
+        $e->getMessage(),
+        $e->getFile(),
+        $e->getLine()
+    ));
     if (PHP_SAPI === 'cli') {
         fwrite(STDERR, $e->getMessage() . PHP_EOL);
         exit(1);

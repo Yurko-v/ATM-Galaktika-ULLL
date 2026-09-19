@@ -70,5 +70,30 @@ rsync -a --delete \
     "$SERVER_DIR/lib/" \
     "$WEB_ROOT/lib/"
 
+# The error log, and the .user.ini that sends PHP's own errors to it.
+#
+# lib/errors.php sets the same file from inside the application, but a request
+# that dies before it is loaded - a require that finds nothing, a file with a
+# syntax error in it - never reaches that code, and on this hosting leaves
+# nothing behind but a blank 500. PHP reads .user.ini before running anything,
+# so those are logged too.
+#
+# The path has to be absolute and is therefore written here, at deploy time,
+# rather than kept in git: it holds the account's home directory.
+LOG_DIR=$(cd "$WEB_ROOT" && pwd)/logs
+LOG_FILE=$LOG_DIR/php-error.log
+
+mkdir -p "$LOG_DIR"
+
+cat > "$WEB_ROOT/public_html/.user.ini" <<EOF
+; Written by server/deploy.sh - edit that, not this.
+log_errors = On
+error_log = $LOG_FILE
+error_reporting = E_ALL
+; Never shown to a visitor: read them in the log above.
+display_errors = Off
+EOF
+
 echo "deploy.sh: synced register/, admin/ and lib/api/ to public_html/"
 echo "deploy.sh: synced private library to $WEB_ROOT/lib/"
+echo "deploy.sh: PHP errors go to $LOG_FILE"

@@ -18,7 +18,13 @@ declare(strict_types=1);
 function html_page_setup(string $logTag): void
 {
     set_exception_handler(function (Throwable $e) use ($logTag): void {
-        error_log($logTag . ': ' . $e->getMessage());
+        error_log(sprintf(
+            '%s: %s in %s:%d',
+            $logTag,
+            $e->getMessage(),
+            $e->getFile(),
+            $e->getLine()
+        ));
         if (!headers_sent()) {
             http_response_code(500);
             header('Content-Type: text/html; charset=utf-8');
