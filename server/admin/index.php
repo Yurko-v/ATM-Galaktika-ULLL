@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../lib/bootstrap.php';
-require __DIR__ . '/../lib/page.php';
+require __DIR__ . '/../../lib/bootstrap.php';
+require __DIR__ . '/../../lib/page.php';
 
 const ADMIN_IDLE_SEC = 2 * 3600;
 const ADMIN_LOGIN_TRIES_PER_MIN = 5;

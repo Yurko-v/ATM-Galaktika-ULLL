@@ -11,8 +11,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../bootstrap.php';
-require __DIR__ . '/../codes.php';
+require __DIR__ . '/../../bootstrap.php';
+require __DIR__ . '/../../codes.php';
 
 require_method('POST');
 

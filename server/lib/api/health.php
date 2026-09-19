@@ -8,8 +8,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../bootstrap.php';
-require __DIR__ . '/../codes.php';
+require __DIR__ . '/../../bootstrap.php';
+require __DIR__ . '/../../codes.php';
 
 $active      = (int)db()->query('SELECT COUNT(*) FROM assignments WHERE released_at IS NULL')->fetchColumn();
 $controllers = (int)db()->query('SELECT COUNT(*) FROM network_controllers')->fetchColumn();
