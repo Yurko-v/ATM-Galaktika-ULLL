@@ -1,21 +1,14 @@
 #!/bin/sh
-# Copies the files the web server actually serves into the site's own
-# document root. On at least one real Beget account, a "прилинкованный
-# домен"'s public_html returned 500 for every request - even a bare
-# phpinfo() - the moment it was a symlink out to the git checkout; PHP/Apache
-# there refuses to follow it. So public/ and lib/ are copied for real
-# instead, laid out next to a config.php created once by hand - see
-# server/README.md for the one-time setup this expects to find in place.
+# Deploys the server application to the domain's web root.
 #
-# Usage: deploy.sh <repo-server-dir> <web-root>
-#   <repo-server-dir>  the checked-out server/ folder, e.g. ~/squawk/repo/server
-#   <web-root>         the site's own folder, e.g. ~/squawk.example.beget.tech
-#                       (Beget's container for the domain - holds public_html)
+# Repository layout:
+#   server/register/      -> public_html/register/
+#   server/admin/         -> public_html/admin/
+#   server/lib/api/       -> public_html/api/
+#   server/lib/           -> private lib/ (except lib/api/)
 #
-# config.php is never touched here: it holds secrets, is not in git, and is
-# created once directly in <web-root>/config.php (a second copy from the one
-# in <repo-server-dir>/config.php, which cron/vatsim_sync.php reads straight
-# out of the checkout) - update both by hand if the database or key ever change.
+# config.php is never touched here. It contains secrets and is created
+# manually outside the git checkout.
 
 set -eu
 
@@ -27,17 +20,55 @@ fi
 SERVER_DIR=$1
 WEB_ROOT=$2
 
-if [ ! -f "$SERVER_DIR/public/api/health.php" ]; then
+if [ ! -f "$SERVER_DIR/lib/api/health.php" ]; then
     echo "deploy.sh: $SERVER_DIR does not look like a server/ checkout" >&2
     exit 1
 fi
+
+if [ ! -d "$SERVER_DIR/register" ]; then
+    echo "deploy.sh: $SERVER_DIR/register does not exist" >&2
+    exit 1
+fi
+
+if [ ! -d "$SERVER_DIR/admin" ]; then
+    echo "deploy.sh: $SERVER_DIR/admin does not exist" >&2
+    exit 1
+fi
+
 if [ ! -d "$WEB_ROOT" ]; then
     echo "deploy.sh: web root $WEB_ROOT does not exist" >&2
     exit 1
 fi
 
-mkdir -p "$WEB_ROOT/public_html" "$WEB_ROOT/lib"
-rsync -a --delete "$SERVER_DIR/public/" "$WEB_ROOT/public_html/"
-rsync -a --delete "$SERVER_DIR/lib/" "$WEB_ROOT/lib/"
+mkdir -p \
+    "$WEB_ROOT/public_html" \
+    "$WEB_ROOT/lib"
 
-echo "deploy.sh: synced public/ and lib/ into $WEB_ROOT"
+# Public web pages.
+rsync -a --delete \
+    "$SERVER_DIR/register/" \
+    "$WEB_ROOT/public_html/register/"
+
+rsync -a --delete \
+    "$SERVER_DIR/admin/" \
+    "$WEB_ROOT/public_html/admin/"
+
+# Public API.
+rsync -a --delete \
+    "$SERVER_DIR/lib/api/" \
+    "$WEB_ROOT/public_html/api/"
+
+# Private library.
+#
+# lib/api is stored inside the repository's lib/ directory for organization,
+# but the deployed API belongs in public_html/api and must not be exposed
+# through the private library directory.
+rm -rf "$WEB_ROOT/lib/api"
+
+rsync -a --delete \
+    --exclude='api/' \
+    "$SERVER_DIR/lib/" \
+    "$WEB_ROOT/lib/"
+
+echo "deploy.sh: synced register/, admin/ and lib/api/ to public_html/"
+echo "deploy.sh: synced private library to $WEB_ROOT/lib/"

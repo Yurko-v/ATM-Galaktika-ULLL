@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS network_observers (
 -- The users of the КСА, by CID: who may log in to the plug-in's panel, and the
 -- name the Пользователь block shows for them.
 --
--- A controller registers on the site (public/register/): CID, surname, first
+-- A controller registers on the site (register/): CID, surname, first
 -- name, patronymic and a password of their own. LOGIN in the plug-in then asks
 -- for the same surname, first name, patronymic and password, and api/login.php
 -- checks them against the row for the CID the network lists for the position.
@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS network_observers (
 --     ADD COLUMN registered_at DATETIME     NULL AFTER password_hash;
 CREATE TABLE IF NOT EXISTS user_names (
     cid           VARCHAR(12)  NOT NULL,
+    rating_id     SMALLINT     NULL,
     name          VARCHAR(100) NOT NULL,
     surname       VARCHAR(40)  NULL,
     first_name    VARCHAR(40)  NULL,

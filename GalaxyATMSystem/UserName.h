@@ -38,7 +38,7 @@ bool FetchVatsimIdentity(const std::string& callsign, VatsimIdentity& out);
 bool ParseVatsimIdentity(const std::string& body, const std::string& callsign, VatsimIdentity& out);
 
 // The name the squawk server's user_names table has for us
-// (server/public/api/name.php), found by the CID the network lists for
+// (/api/name.php), found by the CID the network lists for
 // 'position' - the server only ever tells a controller their own. 'baseUrl' and
 // 'apiKey' are the squawk client's. Blocking - a worker thread's job.
 //

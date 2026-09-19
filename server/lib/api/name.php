@@ -11,7 +11,7 @@
 // position the caller is checked against (see require_caller()), never one the
 // request names, so the table cannot be read through from outside.
 //
-// Names are written by registration (public/register/) and the admin page, not
+// Names are written by registration (/register/) and the admin page, not
 // from here: letting the plug-in in is api/login.php's job, and it wants a
 // password.
 //

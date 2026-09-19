@@ -7,7 +7,7 @@
 // Logins are config.php's 'admins', login => password_hash(). Taking a login
 // out, or changing its hash, ends every session it has open on the next click.
 //
-// Controllers register themselves on public/register/. Here a name can be
+// Controllers register themselves on /register/. Here a name can be
 // corrected (the one shown - LOGIN still checks the registered parts), a
 // password reset so the CID can register again, or a controller taken out.
 //

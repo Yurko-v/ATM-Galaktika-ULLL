@@ -11,7 +11,7 @@
 //
 // 403 "not_registered": no row for the CID, or one with no password - the
 //     admin entered the name only, and the controller has yet to register on
-//     the site (public/register/).
+//     the site (/register/).
 // 401 "wrong_credentials": the name or the password is not the registered one.
 //     Which of them is not said.
 // 429 "rate_limited": more than LOGIN_TRIES_PER_MIN tries for the CID in a

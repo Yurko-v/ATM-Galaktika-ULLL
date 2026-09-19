@@ -65,7 +65,7 @@ return [
 
     'vatsim_data_url' => 'https://data.vatsim.net/v3/vatsim-data.json',
 
-    // Logins for the admin page (public/admin/, see README "Админ-страница"):
+    // Logins for the admin page (admin/, see README "Админ-страница"):
     // who may add, correct and delete controllers in user_names - and nothing
     // else in the database. Login => password HASH, never the password itself;
     // README gives the one command that makes a hash. Single quotes around it -
