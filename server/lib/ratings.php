@@ -23,24 +23,23 @@ const RATING_OBSERVER  = 1;
 // The lowest rating the КСА is open to: S1, the first that may control.
 const RATING_MIN_KSA = 2;
 
-// id => [short name, what it is called]. The short name is what the network
-// shows; the long one is only there to make the list on the registration page
-// readable.
+// id => the short name, and only the short name: "S1", "SUP", "ADM" - the way
+// VATSIM itself writes a rating and the way it is shown everywhere here.
 const VATSIM_CONTROLLER_RATINGS = [
-    RATING_INACTIVE  => ['short' => 'INA', 'long' => 'Неактивен'],
-    RATING_SUSPENDED => ['short' => 'SUS', 'long' => 'Заблокирован'],
-    RATING_OBSERVER  => ['short' => 'OBS', 'long' => 'Наблюдатель'],
-    2                => ['short' => 'S1',  'long' => 'Стажёр рулёжки'],
-    3                => ['short' => 'S2',  'long' => 'Диспетчер старта'],
-    4                => ['short' => 'S3',  'long' => 'Диспетчер подхода'],
-    5                => ['short' => 'C1',  'long' => 'Диспетчер района'],
-    6                => ['short' => 'C2',  'long' => 'Диспетчер района (C2)'],
-    7                => ['short' => 'C3',  'long' => 'Старший диспетчер района'],
-    8                => ['short' => 'I1',  'long' => 'Инструктор'],
-    9                => ['short' => 'I2',  'long' => 'Инструктор (I2)'],
-    10               => ['short' => 'I3',  'long' => 'Старший инструктор'],
-    11               => ['short' => 'SUP', 'long' => 'Супервайзер'],
-    12               => ['short' => 'ADM', 'long' => 'Администратор'],
+    RATING_INACTIVE  => 'INA',
+    RATING_SUSPENDED => 'SUS',
+    RATING_OBSERVER  => 'OBS',
+    2                => 'S1',
+    3                => 'S2',
+    4                => 'S3',
+    5                => 'C1',
+    6                => 'C2',
+    7                => 'C3',
+    8                => 'I1',
+    9                => 'I2',
+    10               => 'I3',
+    11               => 'SUP',
+    12               => 'ADM',
 ];
 
 // Whether the network knows a rating by this id at all. A number from outside -
@@ -65,13 +64,7 @@ function rating_allows_ksa(?int $ratingId): bool
 // a rating but as a dash.
 function controller_rating_short(int $ratingId): ?string
 {
-    return VATSIM_CONTROLLER_RATINGS[$ratingId]['short'] ?? null;
-}
-
-// "Стажёр рулёжки", for the lists a person picks from.
-function controller_rating_long(int $ratingId): ?string
-{
-    return VATSIM_CONTROLLER_RATINGS[$ratingId]['long'] ?? null;
+    return VATSIM_CONTROLLER_RATINGS[$ratingId] ?? null;
 }
 
 // A rating id as it arrives from a form or a query string: the digits of an id
@@ -91,7 +84,7 @@ function clean_rating_id($value): ?int
 }
 
 // The ratings offered on the registration and admin pages: the ones that give
-// access, id => name, in the network's own order.
+// access, id => short name, in the network's own order.
 function ksa_rating_options(): array
 {
     return array_filter(

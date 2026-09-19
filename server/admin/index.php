@@ -504,7 +504,7 @@ $ratingOptions = ksa_rating_options();
                             value="<?= h((string)$ratingId) ?>"
                             <?= (string)$form['rating_id'] === (string)$ratingId ? 'selected' : '' ?>
                         >
-                            <?= h($rating['short']) ?> — <?= h($rating['long']) ?>
+                            <?= h($rating) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
