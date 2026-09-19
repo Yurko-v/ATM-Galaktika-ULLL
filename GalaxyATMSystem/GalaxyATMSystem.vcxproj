@@ -110,6 +110,7 @@
     <ClInclude Include="Geometry.h" />
     <ClInclude Include="Json.h" />
     <ClInclude Include="Log.h" />
+    <ClInclude Include="Lang.h" />
     <ClInclude Include="Net.h" />
     <ClInclude Include="Sigmet.h" />
     <ClInclude Include="Atis.h" />
@@ -118,7 +119,9 @@
     <ClInclude Include="Apw.h" />
     <ClInclude Include="Squawk.h" />
     <ClInclude Include="TextEntry.h" />
+    <ClInclude Include="FloatWindow.h" />
     <ClInclude Include="GalaxyATMSystem.h" />
+    <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
@@ -135,7 +138,14 @@
     <ClCompile Include="Apw.cpp" />
     <ClCompile Include="Squawk.cpp" />
     <ClCompile Include="TextEntry.cpp" />
+    <ClCompile Include="FloatWindow.cpp" />
     <ClCompile Include="GalaxyATMSystem.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="GalaxyATMSystem.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="EuroScope.ttf" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

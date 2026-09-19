@@ -73,6 +73,37 @@ namespace
         return (altFt + bufferFt) >= lowFt && (altFt - bufferFt) <= highFt;
     }
 
+    // An ICAO location indicator as the notes write them: four letters, the
+    // only token in there worth reading as an aerodrome.
+    bool IsIcao(const std::wstring& s)
+    {
+        if (s.size() != 4)
+            return false;
+        for (wchar_t c : s)
+        {
+            if (!iswalpha(c))
+                return false;
+        }
+        return true;
+    }
+
+    // Whether this is one of the flights the area names. Either end of the
+    // route counts: the exception is written for the procedures of the
+    // aerodrome, and an aircraft flies them on the way out as well as in.
+    bool TrackIsExempt(const ZoneExemption& e, const ApwTrack& track)
+    {
+        if (e.airports.empty())
+            return false;
+
+        for (const std::wstring& icao : e.airports)
+        {
+            if ((!track.origin.empty() && track.origin == icao) ||
+                (!track.destination.empty() && track.destination == icao))
+                return true;
+        }
+        return false;
+    }
+
     std::wstring TrimUpper(const std::wstring& s)
     {
         size_t a = 0, b = s.size();
@@ -84,6 +115,97 @@ namespace
             c = (wchar_t)towupper(c);
         return out;
     }
+
+    // One line of a note, read as an exception. "/" and "," read as spaces, so
+    // "Except ULLI/ULLP" and "Except ULLI, ULLP" are the same list.
+    bool ParseExemptionLine(const std::wstring& line, ZoneExemption& out)
+    {
+        std::vector<std::wstring> words;
+        std::wstring word;
+        const std::wstring u = TrimUpper(line) + L" ";
+        for (wchar_t c : u)
+        {
+            if (iswspace(c) || c == L'/' || c == L',')
+            {
+                if (!word.empty())
+                {
+                    words.push_back(word);
+                    word.clear();
+                }
+            }
+            else
+            {
+                word += c;
+            }
+        }
+
+        size_t i = 0;
+        const bool except = (!words.empty() && words[0] == L"EXCEPT");
+        if (except)
+            i++;
+
+        while (i < words.size() && IsIcao(words[i]))
+            out.airports.push_back(words[i++]);
+        if (out.airports.empty())
+            return false;
+
+        // "Except ULLI" and nothing else: the area is simply not there for it.
+        // A note that names the aerodrome and then goes on to say something
+        // this does not understand is left alone - the alert stays, and the
+        // controller reads the note off the area itself.
+        if (except)
+            return i == words.size();
+
+        // "ULLI 3000ft", "ULLI 3000 FT", "ULAA 900 м" - the height the
+        // exception holds to, however it is spelt.
+        std::wstring rest;
+        for (; i < words.size(); i++)
+            rest += words[i];
+        if (rest.empty() || !iswdigit(rest[0]))
+            return false;
+
+        size_t k = 0;
+        int value = 0;
+        while (k < rest.size() && iswdigit(rest[k]))
+            value = value * 10 + (rest[k++] - L'0');
+
+        const std::wstring unit = rest.substr(k);
+        if (unit.empty() || unit == L"FT" || unit == L"ФТ")
+            out.ceilingFt = value;
+        else if (unit == L"M" || unit == L"М")
+            out.ceilingFt = (int)lround(value * 3.28084);
+        else
+            return false;
+
+        return out.ceilingFt > 0;
+    }
+}
+
+bool ParseZoneExemption(const std::wstring& note, ZoneExemption& out)
+{
+    out.airports.clear();
+    out.ceilingFt = 0;
+    if (note.empty())
+        return false;
+
+    // Line by line: TopSky's USERTEXT arrives as several of them and at most
+    // one of them is the exception.
+    size_t at = 0;
+    while (at <= note.size())
+    {
+        size_t eol = note.find(L'\n', at);
+        if (eol == std::wstring::npos)
+            eol = note.size();
+
+        ZoneExemption one;
+        if (ParseExemptionLine(note.substr(at, eol - at), one))
+        {
+            out = one;
+            return true;
+        }
+        at = eol + 1;
+    }
+    return false;
 }
 
 bool ZoneLevelFL(const std::wstring& text, int& fl)
@@ -195,6 +317,10 @@ void ApwBuildZones(const std::vector<Zone>& zones,
 
         z.lowFt = lowFL * 100;
         z.highFt = (highFL >= 999) ? 99900 : highFL * 100;
+
+        // The traffic the area is published not to apply to. Read here, where
+        // the area is looked at once, and not in the per-aircraft check.
+        ParseZoneExemption(zone.note, z.exempt);
     }
 }
 
@@ -235,6 +361,22 @@ ApwResult ApwCheck(const std::vector<Zone>& zones,
         if (!z.active || !z.warns)
             continue;
 
+        // The band this particular aircraft has to stay out of. For the
+        // traffic the area is published not to apply to that is either nothing
+        // at all or only the bottom of it - an ULLI departure crossing ULR1 at
+        // FL090 is flying the procedure, not infringing anything, and a safety
+        // net that fires on every departure is one the controller stops
+        // reading.
+        int lowFt = z.lowFt, highFt = z.highFt;
+        if (TrackIsExempt(z.exempt, track))
+        {
+            if (z.exempt.ceilingFt <= 0)
+                continue;
+            highFt = min(highFt, z.exempt.ceilingFt);
+            if (highFt < lowFt)
+                continue;
+        }
+
         // The box first, in miles: an aircraft over Пулково must not be made
         // to walk the outlines of three hundred areas across the whole FIR.
         const double south = (z.minLat - lat0) * kNmPerDegLat;
@@ -263,7 +405,7 @@ ApwResult ApwCheck(const std::vector<Zone>& zones,
             // is doing now. An aircraft levelling off short of the area's
             // floor is not warned about, and one climbing into it is.
             const int altFt = track.altFt + (int)lround(track.vsFpm * (t / 60.0));
-            if (!LevelsConflict(altFt, z.lowFt, z.highFt, cfg.verticalBufferFt))
+            if (!LevelsConflict(altFt, lowFt, highFt, cfg.verticalBufferFt))
                 continue;
 
             Pt p;

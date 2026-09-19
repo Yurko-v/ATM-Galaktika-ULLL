@@ -93,7 +93,43 @@ struct ApwTrack
     int    gsKt = 0;
     int    altFt = 0;
     int    vsFpm = 0;
+
+    // Where it is coming from and going to, as the flight plan writes them.
+    // Half the areas over Пулково are published with an exception for exactly
+    // that traffic, so without this the alert would fire on every departure
+    // and every arrival the position works. Empty on an uncorrelated track,
+    // which is then warned about the way anyone else is.
+    std::wstring origin;
+    std::wstring destination;
 };
+
+// -----------------------------------------------------------------------------
+// The exception the area is published with.
+//
+// Most of the areas over Пулково would be unflyable as written: the departure
+// and arrival procedures of the aerodrome they surround go straight through
+// them. The AIP resolves it the way it always does - by naming the traffic the
+// area does not apply to - and the sector package carries that in the area's
+// note, in two forms and no others:
+//
+//   "Except ULLI"        - it does not apply to ULLI traffic at all
+//   "Except ULLI/ULLP"   - nor to ULLP's
+//   "ULLI 3000ft"        - it applies to ULLI traffic only below 3000 ft,
+//                          which is the height their procedures cross it at
+//
+// An aircraft on neither end of that list is warned about as usual.
+// -----------------------------------------------------------------------------
+struct ZoneExemption
+{
+    std::vector<std::wstring> airports;   // ICAO, upper case; empty - no exception
+    int ceilingFt = 0;   // 0: the area is not there for them at all. Otherwise
+                         // the ceiling it has for them, in feet.
+};
+
+// Reads one out of an area's note. False when the note says nothing of the
+// kind, which is what most of them do - a note is free text and anything that
+// is not one of the two forms above is left to the controller to read.
+bool ParseZoneExemption(const std::wstring& note, ZoneExemption& out);
 
 // An area reduced to what the alert needs: the box its outline fits in and the
 // band it occupies, both worked out once when the config is read rather than
@@ -108,6 +144,9 @@ struct ApwZone
     bool   warns = false;     // its kind is one the config asks to be warned about
     double minLat = 0.0, maxLat = 0.0, minLon = 0.0, maxLon = 0.0;
     int    lowFt = 0, highFt = 0;
+
+    // Read off the note once here rather than per aircraft per second.
+    ZoneExemption exempt;
 };
 
 // The area's limit as a flight level: "GND"/"SFC" -> 0, "UNL" -> 999, "FL095"

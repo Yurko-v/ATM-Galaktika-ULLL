@@ -86,4 +86,94 @@ namespace Geom
         b.y = (LONG)lround(y0 + t1 * dy);
         return true;
     }
+
+    // The same trim for a whole ring rather than one edge: Sutherland-Hodgman
+    // against the four sides of 'r', so what comes out is the part of the area
+    // that is actually on the screen, with the same shape it had there.
+    //
+    // A filled area needs this and not ClipSegment: an edge trimmed on its own
+    // says nothing about which side of it the inside was, and the fill has to
+    // be handed a closed shape. Bounded coordinates are the other half of it -
+    // an area can project hundreds of screens wide, and a rasteriser asked to
+    // scan-convert that spends everything it has outside the display.
+    //
+    // Returns false when nothing of the ring is left.
+    inline bool ClipPolygon(const RECT& r, const std::vector<POINT>& poly,
+        std::vector<POINT>& out)
+    {
+        out.clear();
+        if (poly.size() < 3)
+            return false;
+
+        struct P { double x, y; };
+        // side 0 the left edge, 1 the right, 2 the top, 3 the bottom.
+        struct Side
+        {
+            static bool In(const P& p, const RECT& r, int side)
+            {
+                switch (side)
+                {
+                case 0:  return p.x >= (double)r.left;
+                case 1:  return p.x <= (double)r.right;
+                case 2:  return p.y >= (double)r.top;
+                default: return p.y <= (double)r.bottom;
+                }
+            }
+
+            static P Cross(const P& a, const P& b, const RECT& r, int side)
+            {
+                // Only ever called with a and b on opposite sides of it, so
+                // the difference below cannot be zero.
+                if (side < 2)
+                {
+                    const double x = (side == 0) ? (double)r.left : (double)r.right;
+                    const double t = (x - a.x) / (b.x - a.x);
+                    return P{ x, a.y + t * (b.y - a.y) };
+                }
+                const double y = (side == 2) ? (double)r.top : (double)r.bottom;
+                const double t = (y - a.y) / (b.y - a.y);
+                return P{ a.x + t * (b.x - a.x), y };
+            }
+        };
+
+        std::vector<P> in, work;
+        in.reserve(poly.size() + 8);
+        for (const POINT& p : poly)
+            in.push_back(P{ (double)p.x, (double)p.y });
+
+        for (int side = 0; side < 4 && !in.empty(); side++)
+        {
+            work.clear();
+            for (size_t i = 0; i < in.size(); i++)
+            {
+                const P& cur = in[i];
+                const P& prev = in[(i + in.size() - 1) % in.size()];
+                const bool curIn = Side::In(cur, r, side);
+                const bool prevIn = Side::In(prev, r, side);
+
+                if (curIn)
+                {
+                    if (!prevIn)
+                        work.push_back(Side::Cross(prev, cur, r, side));
+                    work.push_back(cur);
+                }
+                else if (prevIn)
+                {
+                    work.push_back(Side::Cross(prev, cur, r, side));
+                }
+            }
+            in.swap(work);
+        }
+
+        if (in.size() < 3)
+            return false;
+
+        out.reserve(in.size());
+        for (const P& p : in)
+        {
+            POINT q = { (LONG)lround(p.x), (LONG)lround(p.y) };
+            out.push_back(q);
+        }
+        return true;
+    }
 }

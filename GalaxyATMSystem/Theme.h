@@ -3,6 +3,10 @@
 #include <windows.h>
 #include <string>
 
+#include "resource.h"
+
+extern HINSTANCE g_hModule;   // this DLL, captured in dllmain.cpp
+
 // -----------------------------------------------------------------------------
 // Visual theme + small GDI helpers shared by every block of the control panel.
 //
@@ -81,9 +85,6 @@ namespace Theme
     const COLORREF FormularVfr   = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF FormularGreen = RGB(0x00, 0xDC, 0x00);
 
-    // A selected aircraft's position symbol: TopSky's Color_Track_Highlight.
-    const COLORREF TrackHighlight = RGB(0xFF, 0xFF, 0xFF);
-
     // Traffic history behind a target: how many of its earlier positions are
     // drawn, in TopSky's HISTORY symbol and the target's own colour.
     const int TrackHistoryDots = 5;
@@ -111,12 +112,12 @@ namespace Theme
     // same lime - the one thing on the block that says it went through.
     const COLORREF AuthGranted   = AtisIndexText;
 
-    // "Список РЦ" - the sector list. Every colour here is "New Window.svg"'s
-    // own: the panel's olive ground at 80 % so the radar shows through round
-    // the window, a grey title bar, two black panes each headed by a row of
-    // grey plates standing on a light band, and rows whose ground says whose
-    // flight it is - yellow for the ones I am tracking, blue for everyone
-    // else's. Values are black; only the coordination flag is coloured.
+    // "Список РЦ" - the sector list. Every colour here is "rc.svg"'s own: the
+    // panel's olive ground at 80 % so the radar shows through round the
+    // window, a grey title bar, two black panes each headed by a row of grey
+    // plates standing on a light band, and rows whose ground says which way
+    // the flight is going - yellow eastbound, blue westbound.
+    // Values are black; only the coordination flag is coloured.
     const COLORREF ListGround      = Background;                // #21271C
     const BYTE     ListGroundAlpha = 204;                       // 80%
     const COLORREF ListTitleFill = RGB(0x3C, 0x3C, 0x3C);  // #3C3C3C - the title bar
@@ -125,9 +126,10 @@ namespace Theme
     const COLORREF ListHeadRule  = RGB(0xD9, 0xD9, 0xD9);  // #D9D9D9 - the band the plates stand on
     const COLORREF ListHeadFill  = RGB(0x3C, 0x3C, 0x3C);  // #3C3C3C - a heading plate
     const COLORREF ListHeadText  = RGB(0xFF, 0xFF, 0xFF);
-    const COLORREF ListRowMine   = RGB(0xF5, 0xE0, 0x87);  // #F5E087 - tracked by me
-    const COLORREF ListRowOther  = RGB(0xC5, 0xE0, 0xF3);  // #C5E0F3 - someone else's
-    const COLORREF ListRowRule   = RGB(0x00, 0x00, 0x00);  // the line between ВыхЭш and ПВО
+    const COLORREF ListRowEast   = RGB(0xF5, 0xE0, 0x87);  // #F5E087 - flying east
+    const COLORREF ListRowWest   = RGB(0xC5, 0xE0, 0xF3);  // #C5E0F3 - flying west
+    const COLORREF ListRowRule   = RGB(0x00, 0x00, 0x00);  // the rules across a row: CFL|Точка, Вход|Точка, ВыхЭш|ПВО
+    const COLORREF ListFieldFrame = RGB(0xFF, 0xFF, 0xFF); // the frame of a filter field
     const COLORREF ListText      = RGB(0x00, 0x00, 0x00);
     const COLORREF ListCrdReq    = RGB(0xD8, 0x1B, 0x14);  // coordination asked for, not answered
     const COLORREF ListCrdOk     = RGB(0x0C, 0x9E, 0x2E);  // coordination agreed
@@ -262,48 +264,177 @@ namespace Theme
     const COLORREF ScrollThumb  = RGB(0x9C, 0x9C, 0x98);
     const COLORREF ScrollEdge   = RGB(0x5C, 0x5C, 0x58);
 
-    // "Список РЦ" is set in Inter, the face "New Window.svg" was drawn in. It
-    // does not come with Windows, so the face is looked for once: "Inter" as
-    // the static fonts install it, "Inter Variable" as the variable one does.
-    // NULL when neither is there - the window falls back to Arial and says so
-    // on its title bar, and the plugin says so in the message window.
-    inline const wchar_t* InterFace()
+    // Is that exact face name installed?
+    inline bool FaceInstalled(const wchar_t* face)
     {
-        static int state = -1;   // -1 not looked yet, 0 none, 1 "Inter", 2 "Inter Variable"
+        HDC dc = GetDC(NULL);
+        if (dc == NULL)
+            return false;
+
+        LOGFONTW lf = {};
+        lf.lfCharSet = DEFAULT_CHARSET;
+        wcscpy_s(lf.lfFaceName, face);
+        bool found = false;
+        EnumFontFamiliesExW(dc, &lf,
+            [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int
+            {
+                *(bool*)p = true;
+                return 0;
+            }, (LPARAM)&found, 0);
+        ReleaseDC(NULL, dc);
+        return found;
+    }
+
+    // The first of 'names' the system has, NULL if it has none. Looked up once
+    // and remembered per call site - font enumeration is not free.
+    inline const wchar_t* FirstInstalled(const wchar_t* const* names, int count, int& state)
+    {
         if (state < 0)
         {
             state = 0;
-            HDC dc = GetDC(NULL);
-            if (dc != NULL)
-            {
-                for (int i = 1; i <= 2 && state == 0; i++)
-                {
-                    LOGFONTW lf = {};
-                    lf.lfCharSet = DEFAULT_CHARSET;
-                    wcscpy_s(lf.lfFaceName, i == 1 ? L"Inter" : L"Inter Variable");
-                    bool found = false;
-                    EnumFontFamiliesExW(dc, &lf,
-                        [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int
-                        {
-                            *(bool*)p = true;
-                            return 0;
-                        }, (LPARAM)&found, 0);
-                    if (found)
-                        state = i;
-                }
-                ReleaseDC(NULL, dc);
-            }
+            for (int i = 0; i < count && state == 0; i++)
+                if (FaceInstalled(names[i]))
+                    state = i + 1;
         }
-        return state == 1 ? L"Inter" : state == 2 ? L"Inter Variable" : NULL;
+        return state > 0 ? names[state - 1] : NULL;
     }
 
-    // A "Список РЦ" font 'px' tall, in Inter when it is installed.
-    inline HFONT ListFont(int px)
+    // EuroScope's own label face, carried inside the DLL (see resource.h) so
+    // the tags read the same on every machine - the .ttf ships with EuroScope
+    // but is not installed by it, and a controller who never put it in Windows
+    // would otherwise get a different picture from everyone else.
+    //
+    // Handed to GDI once, on the first call: AddFontMemResourceEx makes the
+    // face private to this process, invisible to font enumeration but found by
+    // name like any other. NULL when the resource is missing or GDI refuses it,
+    // and then the caller keeps whatever face it was going to use.
+    inline HANDLE& EuroScopeFontHandle()
     {
-        const wchar_t* inter = InterFace();
-        return CreateFontW(-px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        static HANDLE h = NULL;
+        return h;
+    }
+
+    inline const wchar_t* EuroScopeFace()
+    {
+        static const wchar_t* const kFace = L"EuroScope";
+        static int state = -1;   // -1 not tried yet, 0 unavailable, 1 usable
+        if (state < 0)
+        {
+            state = 0;
+            HRSRC res = FindResourceW(g_hModule,
+                MAKEINTRESOURCEW(IDR_FONT_EUROSCOPE), RT_RCDATA);
+            if (res != NULL)
+            {
+                HGLOBAL blob = LoadResource(g_hModule, res);
+                void* data = (blob != NULL) ? LockResource(blob) : NULL;
+                DWORD size = SizeofResource(g_hModule, res);
+                DWORD faces = 0;
+                if (data != NULL && size > 0)
+                    EuroScopeFontHandle() = AddFontMemResourceEx(data, size, NULL, &faces);
+                if (EuroScopeFontHandle() != NULL && faces > 0)
+                    state = 1;
+            }
+            // Failing that, the face may still be installed system-wide.
+            if (state == 0 && FaceInstalled(kFace))
+                state = 1;
+        }
+        return state > 0 ? kFace : NULL;
+    }
+
+    // Given back before the DLL goes away - the fonts it was handed live in
+    // the resource image, which unloads with us.
+    inline void ReleaseEuroScopeFace()
+    {
+        if (EuroScopeFontHandle() != NULL)
+        {
+            RemoveFontMemResourceEx(EuroScopeFontHandle());
+            EuroScopeFontHandle() = NULL;
+        }
+    }
+
+    // "Список РЦ" is set in Inter, the face "rc.svg" was drawn in. It does not
+    // come with Windows, so the face is looked for once: "Inter" as the static
+    // fonts install it, "Inter Variable" as the variable one does. NULL when
+    // neither is there - the window falls back to Arial and says so on its
+    // title bar, and the plugin says so in the message window.
+    inline const wchar_t* InterFace()
+    {
+        static const wchar_t* const kNames[] = { L"Inter", L"Inter Variable" };
+        static int state = -1;
+        return FirstInstalled(kNames, (int)(sizeof(kNames) / sizeof(kNames[0])), state);
+    }
+
+    // GDI knows only Regular and Bold inside a family, so the static fonts
+    // install every other weight of Inter as a family of its own - these are
+    // where they are looked for. NULL when that weight is not installed.
+    inline const wchar_t* InterMediumFace()
+    {
+        static const wchar_t* const kNames[] = { L"Inter Medium" };
+        static int state = -1;
+        return FirstInstalled(kNames, (int)(sizeof(kNames) / sizeof(kNames[0])), state);
+    }
+
+    // "Inter SemiBold" is how the static fonts install it and "Inter Semi Bold"
+    // how GDI names the same family.
+    inline const wchar_t* InterSemiBoldFace()
+    {
+        static const wchar_t* const kNames[] = { L"Inter SemiBold", L"Inter Semi Bold" };
+        static int state = -1;
+        return FirstInstalled(kNames, (int)(sizeof(kNames) / sizeof(kNames[0])), state);
+    }
+
+    inline const wchar_t* InterBoldFace()
+    {
+        static const wchar_t* const kNames[] = { L"Inter Bold" };
+        static int state = -1;
+        return FirstInstalled(kNames, (int)(sizeof(kNames) / sizeof(kNames[0])), state);
+    }
+
+    // Whether the list is drawn in Inter at all - any weight of it counts.
+    inline bool InterInstalled()
+    {
+        return InterFace() != NULL || InterMediumFace() != NULL
+            || InterSemiBoldFace() != NULL || InterBoldFace() != NULL;
+    }
+
+    inline HFONT ListFontIn(int px, const wchar_t* face, int weight)
+    {
+        return CreateFontW(-px, 0, 0, 0, weight, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, inter != NULL ? inter : L"Arial");
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, face != NULL ? face : L"Arial");
+    }
+
+    // The three weights "rc.svg" uses, read off its outlines against Inter's
+    // own: Regular for the upper pane's headings; Medium for the caption, the
+    // lower pane's headings, the values and the filter strip; Bold for the
+    // КФ mark alone.
+    enum ListWeight { ListRegular, ListMedium, ListBold };
+
+    // A "Список РЦ" font 'px' tall, in Inter when it is installed. A weight
+    // installed as a family of its own is used as it is; one that is not is
+    // asked of the nearest family there is, which GDI answers with the nearest
+    // face it has - emboldened, for Bold.
+    inline HFONT ListFont(int px, ListWeight weight)
+    {
+        switch (weight)
+        {
+        case ListMedium:
+            if (InterMediumFace() != NULL)
+                return ListFontIn(px, InterMediumFace(), FW_NORMAL);
+            if (InterFace() != NULL)
+                return ListFontIn(px, InterFace(), FW_MEDIUM);
+            return ListFontIn(px, InterSemiBoldFace(), FW_NORMAL);
+
+        case ListBold:
+            if (InterBoldFace() != NULL)
+                return ListFontIn(px, InterBoldFace(), FW_NORMAL);
+            if (InterSemiBoldFace() != NULL)
+                return ListFontIn(px, InterSemiBoldFace(), FW_BOLD);
+            return ListFontIn(px, InterFace(), FW_BOLD);
+
+        default:
+            return ListFontIn(px, InterFace(), FW_NORMAL);
+        }
     }
 
     // Fonts. One plain sans-serif size carries the whole panel; the header

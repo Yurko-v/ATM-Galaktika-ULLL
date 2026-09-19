@@ -17,6 +17,7 @@
 
 #include "Net.h"
 #include "Log.h"
+#include "Lang.h"
 #include "Geometry.h"
 
 // AlphaBlend, for the see-through backing of the сигмет info window.
@@ -64,6 +65,12 @@ namespace
         std::string s(n, '\0');
         WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), &s[0], n, NULL, NULL);
         return s;
+    }
+
+    std::wstring Upper(std::wstring v)
+    {
+        std::transform(v.begin(), v.end(), v.begin(), ::towupper);
+        return v;
     }
 
     // Per-second refresh: EuroScope only repaints on radar/mouse activity, which
@@ -262,6 +269,116 @@ namespace
         {
             g.DrawLine(&pen, (Gdiplus::REAL)x0, (Gdiplus::REAL)y0, (Gdiplus::REAL)x1, (Gdiplus::REAL)y1);
         }
+
+        void Circle(double cx, double cy, double r)
+        {
+            g.DrawEllipse(&pen, (Gdiplus::REAL)(cx - r), (Gdiplus::REAL)(cy - r),
+                (Gdiplus::REAL)(r * 2), (Gdiplus::REAL)(r * 2));
+        }
+    };
+
+    // The same surface for the areas the overlay draws - сигметы and the
+    // запретные зоны. They are the one thing on the display made of edges at
+    // every angle at once, and a GDI pen leaves every one of those as a
+    // staircase; drawn here they come out smooth, and the wash under an area
+    // gets the same treatment, so the edge of the fill no longer shows its own
+    // steps out from under a hairline outline.
+    //
+    // Everything is trimmed to the radar area before it is handed over. An
+    // area can project hundreds of screens wide - see the notes in Geom - so
+    // the rasteriser never sees a coordinate that far out, and GDI+ is clipped
+    // to the same rectangle on top of that, so nothing reaches the display
+    // around it.
+    struct AreaCanvas
+    {
+        Gdiplus::Graphics g;
+        Gdiplus::Pen pen;
+        RECT clip;
+
+        AreaCanvas(HDC hDC, const RECT& area, COLORREF color, float width)
+            : g(hDC),
+              pen(Gdiplus::Color(GetRValue(color), GetGValue(color), GetBValue(color)),
+                  width),
+              clip(area)
+        {
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            pen.SetLineJoin(Gdiplus::LineJoinRound);
+            g.SetClip(Gdiplus::Rect(area.left, area.top,
+                area.right - area.left, area.bottom - area.top),
+                Gdiplus::CombineModeIntersect);
+        }
+
+        void SetColor(COLORREF color)
+        {
+            pen.SetColor(Gdiplus::Color(GetRValue(color), GetGValue(color), GetBValue(color)));
+        }
+
+        // The outline. Built as a path rather than drawn edge by edge so that
+        // the corners are joined once - two antialiased lines meeting at a
+        // point blend over each other and leave a dark bead on every vertex.
+        //
+        // A ring trimmed by the display is several runs, and the figure is
+        // broken wherever one edge was cut short of where the next one starts:
+        // that is the difference between a corner that is really there and the
+        // two ends of a shape that leaves the screen and comes back.
+        void Ring(const std::vector<POINT>& pts, bool closed)
+        {
+            if (pts.size() < 2)
+                return;
+
+            Gdiplus::GraphicsPath path;
+            const size_t segments = closed ? pts.size() : pts.size() - 1;
+            POINT last = { 0, 0 };
+            bool running = false;
+
+            for (size_t i = 0; i < segments; i++)
+            {
+                POINT a = pts[i], b = pts[(i + 1) % pts.size()];
+                if (!Geom::ClipSegment(clip, a, b))
+                {
+                    running = false;
+                    continue;
+                }
+
+                if (!running || last.x != a.x || last.y != a.y)
+                {
+                    path.StartFigure();
+                    running = true;
+                }
+                path.AddLine((Gdiplus::REAL)a.x, (Gdiplus::REAL)a.y,
+                    (Gdiplus::REAL)b.x, (Gdiplus::REAL)b.y);
+                last = b;
+            }
+
+            g.DrawPath(&pen, &path);
+        }
+
+        // The wash inside the area, blended over whatever is under it. The
+        // ring is trimmed to a rectangle a little wider than the display, so
+        // the only place the fill ends is where the area really ends and not
+        // along a seam at the edge of the radar picture.
+        void Wash(const std::vector<POINT>& pts, COLORREF color, BYTE alpha)
+        {
+            if (alpha == 0)
+                return;
+
+            RECT box = clip;
+            InflateRect(&box, 8, 8);
+
+            std::vector<POINT> visible;
+            if (!Geom::ClipPolygon(box, pts, visible))
+                return;
+
+            std::vector<Gdiplus::PointF> shape;
+            shape.reserve(visible.size());
+            for (const POINT& p : visible)
+                shape.push_back(Gdiplus::PointF((Gdiplus::REAL)p.x, (Gdiplus::REAL)p.y));
+
+            Gdiplus::SolidBrush brush(Gdiplus::Color(alpha,
+                GetRValue(color), GetGValue(color), GetBValue(color)));
+            g.FillPolygon(&brush, shape.data(), (int)shape.size(), Gdiplus::FillModeWinding);
+        }
     };
 
     // Draws a polyline through pts, leaving a small gap centred on every
@@ -349,9 +466,11 @@ namespace L
 
     // ОС - a "Р-р шрифта:" row with its size dropdown over a sunken three-row
     // list. The row is a dropdown's height (V_ROW) so the picker fits in it.
-    const int O_TOP = 4, O_LABEL = V_ROW, O_GAP = 4, O_LIST_H = 68, O_BOT = 4;
+    // The list runs on well below its three rows, the reference's own 106 -
+    // about half of it is empty black under "3 строчный".
+    const int O_TOP = 4, O_LABEL = V_ROW, O_GAP = 4, O_LIST_H = 106, O_BOT = 4;
     const int OS_ROW = 16, OS_PITCH = 21, OS_ROW0 = 4;  // inside the list
-    const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;    // 100
+    const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;    // 138
 
     // БЛОК 4 - Ед. изм.: four rows of pill selectors.
     const int E_TOP = 4, E_ROW = 16, E_PITCH = 20, E_BOT = 6;
@@ -510,6 +629,10 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
         m_aupFetch.join();
     if (m_notamFetch.joinable())
         m_notamFetch.join();
+
+    // The tag face was loaded out of this DLL's own resources; hand it back
+    // before the image goes.
+    Theme::ReleaseEuroScopeFace();
 }
 
 // The ICAO code the config names, with anything that cannot be part of one
@@ -638,17 +761,23 @@ void CGalaxyATMSystemPlugin::StartAtisFetch()
     if (icao.empty())
         return;
 
+    // Polled every few seconds, so the last read may still be coming in: it
+    // is left to finish rather than waited for here, on EuroScope's thread.
+    if (m_atisBusy)
+        return;
     if (m_atisFetch.joinable())
-        m_atisFetch.join();   // the previous fetch is long finished - its stages are all timed out
+        m_atisFetch.join();   // finished - it cleared m_atisBusy last
 
+    m_atisBusy = true;
     m_atisFetch = std::thread([this, icao]()
         {
             AtisReport report;
-            if (!FetchVatsimAtis(icao, report))
-                return;
-
-            std::lock_guard<std::mutex> lock(m_atisMutex);
-            m_atisLive = report;
+            if (FetchVatsimAtis(icao, report))
+            {
+                std::lock_guard<std::mutex> lock(m_atisMutex);
+                m_atisLive = report;
+            }
+            m_atisBusy = false;
         });
 }
 
@@ -780,27 +909,27 @@ namespace
     {
         serverFault = false;
         if (error == "wrong_credentials")
-            return L"Неверные фамилия, имя, отчество или пароль";
+            return Tr(L"Неверные фамилия, имя, отчество или пароль");
         if (error == "not_registered")
-            return L"Вы не зарегистрированы в системе КСА";
+            return Tr(L"Вы не зарегистрированы в системе КСА");
         if (error == "rate_limited")
-            return L"Слишком много попыток - подождите минуту";
+            return Tr(L"Слишком много попыток - подождите минуту");
         if (error == "bad_request" || error == "bad_json")
-            return L"Сервер не принял запрос - проверьте введённое";
+            return Tr(L"Сервер не принял запрос - проверьте введённое");
 
         serverFault = true;
         if (error == "network")
-            return L"Нет связи с сервером";
+            return Tr(L"Нет связи с сервером");
         if (error == "not_online")
-            return L"Сервер пока не видит вас в сети - повторите через минуту";
+            return Tr(L"Сервер пока не видит вас в сети - повторите через минуту");
         if (error == "network_stale")
-            return L"Сервер не получает данные VATSIM - повторите позже";
+            return Tr(L"Сервер не получает данные VATSIM - повторите позже");
         if (error == "no_server")
-            return L"База пользователей недоступна";
+            return Tr(L"База пользователей недоступна");
         // A server from before registration, with no login.php.
         if (error == "http_404" || error == "method_not_allowed")
-            return L"Сервер ещё не поддерживает вход по паролю";
-        return L"Ошибка сервера (" + Widen(error.c_str()) + L")";
+            return Tr(L"Сервер ещё не поддерживает вход по паролю");
+        return Tr(L"Ошибка сервера (") + Widen(error.c_str()) + L")";
     }
 }
 
@@ -991,7 +1120,7 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
     if (!m_fontChecked)
     {
         m_fontChecked = true;
-        if (Theme::InterFace() == NULL)
+        if (!Theme::InterInstalled())
         {
             Log::Warn("font", "Inter is not installed - the sector list is drawn in Arial instead."
                 " Install Inter (https://rsms.me/inter/) and restart EuroScope.");
@@ -1035,7 +1164,7 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
 
     // The ATIS letter changes with every new report, and a stale one on the
     // strip is worse than none - it is polled on its own, shorter clock.
-    int atisPeriod = max(60, m_config.AtisRefreshMinutes() * 60);
+    int atisPeriod = max(15, m_config.AtisRefreshSeconds());
     if (Counter > 0 && Counter % atisPeriod == 0)
         StartAtisFetch();
 
@@ -1175,6 +1304,16 @@ const ApwResult& CGalaxyATMSystemPlugin::ApwFor(CRadarTarget& target)
     // the standard-pressure level above it.
     const bool belowTL = pos.GetFlightLevel() / 100 < TransitionLevelFL();
     track.altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
+
+    // Where it is going, for the areas that are published not to apply to the
+    // traffic of an aerodrome inside them. An uncorrelated track has no plan
+    // to read and is warned about like anyone else.
+    CFlightPlan fp = target.GetCorrelatedFlightPlan();
+    if (fp.IsValid())
+    {
+        track.origin = Upper(Widen(fp.GetFlightPlanData().GetOrigin()));
+        track.destination = Upper(Widen(fp.GetFlightPlanData().GetDestination()));
+    }
 
     entry.result = ApwCheck(m_config.Zones(), m_apwZones, track, cfg);
     entry.tick = now;
@@ -1804,16 +1943,26 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rcPositioned = false;
     m_rcScroll = 0;
     m_rcScrollMine = 0;
+    m_rcPageRows[0] = m_rcPageRows[1] = 6;
     m_rcSortKey = 1;   // Рейс
     m_rcSortAsc = true;
-    m_rcScale = 40;   // two fifths of "New Window.svg"
+    m_rcScale = 40;   // two fifths of "rc.svg"
     m_rcResizing = false;
     m_rcResizeGrab = 0;
     m_rcFont = NULL;
+    m_rcHeadFont = NULL;
     m_rcRowFont = NULL;
+    m_rcKfFont = NULL;
     m_rcFontScale = 0;
     m_rcFilterBefore = -1;
     m_rcFilterAfter = -1;
+    m_rcFloating = false;
+    m_rcFloatPos = { 0, 0 };
+    m_rcDragView = NULL;
+    m_rcFloatDrawn = 0;
+    m_rcDrawingFloat = false;
+    m_rcFloatResizing = false;
+    m_rcFloatGrab = 0;
 
     m_atisOpen = false;
     m_atisScrollPx = 0;
@@ -1848,7 +1997,10 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
         {
             auto it = g_timers.find(idEvent);
             if (it != g_timers.end())
+            {
                 it->second->RequestRefresh();
+                it->second->TickRcFloat();
+            }
         });
     g_timers[id] = this;
     m_timerId = id;
@@ -1872,6 +2024,9 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 
 CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
 {
+    // First, so nothing the list's own window does can call back in here.
+    m_rcEntry.Close();
+    m_rcFloat.Destroy();
     if (m_timerId != 0)
     {
         KillTimer(NULL, m_timerId);
@@ -1887,10 +2042,9 @@ CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
         DeleteObject(m_rulerFont);
     if (m_formularFont != NULL)
         DeleteObject(m_formularFont);
-    if (m_rcFont != NULL)
-        DeleteObject(m_rcFont);
-    if (m_rcRowFont != NULL)
-        DeleteObject(m_rcRowFont);
+    for (HFONT f : { m_rcFont, m_rcHeadFont, m_rcRowFont, m_rcKfFont })
+        if (f != NULL)
+            DeleteObject(f);
 }
 
 // ---- Derived data -----------------------------------------------------------
@@ -1943,15 +2097,20 @@ void CGalaxyATMSystemRadarScreen::GetUserInfo(std::wstring& designation,
         designation = pi.Designation;
         role = pi.Role;
     }
-    else
+    else if (OnControllerPosition(me) && !posId.empty())
     {
-        // No config entry yet: show what EuroScope knows so the panel is never
-        // blank, and make the missing role obvious.
-        designation = !posId.empty() ? Widen(posId.c_str()) : Widen(callsign.c_str());
-        if (designation.empty())
-            designation = L"—";
-        role = L"—";
+        // No config entry yet: show the position id EuroScope knows, so the
+        // panel is never blank.
+        designation = Widen(posId.c_str());
     }
+
+    // Whatever neither the config nor EuroScope names is a dash. An observer
+    // holds no position, so "V_OBS" is a callsign, not an ID - the plate stays
+    // a dash for them.
+    if (designation.empty())
+        designation = L"—";
+    if (role.empty())
+        role = L"—";
 
     // In the trainer nobody logs in, and the block says so plainly.
     if (Plugin()->TrainingSession())
@@ -2225,9 +2384,17 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         Phase != REFRESH_PHASE_AFTER_LISTS)
         return;
     if (!m_visible)
+    {
+        // Nor is the list left standing outside EuroScope.
+        m_rcEntry.Close();
+        m_rcFloat.Hide();
         return;
+    }
 
     m_fonts.EnsureCreated();
+
+    // Logged in or out on another display, or on one this ASR replaced.
+    SyncAuth();
 
     // Which зоны are up at this moment, before anything draws or registers a
     // hit-box off them.
@@ -2369,7 +2536,7 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
                 // and still keeps clear of either endpoint.
                 int px = (a.x + b.x) / 2, py = (a.y + b.y) / 2;
                 RECT box = { px - kPad, py - kPad, px + kPad, py + kPad };
-                AddScreenObject(SO_RULER_LINE, id, box, false, "ПКМ/2ЛКМ - удалить линейку");
+                AddScreenObject(SO_RULER_LINE, id, box, false, Tr("ПКМ/2ЛКМ - удалить линейку"));
                 continue;
             }
 
@@ -2381,7 +2548,7 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
                 int px = a.x + (int)lround((b.x - a.x) * t);
                 int py = a.y + (int)lround((b.y - a.y) * t);
                 RECT box = { px - kPad, py - kPad, px + kPad, py + kPad };
-                AddScreenObject(SO_RULER_LINE, id, box, false, "ПКМ/2ЛКМ - удалить линейку");
+                AddScreenObject(SO_RULER_LINE, id, box, false, Tr("ПКМ/2ЛКМ - удалить линейку"));
             }
         }
 
@@ -2394,8 +2561,8 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         if (m_rulerArmed || m_rulerPlacing)
         {
             AddScreenObject(SO_RULER_CANVAS, "RULER_CANVAS", GetRadarArea(), false,
-                m_rulerPlacing ? "ЛКМ - конец линейки, ПКМ - отмена"
-                               : "ЛКМ - начало линейки, ПКМ - отмена");
+                m_rulerPlacing ? Tr("ЛКМ - конец линейки, ПКМ - отмена")
+                               : Tr("ЛКМ - начало линейки, ПКМ - отмена"));
         }
 
         // Always up - the wake category is not a setting of БЛОК 3's.
@@ -2426,6 +2593,7 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
     // a while throws nobody out.
     if (m_authState != AuthState::LoggedOut && !Plugin()->TrainingSession() && Plugin()->AccessSuspended())
     {
+        Plugin()->SetSessionAuthorized(false);
         m_authState = AuthState::LoggedOut;
         m_authBypassed = false;
         m_authFailed = false;
@@ -2433,7 +2601,7 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         m_rulerArmed = false;
         m_rulerPlacing = false;
         CloseLoginWindow();
-        m_authMessage = L"Доступ приостановлен";
+        m_authMessage = Tr(L"Доступ приостановлен");
         ShowNotice(m_authMessage);
         Log::Warn("auth", "panel closed: access suspended - the name was removed from the user base");
     }
@@ -2477,12 +2645,22 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
             DrawAtisLetterWindow(hDC);
         if (m_atisOpen)
             DrawAtisWindow(hDC);
-        if (m_rcOpen)
+        if (m_rcOpen && m_rcFloating)
+            RenderRcFloat();
+        else if (m_rcOpen)
             DrawSectorListWindow(hDC);
 
         // Last, so it paints over everything and its rows win the click.
         if (m_openDropdown != DropdownKind::None)
             DrawDropdownList(hDC);
+    }
+
+    // The list's own window goes with it: closed, put back on the radar, or
+    // the panel logged out of.
+    if (!(m_rcOpen && m_rcFloating && Authorized()))
+    {
+        m_rcEntry.Close();
+        m_rcFloat.Hide();
     }
 
     // A notice goes over every window, whether the panel is open or not.
@@ -2587,6 +2765,12 @@ namespace
     // that clears an approach clearance off the other.
     bool IsAhdgFn(const FormularFn* fn) { return fn == &kFnAhdg || fn == &kFnAppAhdg; }
     bool IsCflFn(const FormularFn* fn)  { return fn == &kFnCfl || fn == &kFnAppCfl; }
+    // GS carries the защитный объём on its left button - see FormularClick. The
+    // sector tag had ULLLPlugin's own function there, which is not ours to call.
+    bool IsGsFn(const FormularFn* fn)   { return fn == &kFnGs || fn == &kFnTwrGs; }
+
+    // The защитный объём's radius, on the ground.
+    const double kProtectionZoneKm = 10.0;
 
     // Simulator sessions. EuroScope's simulated aircraft fly only for their
     // pseudo pilot, who takes one on with "Get simulation" in the Simulation
@@ -2977,11 +3161,16 @@ HFONT CGalaxyATMSystemRadarScreen::GetFormularFont()
     if (m_formularFont != NULL)
         DeleteObject(m_formularFont);
 
-    // EuroScope's own tag typeface, so the label reads as part of the same
-    // picture as everything else EuroScope draws - Consolas when all the DC
+    // The EuroScope face itself - the one the real tags are set in. It rides
+    // inside the DLL (see Theme::EuroScopeFace), so the label looks the same
+    // whether or not this controller ever installed the .ttf. Failing that,
+    // whatever face EuroScope handed the DC, and Consolas when all that
     // carried was a stock font.
     LOGFONTW lf = {};
-    if (m_esFont == NULL || GetObjectW(m_esFont, sizeof(lf), &lf) == 0)
+    const wchar_t* face = Theme::EuroScopeFace();
+    if (face != NULL)
+        wcscpy_s(lf.lfFaceName, face);
+    else if (m_esFont == NULL || GetObjectW(m_esFont, sizeof(lf), &lf) == 0)
         wcscpy_s(lf.lfFaceName, L"Consolas");
     lf.lfHeight = -MulDiv(size, 7, 6);   // 12 -> 14 px
     lf.lfWidth = 0;
@@ -2989,6 +3178,7 @@ HFONT CGalaxyATMSystemRadarScreen::GetFormularFont()
     lf.lfWeight = FW_NORMAL;
     lf.lfItalic = lf.lfUnderline = lf.lfStrikeOut = FALSE;
     lf.lfCharSet = DEFAULT_CHARSET;
+    lf.lfOutPrecision = OUT_TT_PRECIS;   // the TrueType face, not a raster stand-in
     lf.lfQuality = CLEARTYPE_QUALITY;
 
     m_formularFont = CreateFontIndirectW(&lf);
@@ -3017,9 +3207,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
     TEXTMETRICW tm;
     GetTextMetricsW(hDC, &tm);
-    // A little tighter than the font's own line height, which leaves a gap
-    // between the lines wider than the label needs.
-    const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading) - 2);
+    // The font's own line height, set solid: the rows of a label sit a touch
+    // closer than the extra pixel a label used to carry, and tmHeight's own
+    // internal leading still keeps them off each other at every size the
+    // Р-р шрифта picker offers.
+    const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
     SIZE space = { 0, 0 };
     GetTextExtentPoint32W(hDC, L" ", 1, &space);
 
@@ -3623,7 +3815,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             // moving the label.
             if (haveAhdg)
                 AddScreenObject(SO_FORMULAR_AHDG, callsign.c_str(), ahdgRect, true,
-                    "Тянуть ЛКМ - курс, ПКМ - меню курса TopSky");
+                    Tr("Тянуть ЛКМ - курс, ПКМ - меню курса TopSky"));
         }
     }
 
@@ -3691,8 +3883,10 @@ CGalaxyATMSystemRadarScreen::FormularKind CGalaxyATMSystemRadarScreen::CurrentFo
 // assumed; otherwise DAPS for a mode S track, NODAPS for a mode C one and
 // PRIMARY for a primary-only one, as the _SPI variant while the transponder
 // idents and as the _DIV variant while RAM or CLAM is up, whichever of those the
-// file defines, and COASTED when nothing has been heard for 30 seconds. In the
-// формуляр's colour, and TopSky's Track Highlight for the selected aircraft.
+// file defines, and COASTED when nothing has been heard for 30 seconds. Always
+// in the формуляр's own colour: selecting an aircraft - which a right click on
+// its формуляр does, to open a menu - must not repaint its метка, so a track
+// that is not mine stays grey and one coming to me stays blue.
 void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 {
     const TrackSymbolSet& symbols = TrackSymbols();
@@ -3702,8 +3896,6 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 
     CGalaxyATMSystemPlugin* plugin = Plugin();
     RECT ra = GetRadarArea();
-    CFlightPlan asel = plugin->FlightPlanSelectASEL();
-    const std::string aselCallsign = asel.IsValid() ? asel.GetCallsign() : "";
 
     int saved = SaveDC(hDC);
     for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
@@ -3762,9 +3954,14 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
             continue;
         }
 
-        const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
-        const bool selected = !aselCallsign.empty() && cs != NULL && aselCallsign == cs;
         const COLORREF color = GetTagColorForFlightPlan(fp);
+
+        // Защитный объём, under everything else so the метка and its trail stay
+        // readable inside it: only for a target whose формуляр has one up.
+        const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
+        auto state = (cs != NULL) ? m_formulars.find(cs) : m_formulars.end();
+        if (state != m_formulars.end() && state->second.zone)
+            DrawProtectionZone(hDC, pos.GetPosition(), tp, color);
 
         // Traffic history: the target's last Theme::TrackHistoryDots positions
         // behind it, in the HISTORY symbol and its own colour, under its метка.
@@ -3785,10 +3982,29 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
             }
         }
 
-        DrawTrackSymbol(hDC, symbol->second, tp, selected ? Theme::TrackHighlight : color);
+        DrawTrackSymbol(hDC, symbol->second, tp, color);
         m_symbolStats.drawn++;
     }
     RestoreDC(hDC, saved);
+}
+
+// ---- Защитный объём ---------------------------------------------------------
+// The circle a left click on the формуляр's GS puts round a метка: kProtection-
+// ZoneKm on the ground, in the target's own colour. The radius is measured in
+// the world rather than in pixels - a point that far off the target is put
+// through the same projection - so the ring stays 10 km at every zoom.
+void CGalaxyATMSystemRadarScreen::DrawProtectionZone(HDC hDC, CPosition center, POINT tp,
+    COLORREF color)
+{
+    const double nm = kProtectionZoneKm / 1.852;
+    POINT edge = ConvertCoordFromPositionToPixel(CalculateDestinationPoint(center, 90.0, nm));
+    const double dx = edge.x - tp.x, dy = edge.y - tp.y;
+    const double r = sqrt(dx * dx + dy * dy);
+    if (r < 2.0)
+        return;   // zoomed so far out that the ring is the метка itself
+
+    VectorCanvas canvas(hDC, color);
+    canvas.Circle(tp.x, tp.y, r);
 }
 
 int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor,
@@ -3855,6 +4071,16 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
             hit = &item;
             break;
         }
+    }
+
+    // Защитный объём: the left button on GS draws the 10 km circle round the
+    // метка, and the next one takes it down. It is the метка's, not the label's,
+    // so it stays up while the формуляр is dragged about or collapsed.
+    if (hit != NULL && IsGsFn(hit->fn) && button == BUTTON_LEFT)
+    {
+        it->second.zone = !it->second.zone;
+        RequestRefresh();
+        return;
     }
 
     // A right click on an approach clearance (CA / VA) clears it off, as the
@@ -3935,37 +4161,23 @@ void CGalaxyATMSystemRadarScreen::DrawSigmets(HDC hDC)
     int saved = SaveDC(hDC);
 
     // No fill: the area is an outline and nothing else, so the map and the
-    // traffic inside it are as readable as they are anywhere else.
-    HPEN pen = CreatePen(PS_SOLID, Theme::SigmetWidth, Theme::SigmetLine);
-    HPEN oldPen = (HPEN)SelectObject(hDC, pen);
-
-    // Drawn edge by edge rather than with Polygon/Polyline, so every edge can
-    // be clipped to the radar area on the way out. The area carries no fill,
-    // so a ring is nothing but its edges anyway and the two are identical -
-    // except that this one survives an area far wider than the display.
-    RECT clip = GetRadarArea();
-    std::vector<POINT> pts;
-    for (const Sigmet& sig : *m_sigmets)
+    // traffic inside it are as readable as they are anywhere else. Drawn on
+    // the antialiased surface - a сигмет is all long diagonals, which is what
+    // a GDI pen is worst at.
     {
-        for (const std::vector<EuroScopePlugIn::CPosition>& ring : sig.rings)
+        AreaCanvas canvas(hDC, GetRadarArea(), Theme::SigmetLine,
+            (float)Theme::SigmetWidth);
+        for (const Sigmet& sig : *m_sigmets)
         {
-            if (!SigmetOutline(ring, pts))
-                continue;
-
-            size_t segments = sig.closed ? pts.size() : pts.size() - 1;
-            for (size_t seg = 0; seg < segments; seg++)
+            std::vector<POINT> pts;
+            for (const std::vector<EuroScopePlugIn::CPosition>& ring : sig.rings)
             {
-                POINT a = pts[seg], b = pts[(seg + 1) % pts.size()];
-                if (!Geom::ClipSegment(clip, a, b))
-                    continue;
-                MoveToEx(hDC, a.x, a.y, NULL);
-                LineTo(hDC, b.x, b.y);
+                if (SigmetOutline(ring, pts))
+                    canvas.Ring(pts, sig.closed);
             }
         }
     }
 
-    SelectObject(hDC, oldPen);
-    DeleteObject(pen);
     RestoreDC(hDC, saved);
 }
 
@@ -4138,91 +4350,42 @@ void CGalaxyATMSystemRadarScreen::DrawZones(HDC hDC)
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    RECT clip = GetRadarArea();
-    std::vector<POINT> pts;
-
-    // A package carries a few hundred areas, so the three pens are made once
-    // for the frame and selected per area rather than created per area.
     const Config& cfg = Plugin()->GetConfig();
     const ZoneStyle& styleP = cfg.ZoneStyleFor(ZoneKind::Prohibited);
     const ZoneStyle& styleR = cfg.ZoneStyleFor(ZoneKind::Restricted);
     const ZoneStyle& styleD = cfg.ZoneStyleFor(ZoneKind::Danger);
-    HPEN pens[3] = {
-        CreatePen(PS_SOLID, Theme::ZoneWidth, styleP.line),
-        CreatePen(PS_SOLID, Theme::ZoneWidth, styleR.line),
-        CreatePen(PS_SOLID, Theme::ZoneWidth, styleD.line),
-    };
-    HPEN oldPen = (HPEN)SelectObject(hDC, pens[1]);
 
-    // Whatever EuroScope had clipped the DC to, kept so that each area's wash
-    // can be clipped to its own shape and the clip put straight back - the
-    // outlines drawn after it must not be clipped to the inside of the area.
-    HRGN baseClip = CreateRectRgn(0, 0, 1, 1);
-    const bool hadClip = (GetClipRgn(hDC, baseClip) == 1);
-
-    for (size_t i = 0; i < zones.size(); i++)
+    // One antialiased surface for the whole overlay, its pen retuned per area
+    // rather than a pen made per area: a package carries a few hundred of them
+    // and a hundred and sixty can be up at once. The wash goes on through the
+    // same surface, so the edge of an area is one smooth line whether it is
+    // the outline or the side of the fill under it.
     {
-        if (i >= m_zoneActive.size() || !m_zoneActive[i])
-            continue;
+        AreaCanvas canvas(hDC, GetRadarArea(), styleR.line, (float)Theme::ZoneWidth);
+        std::vector<POINT> pts;
 
-        const Zone& zone = zones[i];
-        if (!ZoneOutline(zone, pts))
-            continue;
-
-        SelectObject(hDC, pens[(zone.kind == ZoneKind::Prohibited) ? 0
-            : (zone.kind == ZoneKind::Danger) ? 2 : 1]);
-
-        // The wash inside the outline. Painted through a region of the area's
-        // own shape, and only over the part of it that is on screen: an area
-        // can run far past the display, and blending its whole bounding box
-        // would cost a great deal of it for nothing.
+        for (size_t i = 0; i < zones.size(); i++)
         {
-            RECT bbox = { LONG_MAX, LONG_MAX, LONG_MIN, LONG_MIN };
-            for (const POINT& p : pts)
-            {
-                bbox.left = min(bbox.left, p.x);
-                bbox.top = min(bbox.top, p.y);
-                bbox.right = max(bbox.right, p.x);
-                bbox.bottom = max(bbox.bottom, p.y);
-            }
-
-            RECT paint;
-            if (IntersectRect(&paint, &bbox, &clip))
-            {
-                HRGN rgn = CreatePolygonRgn(pts.data(), (int)pts.size(), WINDING);
-                if (rgn != NULL)
-                {
-                    SelectClipRgn(hDC, rgn);
-                    const ZoneStyle& style = (zone.kind == ZoneKind::Prohibited) ? styleP
-                        : (zone.kind == ZoneKind::Danger) ? styleD : styleR;
-                    FillAlpha(hDC, paint, style.fill, style.alpha);
-                    SelectClipRgn(hDC, hadClip ? baseClip : NULL);
-                    DeleteObject(rgn);
-                }
-            }
-        }
-
-        // Edge by edge and clipped on the way out, so an area far wider than
-        // the display still draws the part of it that is on screen.
-        for (size_t seg = 0; seg < pts.size(); seg++)
-        {
-            POINT a = pts[seg], b = pts[(seg + 1) % pts.size()];
-            if (!Geom::ClipSegment(clip, a, b))
+            if (i >= m_zoneActive.size() || !m_zoneActive[i])
                 continue;
-            MoveToEx(hDC, a.x, a.y, NULL);
-            LineTo(hDC, b.x, b.y);
+
+            const Zone& zone = zones[i];
+            if (!ZoneOutline(zone, pts))
+                continue;
+
+            const ZoneStyle& style = (zone.kind == ZoneKind::Prohibited) ? styleP
+                : (zone.kind == ZoneKind::Danger) ? styleD : styleR;
+
+            canvas.Wash(pts, style.fill, style.alpha);
+            canvas.SetColor(style.line);
+            canvas.Ring(pts, true);
+
+            // No designator drawn on the area itself: at a normal zoom several
+            // of them overlap, and their names sat on top of the traffic they
+            // are there to keep clear of. The name is on the hover tooltip and
+            // in the window a click opens.
         }
-
-        // No designator drawn on the area itself: at a normal zoom several of
-        // them overlap, and their names sat on top of the traffic they are
-        // there to keep clear of. The name is on the hover tooltip and in the
-        // window a click opens.
     }
-
-    SelectObject(hDC, oldPen);
-    for (HPEN p : pens)
-        DeleteObject(p);
-    DeleteObject(baseClip);
 
     RestoreDC(hDC, saved);
 }
@@ -4941,7 +5104,7 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
     SelectObject(hDC, oldPen);
     DeleteObject(pen);
     AddScreenObject(SO_PANEL_COLLAPSE, "PANEL_COLLAPSE", toggle, false,
-        m_collapsed ? "Развернуть панель" : "Свернуть панель");
+        m_collapsed ? Tr("Развернуть панель") : Tr("Свернуть панель"));
 
     SYSTEMTIME st;
     GetSystemTime(&st); // already UTC
@@ -4989,8 +5152,39 @@ void CGalaxyATMSystemRadarScreen::TickAuth()
     if (m_authState != AuthState::Checking)
         return;
     if (GetTickCount64() - m_authStartTick >= kAuthTotalMs)
+    {
         m_authState = AuthState::LoggedIn;
+        Plugin()->SetSessionAuthorized(true);
+    }
     RequestRefresh();   // the bar moves on the fast tick, not the 1 s one
+}
+
+// The session's login is the plugin's, so every display follows it: one that
+// is out while the session is in lets itself in straight away, with no check
+// run over again, and one that is in while the session was logged out -
+// ".logout" or a suspension seen on another display - goes back to the
+// Авторизация block.
+void CGalaxyATMSystemRadarScreen::SyncAuth()
+{
+    const bool session = Plugin()->SessionAuthorized();
+    if (session && m_authState != AuthState::LoggedIn)
+    {
+        m_authState = AuthState::LoggedIn;
+        m_authMessage.clear();
+        m_authFailed = false;
+        CloseLoginWindow();
+    }
+    else if (!session && m_authState == AuthState::LoggedIn)
+    {
+        m_authState = AuthState::LoggedOut;
+        m_authMessage.clear();
+        m_authFailed = false;
+        m_authBypassed = false;
+        m_openDropdown = DropdownKind::None;
+        m_rulerArmed = false;
+        m_rulerPlacing = false;
+        CloseLoginWindow();
+    }
 }
 
 void CGalaxyATMSystemRadarScreen::StartAuthCheck()
@@ -5066,7 +5260,7 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     SelectClipRgn(hDC, rgn);
     Theme::FlatFill(hDC, win, Theme::MenuBarFill);
     RECT title = { win.left, win.top, win.right, win.top + kTitleH };
-    Theme::DrawLine(hDC, title, L"Уведомление", m_fonts.WinTitle, Theme::MenuText, DT_CENTER | DT_VCENTER);
+    Theme::DrawLine(hDC, title, Tr(L"Уведомление"), m_fonts.WinTitle, Theme::MenuText, DT_CENTER | DT_VCENTER);
     RECT body = { win.left + 5, title.bottom, win.right - 5, win.bottom - 5 };
     Theme::OutlineBox(hDC, body, Theme::InsetFill, Theme::Border);
     SelectClipRgn(hDC, NULL);
@@ -5077,7 +5271,7 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     DrawCloseCross(hDC, close, Theme::MenuText);
 
     AddScreenObject(SO_NOTICE_WINDOW, "NOTICE_WINDOW", win, false, "");
-    AddScreenObject(SO_NOTICE_CLOSE, "NOTICE_CLOSE", close, false, "Закрыть");
+    AddScreenObject(SO_NOTICE_CLOSE, "NOTICE_CLOSE", close, false, Tr("Закрыть"));
 
     RECT textR = { win.left + kPad + 5, title.bottom + kPad, win.right - kPad - 5, title.bottom + kPad + textH };
     HFONT oldFont = (HFONT)SelectObject(hDC, m_fonts.Body);
@@ -5089,7 +5283,7 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     RECT ok = { okLeft, textR.bottom + kGap, okLeft + kBtnW, textR.bottom + kGap + kBtnH };
     Theme::OutlineBox(hDC, ok, Theme::MenuBarFill, Theme::MenuText);
     Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::MenuText, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_NOTICE_OK, "NOTICE_OK", ok, false, "Закрыть");
+    AddScreenObject(SO_NOTICE_OK, "NOTICE_OK", ok, false, Tr("Закрыть"));
 
     RestoreDC(hDC, saved);
 }
@@ -5129,7 +5323,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     SelectClipRgn(hDC, rgn);
     Theme::FlatFill(hDC, win, Theme::MenuBarFill);
     RECT title = { win.left, win.top, win.right, win.top + kTitleH };
-    Theme::DrawLine(hDC, title, L"Вход в систему КСА", m_fonts.WinTitle, Theme::MenuText,
+    Theme::DrawLine(hDC, title, Tr(L"Вход в систему КСА"), m_fonts.WinTitle, Theme::MenuText,
         DT_CENTER | DT_VCENTER);
     // Everything under the title on a sunken dark plate in a light frame, the
     // way the ФС block's list sits in its box.
@@ -5147,8 +5341,8 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     // The card first, so everything registered after it wins the click and a
     // click anywhere else on it goes nowhere; the "x" after the bar it is on.
     AddScreenObject(SO_LOGIN_WINDOW, "LOGIN_WINDOW", win, false, "");
-    AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", title, true, "Перетащите окно");
-    AddScreenObject(SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, false, "Закрыть");
+    AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", title, true, Tr("Перетащите окно"));
+    AddScreenObject(SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, false, Tr("Закрыть"));
 
     std::wstring message;
     const CGalaxyATMSystemPlugin::LoginState state = Plugin()->MyLogin(&message);
@@ -5157,7 +5351,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     const int left = win.left + kPad, right = win.right - kPad;
     int y = title.bottom + kPad;
     RECT intro = { left, y, right, y + kLine };
-    Theme::DrawLine(hDC, intro, L"Введите данные, указанные при регистрации:", m_fonts.Body, Theme::Text,
+    Theme::DrawLine(hDC, intro, Tr(L"Введите данные, указанные при регистрации:"), m_fonts.Body, Theme::Text,
         DT_LEFT | DT_VCENTER);
     y += kLine + kRowGap;
 
@@ -5166,7 +5360,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     for (int i = 0; i < LF_COUNT; i++)
     {
         RECT label = { left, y, left + kLabelW, y + kRowH };
-        Theme::DrawLine(hDC, label, kLabels[i], m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
+        Theme::DrawLine(hDC, label, Tr(kLabels[i]), m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
 
         RECT field = { left + kLabelW, y, right, y + kRowH };
         m_loginFields[i] = field;
@@ -5178,24 +5372,24 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
         if (m_entryField != i)
         {
             if (value.empty())
-                Theme::DrawLine(hDC, text, kHints[i], m_fonts.Body, Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
+                Theme::DrawLine(hDC, text, Tr(kHints[i]), m_fonts.Body, Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
             else
                 Theme::DrawLine(hDC, text, i == LF_PASSWORD ? std::wstring(value.size(), L'\x2022') : value,
                     m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
         }
         if (!sending)
             AddScreenObject(SO_LOGIN_FIELD, std::to_string(i).c_str(), field, false,
-                i == LF_PASSWORD ? "Нажмите, чтобы ввести пароль" : "Нажмите, чтобы ввести");
+                i == LF_PASSWORD ? Tr("Нажмите, чтобы ввести пароль") : Tr("Нажмите, чтобы ввести"));
         y += kRowH + kRowGap;
     }
 
     // Under the fields, whichever matters most: the check under way, why it
     // did not go, or how to move between the fields.
-    std::wstring status = L"Enter - следующее поле, Esc - отмена";
+    std::wstring status = Tr(L"Enter - следующее поле, Esc - отмена");
     COLORREF statusColor = Theme::TextDim;
     if (sending)
     {
-        status = L"Проверка...";
+        status = Tr(L"Проверка...");
         statusColor = Theme::DuplicateText;
     }
     else if (!m_loginProblem.empty())
@@ -5221,9 +5415,9 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
             if (shown.compare(0, wcslen(scheme), scheme) == 0)
                 shown.erase(0, wcslen(scheme));
         RECT linkR = { left, y, right, y + kLine };
-        Theme::DrawLine(hDC, linkR, L"Регистрация: " + shown, m_fonts.Small, Theme::Text,
+        Theme::DrawLine(hDC, linkR, Tr(L"Регистрация: ") + shown, m_fonts.Small, Theme::Text,
             DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-        AddScreenObject(SO_LOGIN_REGISTER, "LOGIN_REGISTER", linkR, false, "Открыть страницу регистрации в браузере");
+        AddScreenObject(SO_LOGIN_REGISTER, "LOGIN_REGISTER", linkR, false, Tr("Открыть страницу регистрации в браузере"));
     }
     y += kLine + kGap;
 
@@ -5232,9 +5426,9 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     RECT send = { right - kBtnW, y, right, y + kBtnH };
     const COLORREF ink = sending ? Theme::MenuTextDisabled : Theme::MenuText;
     Theme::OutlineBox(hDC, send, Theme::MenuBarFill, ink);
-    Theme::DrawLine(hDC, send, L"Войти", m_fonts.Body, ink, DT_CENTER | DT_VCENTER);
+    Theme::DrawLine(hDC, send, Tr(L"Войти"), m_fonts.Body, ink, DT_CENTER | DT_VCENTER);
     if (!sending)
-        AddScreenObject(SO_LOGIN_SEND, "LOGIN_SEND", send, false, "Войти в систему");
+        AddScreenObject(SO_LOGIN_SEND, "LOGIN_SEND", send, false, Tr("Войти в систему"));
 
     RestoreDC(hDC, saved);
 
@@ -5367,11 +5561,11 @@ void CGalaxyATMSystemRadarScreen::SendLogin()
 
     if (m_loginValues[LF_SURNAME].empty() || m_loginValues[LF_FIRST_NAME].empty())
     {
-        m_loginProblem = L"Введите фамилию и имя";
+        m_loginProblem = Tr(L"Введите фамилию и имя");
     }
     else if (m_loginValues[LF_PASSWORD].empty())
     {
-        m_loginProblem = L"Введите пароль";
+        m_loginProblem = Tr(L"Введите пароль");
     }
     else
     {
@@ -5399,7 +5593,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
 {
     const bool checking = (m_authState == AuthState::Checking);
     const bool refused = !checking && !m_authMessage.empty();
-    RECT box = DrawBlockFrame(hDC, y, L"Авторизация",
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"Авторизация"),
         (checking || refused) ? L::AUTH_BOX_H : L::AUTH_BOX_H_IDLE);
 
     // Who is logging in is whoever EuroScope is connected as - the same three
@@ -5455,7 +5649,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
         RECT bar = { statusR.left + 2, statusR.top + 2, statusR.left + 2 + w, statusR.bottom - 2 };
         Theme::FlatFill(hDC, bar, Theme::Active);
     }
-    Theme::DrawLine(hDC, statusR, status, m_fonts.Body,
+    Theme::DrawLine(hDC, statusR, Tr(status), m_fonts.Body,
         (elapsed >= kAuthFillMs) ? Theme::AuthGranted : Theme::Text,
         DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
 
@@ -5464,14 +5658,14 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
 
 int CGalaxyATMSystemRadarScreen::DrawBlockTimer(HDC hDC, int y)
 {
-    RECT box = DrawBlockFrame(hDC, y, L"Таймер", L::TIMER_BOX_H);
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"Таймер"), L::TIMER_BOX_H);
 
     int cy = box.top + L::T_PAD;
     RECT btn = { ContentLeft(), cy, ContentLeft() + 26, cy + L::T_ROW };
     RECT field = { btn.right + 6, cy, ContentRight(), cy + L::T_ROW };
 
     DrawToggleChip(hDC, btn, L"C", m_timerRunning, SO_TIMER_TOGGLE, "TIMER_TOGGLE",
-        "ЛКМ - пуск/стоп таймера, ПКМ - сброс");
+        Tr("ЛКМ - пуск/стоп таймера, ПКМ - сброс"));
 
     std::wstring text = L"---";
     if (m_timerRunning || m_timerElapsedMs > 0)
@@ -5491,7 +5685,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockTimer(HDC hDC, int y)
 
 int CGalaxyATMSystemRadarScreen::DrawBlockUser(HDC hDC, int y)
 {
-    RECT box = DrawBlockFrame(hDC, y, L"Пользователь", L::USER_BOX_H);
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"Пользователь"), L::USER_BOX_H);
 
     std::wstring designation, role, user;
     GetUserInfo(designation, role, user);
@@ -5513,7 +5707,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockUser(HDC hDC, int y)
 
 int CGalaxyATMSystemRadarScreen::DrawBlockVectors(HDC hDC, int y)
 {
-    RECT box = DrawBlockFrame(hDC, y, L"Векторы", L::VECTORS_BOX_H);
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"Векторы"), L::VECTORS_BOX_H);
 
     int cy = box.top + L::V_TOP;
     int x = box.left + 9;   // this row is indented further than the checkboxes below it
@@ -5526,25 +5720,25 @@ int CGalaxyATMSystemRadarScreen::DrawBlockVectors(HDC hDC, int y)
     m_vecDistFieldRect = distField;
     m_vecTimeFieldRect = timeField;
 
-    DrawToggleChip(hDC, distBtn, L"Д", m_vecDistEnabled, SO_VEC_DIST_TOGGLE, "VEC_DIST_TOGGLE",
-        "Вектор по дальности (км) - вместо вектора по времени", Theme::ButtonMid);
+    DrawToggleChip(hDC, distBtn, Tr(L"Д"), m_vecDistEnabled, SO_VEC_DIST_TOGGLE, "VEC_DIST_TOGGLE",
+        Tr("Вектор по дальности (км) - вместо вектора по времени"), Theme::ButtonMid);
     wchar_t distText[16];
     swprintf_s(distText, L"%d", m_vecDistKm);
-    DrawDropdownField(hDC, distField, distText, SO_VEC_DIST_FIELD, "VEC_DIST_FIELD", "Выбрать длину вектора, км");
+    DrawDropdownField(hDC, distField, distText, SO_VEC_DIST_FIELD, "VEC_DIST_FIELD", Tr("Выбрать длину вектора, км"));
 
-    DrawToggleChip(hDC, timeBtn, L"Э", m_vecTimeEnabled, SO_VEC_TIME_TOGGLE, "VEC_TIME_TOGGLE",
-        "Вектор по времени (мин) - вместо вектора по дальности", Theme::ButtonMid);
+    DrawToggleChip(hDC, timeBtn, Tr(L"Э"), m_vecTimeEnabled, SO_VEC_TIME_TOGGLE, "VEC_TIME_TOGGLE",
+        Tr("Вектор по времени (мин) - вместо вектора по дальности"), Theme::ButtonMid);
     wchar_t timeText[16];
     swprintf_s(timeText, L"%d", m_vecTimeMin);
-    DrawDropdownField(hDC, timeField, timeText, SO_VEC_TIME_FIELD, "VEC_TIME_FIELD", "Выбрать время вектора, мин");
+    DrawDropdownField(hDC, timeField, timeText, SO_VEC_TIME_FIELD, "VEC_TIME_FIELD", Tr("Выбрать время вектора, мин"));
 
     cy += L::V_ROW + L::V_GAP1;
-    DrawCheckRow(hDC, cy, box.left + 8, L"Вектор по плану", m_vecByPlan,
-        SO_VEC_BY_PLAN_CHK, "VEC_BY_PLAN", "Вектор по плану");
+    DrawCheckRow(hDC, cy, box.left + 8, Tr(L"Вектор по плану"), m_vecByPlan,
+        SO_VEC_BY_PLAN_CHK, "VEC_BY_PLAN", Tr("Вектор по плану"));
 
     cy += L::V_CHK + L::V_GAP2;
-    DrawCheckRow(hDC, cy, box.left + 8, L"Расчётный эшелон", m_vecShowLevel,
-        SO_VEC_LEVEL_CHK, "VEC_LEVEL", "Расчётный эшелон");
+    DrawCheckRow(hDC, cy, box.left + 8, Tr(L"Расчётный эшелон"), m_vecShowLevel,
+        SO_VEC_LEVEL_CHK, "VEC_LEVEL", Tr("Расчётный эшелон"));
 
     return box.bottom;
 }
@@ -5553,7 +5747,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockVectors(HDC hDC, int y)
 // a two- or three-line label (one or the other) plus an independent speed line.
 int CGalaxyATMSystemRadarScreen::DrawBlockOs(HDC hDC, int y)
 {
-    RECT box = DrawBlockFrame(hDC, y, L"ФС", L::OS_BOX_H);
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"ФС"), L::OS_BOX_H);
 
     // The size picker sits on the label's own row, flush with the list's right
     // edge - the same plate, width and height as the Векторы dropdowns.
@@ -5561,11 +5755,11 @@ int CGalaxyATMSystemRadarScreen::DrawBlockOs(HDC hDC, int y)
     m_osFontFieldRect = fontField;
 
     RECT label = { box.left + 8, box.top + L::O_TOP, fontField.left - 6, box.top + L::O_TOP + L::O_LABEL };
-    Theme::DrawLine(hDC, label, L"Р-р шрифта:", m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
+    Theme::DrawLine(hDC, label, Tr(L"Р-р шрифта:"), m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
 
     wchar_t sizeText[8];
     swprintf_s(sizeText, L"%d", Plugin()->TagFontSize());
-    DrawDropdownField(hDC, fontField, sizeText, SO_OS_FONT_FIELD, "OS_FONT_FIELD", "Выбрать размер шрифта формуляра");
+    DrawDropdownField(hDC, fontField, sizeText, SO_OS_FONT_FIELD, "OS_FONT_FIELD", Tr("Выбрать размер шрифта формуляра"));
 
     RECT list = { box.left + 5, label.bottom + L::O_GAP, box.right - 4,
                   label.bottom + L::O_GAP + L::O_LIST_H };
@@ -5573,21 +5767,21 @@ int CGalaxyATMSystemRadarScreen::DrawBlockOs(HDC hDC, int y)
 
     const int x = list.left + 5;
     int row = list.top + L::OS_ROW0;
-    DrawCheckRow(hDC, row, x, L"2 строчный", m_osLines == 2,
-        SO_OS_TWO_LINE, "OS_2LINE", "Двухстрочный формуляр");
+    DrawCheckRow(hDC, row, x, Tr(L"2 строчный"), m_osLines == 2,
+        SO_OS_TWO_LINE, "OS_2LINE", Tr("Двухстрочный формуляр"));
     row += L::OS_PITCH;
-    DrawCheckRow(hDC, row, x, L"скорость", m_osSpeed,
-        SO_OS_SPEED, "OS_SPEED", "Показывать скорость в формуляре");
+    DrawCheckRow(hDC, row, x, Tr(L"скорость"), m_osSpeed,
+        SO_OS_SPEED, "OS_SPEED", Tr("Показывать скорость в формуляре"));
     row += L::OS_PITCH;
-    DrawCheckRow(hDC, row, x, L"3 строчный", m_osLines == 3,
-        SO_OS_THREE_LINE, "OS_3LINE", "Трёхстрочный формуляр");
+    DrawCheckRow(hDC, row, x, Tr(L"3 строчный"), m_osLines == 3,
+        SO_OS_THREE_LINE, "OS_3LINE", Tr("Трёхстрочный формуляр"));
 
     return box.bottom;
 }
 
 int CGalaxyATMSystemRadarScreen::DrawBlockAltFilter(HDC hDC, int y)
 {
-    RECT box = DrawBlockFrame(hDC, y, L"Фильтр высоты", L::ALTFILTER_BOX_H);
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"Фильтр высоты"), L::ALTFILTER_BOX_H);
 
     wchar_t fromText[8], toText[8];
     swprintf_s(fromText, L"FL%03d", Plugin()->AltFilterFromFL());
@@ -5600,20 +5794,20 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAltFilter(HDC hDC, int y)
     int cy = box.top + L::F_TOP;
     RECT maxLbl = { box.left + 8, cy, valLeft, cy + L::F_ROW };
     RECT maxVal = { valLeft, cy, valRight, cy + L::F_ROW };
-    Theme::DrawLine(hDC, maxLbl, L"Макс:", m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
+    Theme::DrawLine(hDC, maxLbl, Tr(L"Макс:"), m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     DrawOutlinedField(hDC, maxVal, toText, m_fonts.Body);
-    AddScreenObject(SO_ALTFILTER_TO, "ALTFILTER_TO", maxVal, false, "Верхняя граница фильтра высоты");
+    AddScreenObject(SO_ALTFILTER_TO, "ALTFILTER_TO", maxVal, false, Tr("Верхняя граница фильтра высоты"));
     cy += L::F_ROW + L::F_GAP1;
 
     RECT minLbl = { box.left + 8, cy, valLeft, cy + L::F_ROW };
     RECT minVal = { valLeft, cy, valRight, cy + L::F_ROW };
-    Theme::DrawLine(hDC, minLbl, L"Мин :", m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
+    Theme::DrawLine(hDC, minLbl, Tr(L"Мин :"), m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     DrawOutlinedField(hDC, minVal, fromText, m_fonts.Body);
-    AddScreenObject(SO_ALTFILTER_FROM, "ALTFILTER_FROM", minVal, false, "Нижняя граница фильтра высоты");
+    AddScreenObject(SO_ALTFILTER_FROM, "ALTFILTER_FROM", minVal, false, Tr("Нижняя граница фильтра высоты"));
     cy += L::F_ROW + L::F_GAP2;
 
-    DrawCheckRow(hDC, cy, box.left + 39, L"Использовать", Plugin()->AltFilterEnabled(),
-        SO_ALTFILTER_USE_CHK, "ALTFILTER_USE", "Использовать фильтр высоты");
+    DrawCheckRow(hDC, cy, box.left + 39, Tr(L"Использовать"), Plugin()->AltFilterEnabled(),
+        SO_ALTFILTER_USE_CHK, "ALTFILTER_USE", Tr("Использовать фильтр высоты"));
 
     return box.bottom;
 }
@@ -5641,18 +5835,18 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
     RECT vv = { box.left + 7, box.top + L::C_VV_TOP, box.left + 82, box.top + L::C_VV_TOP + L::C_VV_H };
     Theme::DrawLine(hDC, vv, scaleText, m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     AddScreenObject(SO_VV_SCALE, "VV_SCALE", vv, false,
-        "Масштаб: ширина отображаемой зоны от края до края");
+        Tr("Масштаб: ширина отображаемой зоны от края до края"));
 
     // "ВСЕ" straddles the top of the block, half over the ВВ1 label's row.
     RECT all = { box.left + 85, box.top + L::C_ALL_TOP, box.left + 125, box.top + L::C_ALL_TOP + L::C_ROW_H };
     Theme::OutlineBox(hDC, all, m_codeAll ? Theme::Active : Theme::ButtonMid, Theme::Border);
-    Theme::DrawLine(hDC, all, L"ВСЕ", m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_CODE_ALL, "CODE_ALL", all, false, "Пропускать все коды");
+    Theme::DrawLine(hDC, all, Tr(L"ВСЕ"), m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
+    AddScreenObject(SO_CODE_ALL, "CODE_ALL", all, false, Tr("Пропускать все коды"));
 
     RECT bp = { box.left + 32, box.top + L::C_BP_TOP, box.left + 65, box.top + L::C_BP_TOP + L::C_ROW_H };
     Theme::OutlineBox(hDC, bp, m_codeBp ? Theme::Active : Theme::ButtonMid, Theme::Border);
-    Theme::DrawLine(hDC, bp, L"БП", m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_CODE_BP, "CODE_BP", bp, false, "Без привязки");
+    Theme::DrawLine(hDC, bp, Tr(L"БП"), m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
+    AddScreenObject(SO_CODE_BP, "CODE_BP", bp, false, Tr("Без привязки"));
 
     RECT filter = { box.left + 71, box.top + L::C_FLT_TOP, box.left + 183, box.top + L::C_FLT_TOP + L::C_FLT_H };
     Theme::OutlineBox(hDC, filter, Theme::InsetFill, Theme::Border);
@@ -5662,11 +5856,11 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
         Theme::DrawLine(hDC, inner, m_codeFilter, m_fonts.Small, Theme::Text,
             DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
     }
-    AddScreenObject(SO_CODE_FILTER, "CODE_FILTER", filter, false, "Коды источника ВВ1");
+    AddScreenObject(SO_CODE_FILTER, "CODE_FILTER", filter, false, Tr("Коды источника ВВ1"));
 
     RECT extra = { box.left + 189, box.top + L::C_EXTRA_TOP, box.left + 201, box.top + L::C_EXTRA_TOP + L::C_EXTRA_H };
     Theme::OutlineBox(hDC, extra, m_codeExtra ? Theme::Active : Theme::Background, Theme::Border);
-    AddScreenObject(SO_CODE_EXTRA, "CODE_EXTRA", extra, false, "Источник ВВ1 включён");
+    AddScreenObject(SO_CODE_EXTRA, "CODE_EXTRA", extra, false, Tr("Источник ВВ1 включён"));
 
     // Radar-scale slider: a dark track whose lower part fills cyan up to the
     // thumb. Value grows upwards - pushed up the radar closes in, pulled down
@@ -5693,14 +5887,14 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
     DeleteObject(thumbBr);
     AddScreenObject(SO_VV_SLIDER, "VV_SLIDER",
         RECT{ track.left - 4, track.top, track.right + 4, track.bottom }, true,
-        "Масштаб радара: вверх - приблизить, вниз - отдалить");
+        Tr("Масштаб радара: вверх - приблизить, вниз - отдалить"));
 
     // Two live readouts. Both stay empty when nothing matches, exactly as the
     // reference shows them - so anything in either is an alarm, centred in its
     // plate and coloured to be caught out of the corner of an eye rather than
     // read: red for a distress squawk, amber for a code being carried twice.
     RECT distressCap = { box.left, box.top + L::C_DISTRESS_CAP, box.right, box.top + L::C_DISTRESS_CAP + L::C_CAP_H };
-    Theme::DrawLine(hDC, distressCap, L"Коды бедствия", m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
+    Theme::DrawLine(hDC, distressCap, Tr(L"Коды бедствия"), m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
     RECT distress = { box.left + 24, box.top + L::C_DISTRESS_FIELD, box.left + 201, box.top + L::C_DISTRESS_FIELD + L::C_FIELD_H };
     Theme::OutlineBox(hDC, distress, Theme::Background, Theme::Border);
     Theme::DrawLine(hDC, RECT{ distress.left + 4, distress.top, distress.right - 4, distress.bottom },
@@ -5708,7 +5902,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
         DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
 
     RECT dupCap = { box.left, box.top + L::C_DUP_CAP, box.right, box.top + L::C_DUP_CAP + L::C_CAP_H };
-    Theme::DrawLine(hDC, dupCap, L"Двойной код", m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
+    Theme::DrawLine(hDC, dupCap, Tr(L"Двойной код"), m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
     RECT dup = { box.left + 24, box.top + L::C_DUP_FIELD, box.left + 201, box.top + L::C_DUP_FIELD + L::C_FIELD_H };
     Theme::OutlineBox(hDC, dup, Theme::Background, Theme::Border);
     Theme::DrawLine(hDC, RECT{ dup.left + 4, dup.top, dup.right - 4, dup.bottom },
@@ -5720,7 +5914,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
 
 int CGalaxyATMSystemRadarScreen::DrawBlockUnits(HDC hDC, int y)
 {
-    RECT box = DrawBlockFrame(hDC, y, L"Ед. изм.", L::UNITS_BOX_H);
+    RECT box = DrawBlockFrame(hDC, y, Tr(L"Ед. изм."), L::UNITS_BOX_H);
 
     // The level row is three columns of its own; the three rows under it are a
     // plain two-column grid whose right column starts further left.
@@ -5733,21 +5927,21 @@ int CGalaxyATMSystemRadarScreen::DrawBlockUnits(HDC hDC, int y)
     auto row = [&]() { int r = cy; cy += L::E_PITCH; return r; };
 
     int r1 = row();
-    DrawRadioRow(hDC, r1, col1,  colM,        L"FL",   Plugin()->UnitAlt() == AltUnit::FL,  SO_UNIT_ALT_FL,  "U_ALT_FL",  "Эшелон");
-    DrawRadioRow(hDC, r1, colM,  colFM,       L"M",    Plugin()->UnitAlt() == AltUnit::M,   SO_UNIT_ALT_M,   "U_ALT_M",   "Метры");
-    DrawRadioRow(hDC, r1, colFM, box.right,   L"FL+M", Plugin()->UnitAlt() == AltUnit::FLM, SO_UNIT_ALT_FLM, "U_ALT_FLM", "Эшелон и метры");
+    DrawRadioRow(hDC, r1, col1,  colM,        L"FL",   Plugin()->UnitAlt() == AltUnit::FL,  SO_UNIT_ALT_FL,  "U_ALT_FL",  Tr("Эшелон"));
+    DrawRadioRow(hDC, r1, colM,  colFM,       L"M",    Plugin()->UnitAlt() == AltUnit::M,   SO_UNIT_ALT_M,   "U_ALT_M",   Tr("Метры"));
+    DrawRadioRow(hDC, r1, colFM, box.right,   L"FL+M", Plugin()->UnitAlt() == AltUnit::FLM, SO_UNIT_ALT_FLM, "U_ALT_FLM", Tr("Эшелон и метры"));
 
     int r2 = row();
-    DrawRadioRow(hDC, r2, col1, col2,       L"Фут / м", Plugin()->UnitVs() == VsUnit::FtMin, SO_UNIT_VS_FTM, "U_VS_FTM", "Футы в минуту");
-    DrawRadioRow(hDC, r2, col2, box.right,  L"М / С",   Plugin()->UnitVs() == VsUnit::MS,    SO_UNIT_VS_MS,  "U_VS_MS",  "Метры в секунду");
+    DrawRadioRow(hDC, r2, col1, col2,       Tr(L"Фут / м"), Plugin()->UnitVs() == VsUnit::FtMin, SO_UNIT_VS_FTM, "U_VS_FTM", Tr("Футы в минуту"));
+    DrawRadioRow(hDC, r2, col2, box.right,  Tr(L"М / С"),   Plugin()->UnitVs() == VsUnit::MS,    SO_UNIT_VS_MS,  "U_VS_MS",  Tr("Метры в секунду"));
 
     int r3 = row();
-    DrawRadioRow(hDC, r3, col1, col2,       L"Узлы",  Plugin()->UnitGs() == GsUnit::Knots, SO_UNIT_GS_KT,  "U_GS_KT",  "Узлы");
-    DrawRadioRow(hDC, r3, col2, box.right,  L"Км / ч", Plugin()->UnitGs() == GsUnit::Kmh,  SO_UNIT_GS_KMH, "U_GS_KMH", "Километры в час");
+    DrawRadioRow(hDC, r3, col1, col2,       Tr(L"Узлы"),  Plugin()->UnitGs() == GsUnit::Knots, SO_UNIT_GS_KT,  "U_GS_KT",  Tr("Узлы"));
+    DrawRadioRow(hDC, r3, col2, box.right,  Tr(L"Км / ч"), Plugin()->UnitGs() == GsUnit::Kmh,  SO_UNIT_GS_KMH, "U_GS_KMH", Tr("Километры в час"));
 
     int r4 = row();
-    DrawRadioRow(hDC, r4, col1, col2,       L"Мили", Plugin()->UnitDist() == DistUnit::NM, SO_UNIT_DIST_NM, "U_DIST_NM", "Морские мили");
-    DrawRadioRow(hDC, r4, col2, box.right,  L"Км",   Plugin()->UnitDist() == DistUnit::Km, SO_UNIT_DIST_KM, "U_DIST_KM", "Километры");
+    DrawRadioRow(hDC, r4, col1, col2,       Tr(L"Мили"), Plugin()->UnitDist() == DistUnit::NM, SO_UNIT_DIST_NM, "U_DIST_NM", Tr("Морские мили"));
+    DrawRadioRow(hDC, r4, col2, box.right,  Tr(L"Км"),   Plugin()->UnitDist() == DistUnit::Km, SO_UNIT_DIST_KM, "U_DIST_KM", Tr("Километры"));
 
     return box.bottom;
 }
@@ -5771,7 +5965,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
     int cy = box.top + L::A_TOP;
     RECT davlTag = { box.left + kTagLeft, cy, box.left + kTagRight, cy + L::A_ROW };
     RECT davlVal = { box.left + kValLeft, cy, box.left + 199, cy + L::A_ROW };
-    Theme::DrawGhostControl(hDC, davlTag, L"ДАВЛ", m_fonts.Body);
+    Theme::DrawGhostControl(hDC, davlTag, Tr(L"ДАВЛ"), m_fonts.Body);
     Theme::DrawValueField(hDC, davlVal, Plugin()->QnhMmHg() + L"/" + Plugin()->QnhHpa(),
         m_fonts.Body, true, DT_LEFT | DT_VCENTER);
     cy += L::A_ROW + L::A_GAP;
@@ -5781,16 +5975,16 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
     RECT epTag = { box.left + kTagLeft, cy, box.left + kTagRight, cy + L::A_ROW };
     RECT epVal = { box.left + kValLeft, cy, box.left + 127, cy + L::A_ROW };
     RECT atisBtn = { box.left + 146, cy, box.left + 199, cy + L::A_ROW };
-    Theme::DrawGhostControl(hDC, epTag, L"Э/П", m_fonts.Body);
+    Theme::DrawGhostControl(hDC, epTag, Tr(L"Э/П"), m_fonts.Body);
     Theme::DrawValueField(hDC, epVal, Plugin()->TransitionLevel(),
         m_fonts.Body, true, DT_LEFT | DT_VCENTER);
 
     if (m_atisOpen)
-        Theme::DrawValueField(hDC, atisBtn, L"АТИС", m_fonts.Body);
+        Theme::DrawValueField(hDC, atisBtn, Tr(L"АТИС"), m_fonts.Body);
     else
-        Theme::DrawGhostControl(hDC, atisBtn, L"АТИС", m_fonts.Body);
+        Theme::DrawGhostControl(hDC, atisBtn, Tr(L"АТИС"), m_fonts.Body);
     AddScreenObject(SO_ATIS_BUTTON, "ATIS_BTN", atisBtn, false,
-        "Открыть текст АТИС");
+        Tr("Открыть текст АТИС"));
 
     return box.bottom;
 }
@@ -5865,7 +6059,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     SelectClipRgn(hDC, NULL);
     DeleteObject(winRgn);
 
-    AddScreenObject(SO_ATIS_HEADER, "ATIS_HEADER", title, true, "Перетащите окно АТИС");
+    AddScreenObject(SO_ATIS_HEADER, "ATIS_HEADER", title, true, Tr("Перетащите окно АТИС"));
 
     // The bar sits on a light strip running the full width of the card - the
     // one edge in the reference that is not part of a box.
@@ -5892,7 +6086,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
         SelectObject(hDC, old);
         DeleteObject(pen);
     }
-    AddScreenObject(SO_ATIS_CLOSE, "ATIS_CLOSE", close, false, "Закрыть");
+    AddScreenObject(SO_ATIS_CLOSE, "ATIS_CLOSE", close, false, Tr("Закрыть"));
 
     // ---- Index line, on the card itself ------------------------------------
     // Plain text on the card, exactly as the reference photograph has it - the
@@ -5910,7 +6104,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     Theme::FlatFill(hDC, ok, Theme::ButtonFace);
     Theme::FlatFrame(hDC, ok, kFrame, Theme::WinFrame);
     Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::ButtonText, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_ATIS_OK, "ATIS_OK", ok, false, "Закрыть");
+    AddScreenObject(SO_ATIS_OK, "ATIS_OK", ok, false, Tr("Закрыть"));
 
     // ---- The message panel: text and scrollbar share one light frame -------
     RECT panel = { m_atisArea.left + kSide, index.bottom + 17,
@@ -5964,8 +6158,8 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 
     RECT btnUp = { track.left, track.top, track.right, track.top + kEndBtn };
     RECT btnDn = { track.left, track.bottom - kEndBtn, track.right, track.bottom };
-    AddScreenObject(SO_ATIS_LINE_UP, "ATIS_UP", btnUp, false, "Прокрутить вверх");
-    AddScreenObject(SO_ATIS_LINE_DN, "ATIS_DN", btnDn, false, "Прокрутить вниз");
+    AddScreenObject(SO_ATIS_LINE_UP, "ATIS_UP", btnUp, false, Tr("Прокрутить вверх"));
+    AddScreenObject(SO_ATIS_LINE_DN, "ATIS_DN", btnDn, false, Tr("Прокрутить вниз"));
 
     // Both squares carry the mark the reference has - a small light square with
     // a dark centre - and a light rule divides each from the trough.
@@ -5993,7 +6187,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     RECT thumb = { bar.left, thumbTop, bar.right, thumbTop + m_atisThumbH };
     Theme::FlatFill(hDC, thumb, Theme::ScrollThumb);
     Theme::FlatFrame(hDC, thumb, 1, Theme::ScrollEdge);
-    AddScreenObject(SO_ATIS_SCROLLBAR, "ATIS_SCROLL", bar, true, "Прокрутка текста АТИС");
+    AddScreenObject(SO_ATIS_SCROLLBAR, "ATIS_SCROLL", bar, true, Tr("Прокрутка текста АТИС"));
 
     // The window's own rounded edge, over everything inside it.
     Theme::WinBorder(hDC, m_atisArea, kFrame, Theme::WinFrame);
@@ -6082,7 +6276,7 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
     int x = bar.left + kPadX;
     for (int i = 0; i < kMenuItemCount; i++)
     {
-        const wchar_t* text = kMenuItems[i];
+        const wchar_t* text = Tr(kMenuItems[i]);
         HFONT font = m_fonts.Menu;
         SIZE sz = Theme::MeasureText(hDC, font, text);
 
@@ -6134,10 +6328,10 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         Theme::DrawLine(hDC, bypass, L"Bypass", btnFont, bypassInk, DT_CENTER | DT_VCENTER);
         if (!training)
         {
-            AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, "Войти в систему");
+            AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, Tr("Войти в систему"));
             if (m_authState == AuthState::LoggedOut)
                 AddScreenObject(SO_AUTH_BYPASS, "MENU_BYPASS", bypass, false,
-                    bypassLive ? "Войти без проверки в базе" : "");
+                    bypassLive ? Tr("Войти без проверки в базе") : "");
         }
     }
 
@@ -6220,7 +6414,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
     // One object for the whole strip, and it does one thing: open and close the
     // report. Registered fixed rather than moveable - the strip is docked.
     AddScreenObject(SO_ATIS_LETTER_HEADER, "ATIS_L_HEADER", m_atisLetterArea, false,
-        "ЛКМ - текст АТИС, .atis - скрыть");
+        Tr("ЛКМ - текст АТИС, .atis - скрыть"));
 
     RestoreDC(hDC, saved);
 }
@@ -6232,7 +6426,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
 // traffic, only how it is being looked at (sort order, which page each pane is
 // turned to).
 //
-// The window is "New Window.svg" to the pixel, at m_rcScale per cent of its
+// The window is "rc.svg" to the pixel, at m_rcScale per cent of its
 // size - two fifths to begin with. Every number in the drawing below is that
 // export's own coordinate in its 2068x904 artboard, put through the scale
 // rather than re-derived, so the layout can be checked straight against the
@@ -6276,16 +6470,22 @@ namespace
     // The two panes of the export, top and bottom edge each. Both open with
     // the heading row - a light 46-unit band with the plates 3 units inside
     // it - and then rows of 46 on a 49 pitch, so the pane's black shows through
-    // as the rule between two rows. Six rows fill a pane.
+    // as the rule between two rows. Six rows fill a pane as the export draws
+    // it; a pane with more flights than that grows a row pitch for each, and
+    // everything under it moves down by as much.
     const int kRcPaneTopSvg[2]    = { 102, 462 };
     const int kRcPaneBottomSvg[2] = { 445, 802 };
     const int kRcHeadSvg = 46, kRcPlateInsetSvg = 3;
     const int kRcRowSvg = 46, kRcRowPitchSvg = 49;
     const int kRcRows = 6;
 
-    // The one rule the export draws across a row: the black line between
-    // ВыхЭш and ПВО, in the gap between their plates.
-    const int kRcDividerSvg = 1853;
+    int RcGrowSvg(int rows) { return (rows - kRcRows) * kRcRowPitchSvg; }
+
+    // The three rules the export draws across a row, 2.5 units wide each:
+    // between CFL and the entry Точка, between Вход and the exit Точка, and
+    // between ВыхЭш and ПВО - each in the gap between those two plates.
+    const float kRcDividerSvg[] = { 844.0f, 1256.0f, 1852.5f };
+    const float kRcDividerWSvg = 2.5f;
 
     // КФ - how a конфликтная ситуация is told: two airborne flights closer than
     // the separation minima, now or within the look-ahead, each flown straight
@@ -6448,6 +6648,25 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         row.mine = fp.GetTrackingControllerIsMe();
         row.crdState = fp.GetCoordinatedNextControllerState();
 
+        // Which way it is going - east is a course from 0 up to 180, west the
+        // rest, as the semicircular rule divides them. Read off the route,
+        // first point to last, so a row does not change colour every time the
+        // flight turns; the track it is flying only when the route is too
+        // short to point anywhere, as over a circuit.
+        CRadarTarget track = fp.GetCorrelatedRadarTarget();
+        double course = -1.0;
+        CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
+        const int points = route.GetPointsNumber();
+        if (points >= 2)
+        {
+            CPosition from = route.GetPointPosition(0), to = route.GetPointPosition(points - 1);
+            if (from.DistanceTo(to) > 10.0)
+                course = from.DirectionTo(to);
+        }
+        if (course < 0.0 && track.IsValid() && track.GetGS() >= kKfMinGsKt)
+            course = track.GetTrackHeading();
+        row.east = course < 0.0 || fmod(course + 360.0, 360.0) < 180.0;
+
         row.cells[RC_CALLSIGN] = Widen(fp.GetCallsign());
 
         // ВРЛ - the code the aircraft is meant to be squawking, and "S" beside
@@ -6463,7 +6682,7 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         row.cells[RC_SQUAWK] = assigned;
         row.cells[RC_S] = (!assigned.empty() && !actual.empty() && assigned != actual) ? L"S" : L"";
 
-        row.cells[RC_KF] = (rt.IsValid() && inConflict(rt.GetCallsign())) ? L"КФ" : L"";
+        row.cells[RC_KF] = (rt.IsValid() && inConflict(rt.GetCallsign())) ? Tr(L"КФ") : L"";
 
         row.cells[RC_TYPE] = Widen(fpd.GetAircraftFPType());
         row.cells[RC_W] = fpd.IsRvsm() ? L"R" : L"";
@@ -6506,39 +6725,66 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         });
 }
 
+// m_rcScale, never more than the room given and never under the smallest.
+int CGalaxyATMSystemRadarScreen::RcScale(int availW, int availH)
+{
+    const int fit = min(availW * 100 / kRcSvgW, availH * 100 / kRcSvgH);
+    return max(kRcScaleMin, min(m_rcScale, min(kRcScaleMax, fit)));
+}
+
+// A hit-box of the list's: a screen object on the radar, or one of its own
+// window's while that is what is being drawn.
+void CGalaxyATMSystemRadarScreen::RcObject(int type, const char* id, RECT r, bool moveable, const char* tip)
+{
+    if (m_rcDrawingFloat)
+        m_rcFloatHits.push_back({ type, id, r });
+    else
+        AddScreenObject(type, id, r, moveable, tip);
+}
+
+// How many rows each pane shows (m_rcPageRows), and the window's height that
+// comes to, in the export's units. Every flight gets a row of its own, so the
+// list is read without paging through it - as far as maxSvgH, the room there
+// is, allows. Past that the two panes share what room there is, and only
+// then is a pane paged, with a right click, as before.
+int CGalaxyATMSystemRadarScreen::PlanSectorList(const std::vector<SectorListRow>& all, int maxSvgH)
+{
+    int count[2] = { 0, 0 };
+    for (const SectorListRow& r : all)
+        count[r.mine ? 0 : 1]++;
+
+    int need[2] = { max(0, count[0] - kRcRows), max(0, count[1] - kRcRows) };
+    int room = max(0, (maxSvgH - kRcSvgH) / kRcRowPitchSvg);
+    int give[2] = { 0, 0 };
+    if (need[0] + need[1] <= room)
+    {
+        give[0] = need[0];
+        give[1] = need[1];
+    }
+    else
+    {
+        // Half each, and what one of them does not need to the other.
+        give[0] = min(need[0], room / 2);
+        give[1] = min(need[1], room - give[0]);
+        give[0] = min(need[0], room - give[1]);
+    }
+
+    m_rcPageRows[0] = kRcRows + give[0];
+    m_rcPageRows[1] = kRcRows + give[1];
+    return kRcSvgH + RcGrowSvg(m_rcPageRows[0]) + RcGrowSvg(m_rcPageRows[1]);
+}
+
 void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
 {
     std::vector<SectorListRow> all;
     BuildSectorList(all);
 
-    // The two panes are the two halves of the sector's traffic: above, the
-    // flights that are not mine to work yet; below, the ones I am tracking. A
-    // row's ground says the same thing - blue for someone else's, yellow for
-    // my own - so a row is read without knowing which pane it is in.
-    std::vector<const SectorListRow*> other, mine;
-    for (const SectorListRow& r : all)
-        (r.mine ? mine : other).push_back(&r);
-
-    // Never bigger than the radar it stands on, whatever it was scaled to.
+    // Never bigger than the radar it stands on, whatever it was scaled to;
+    // grown past the bottom, it moves up rather than lose rows.
     RECT ra = GetRadarArea();
-    const int fit = min((ra.right - ra.left) * 100 / kRcSvgW, (ra.bottom - ra.top) * 100 / kRcSvgH);
-    const int scale = max(kRcScaleMin, min(m_rcScale, min(kRcScaleMax, fit)));
-    auto S  = [scale](int svg) { return (svg * scale + 50) / 100; };
-    auto SF = [scale](double svg) { return (float)(svg * scale / 100.0); };
-    const int W = S(kRcSvgW), H = S(kRcSvgH);
-
-    // "New Window.svg"'s two text sizes - 32 for the caption and the
-    // headings, 24 for the values - at the size the window is drawn.
-    if (m_rcFontScale != scale)
-    {
-        if (m_rcFont != NULL)
-            DeleteObject(m_rcFont);
-        if (m_rcRowFont != NULL)
-            DeleteObject(m_rcRowFont);
-        m_rcFont = Theme::ListFont(max(6, S(32)));
-        m_rcRowFont = Theme::ListFont(max(6, S(24)));
-        m_rcFontScale = scale;
-    }
+    const int scale = RcScale(ra.right - ra.left, ra.bottom - ra.top);
+    const int svgH = PlanSectorList(all, (ra.bottom - ra.top) * 100 / scale);
+    const int W = (kRcSvgW * scale + 50) / 100, H = (svgH * scale + 50) / 100;
 
     if (!m_rcPositioned)
     {
@@ -6561,9 +6807,45 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
     m_rcArea.right  = m_rcArea.left + W;
     m_rcArea.bottom = m_rcArea.top + H;
 
+    DrawSectorList(hDC, m_rcArea, scale, false, all);
+}
+
+// Laid out for the rows PlanSectorList settled on.
+void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, bool floating,
+    const std::vector<SectorListRow>& all)
+{
+    // The two panes are the two halves of the sector's traffic: above, the
+    // flights I am working; below, the ones still to come into my hands. A
+    // row's ground says which way the flight is going - yellow east, blue
+    // west - whichever pane it is in.
+    std::vector<const SectorListRow*> other, mine;
+    for (const SectorListRow& r : all)
+        (r.mine ? mine : other).push_back(&r);
+
+    auto S  = [scale](int svg) { return (svg * scale + 50) / 100; };
+    auto SF = [scale](double svg) { return (float)(svg * scale / 100.0); };
+
+    // "rc.svg" sets the caption, the headings and the filter strip at 32 and
+    // the values at 24, in the weights Theme::ListFont names.
+    if (m_rcFontScale != scale)
+    {
+        for (HFONT f : { m_rcFont, m_rcHeadFont, m_rcRowFont, m_rcKfFont })
+            if (f != NULL)
+                DeleteObject(f);
+        m_rcFont     = Theme::ListFont(max(6, S(32)), Theme::ListMedium);
+        m_rcHeadFont = Theme::ListFont(max(6, S(32)), Theme::ListRegular);
+        m_rcRowFont  = Theme::ListFont(max(6, S(24)), Theme::ListMedium);
+        m_rcKfFont   = Theme::ListFont(max(6, S(24)), Theme::ListBold);
+        m_rcFontScale = scale;
+    }
+
+    m_rcDrawingFloat = floating;
+    if (floating)
+        m_rcFloatHits.clear();
+
     // Everything in the window is placed off these two, in the export's own
     // coordinates: X(1036) is the pixel its 1036 landed on.
-    const int ox = m_rcArea.left, oy = m_rcArea.top;
+    const int ox = area.left, oy = area.top;
     auto X = [ox, &S](int svg) { return ox + S(svg); };
     auto Y = [oy, &S](int svg) { return oy + S(svg); };
 
@@ -6571,7 +6853,11 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
     SetBkMode(hDC, TRANSPARENT);
 
     // ---- The ground: the panel's olive at 80 %, the radar showing through --
-    FillAlpha(hDC, m_rcArea, Theme::ListGround, Theme::ListGroundAlpha);
+    // Off the radar there is nothing to show through, and the olive is solid.
+    if (floating)
+        Theme::FlatFill(hDC, area, Theme::ListGround);
+    else
+        FillAlpha(hDC, area, Theme::ListGround, Theme::ListGroundAlpha);
 
     // ---- Title bar and its close mark --------------------------------------
     // Both are curves - the bar's two rounded top corners and the cross's
@@ -6604,44 +6890,56 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
         g.FillPolygon(&inkBrush, cross, 12);
     }
 
-    const std::wstring caption = L"Список РЦ";
-    Theme::DrawLine(hDC, bar, caption, m_rcFont, Theme::ListTitleText,
-        DT_CENTER | DT_VCENTER);
-
-    // Without Inter the window is in Arial, and says so on its own title bar,
-    // left of the caption, where it is seen by whoever is looking at the list.
-    if (Theme::InterFace() == NULL)
-    {
-        const int captionLeft = (bar.left + bar.right - Theme::MeasureText(hDC, m_rcFont, caption).cx) / 2;
-        RECT note = { bar.left + S(30), bar.top, captionLeft - S(30), bar.bottom };
-        Theme::DrawLine(hDC, note, L"Шрифт Inter не установлен", m_rcRowFont, Theme::SquawkMismatch,
-            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-    }
+    // The caption stands at the left end of the bar, where the export starts
+    // it, at its 52.
+    const std::wstring caption = Tr(L"Список РЦ");
+    RECT captionR = { X(52), bar.top, X(1990), bar.bottom };
+    Theme::DrawLine(hDC, captionR, caption, m_rcFont, Theme::ListTitleText,
+        DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
 
     // The cross is small; its hit box is the square round it with some margin.
     RECT close = { X(1998), bar.top, X(2046), bar.bottom };
-    RECT drag = { m_rcArea.left, m_rcArea.top, close.left, bar.bottom };
-    AddScreenObject(SO_RC_HEADER, "RC_HEADER", drag, true, "Перетащите список РЦ");
-    AddScreenObject(SO_RC_CLOSE, "RC_CLOSE", close, false, "Закрыть");
+
+    // Without Inter the window is in Arial, and says so on its own title bar,
+    // right of the caption, where it is seen by whoever is looking at the list.
+    if (!Theme::InterInstalled())
+    {
+        const int captionRight = captionR.left + Theme::MeasureText(hDC, m_rcFont, caption).cx;
+        RECT note = { captionRight + S(60), bar.top, close.left - S(30), bar.bottom };
+        Theme::DrawLine(hDC, note, Tr(L"Шрифт Inter не установлен"), m_rcRowFont, Theme::SquawkMismatch,
+            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+    }
+    RECT drag = { area.left, area.top, close.left, bar.bottom };
+    RcObject(SO_RC_HEADER, "RC_HEADER", drag, true, Tr("Перетащите список РЦ"));
+    RcObject(SO_RC_CLOSE, "RC_CLOSE", close, false, Tr("Закрыть"));
 
     // ---- The two panes -----------------------------------------------------
+    // The upper pane grown pushes the lower one down, and both push the
+    // filter strip.
+    const int grow0 = RcGrowSvg(m_rcPageRows[0]);
+    const int growAll = grow0 + RcGrowSvg(m_rcPageRows[1]);
     for (int p = 0; p < 2; p++)
     {
-        const std::vector<const SectorListRow*>& rows = p ? mine : other;
+        const std::vector<const SectorListRow*>& rows = p ? other : mine;
+        const int pageRows = m_rcPageRows[p];
+        const bool paged = (int)rows.size() > pageRows;
 
-        // A pane turns a page at a time (right click on a row); a page past the
-        // end of its list - turned there, or left there as the traffic went -
-        // is the first page again.
-        int& scroll = p ? m_rcScrollMine : m_rcScroll;
-        if (scroll < 0 || scroll >= (int)rows.size())
+        // A pane longer than the room there is turns a page at a time (right
+        // click on a row); a page past the end of its list - turned there, or
+        // left there as the traffic went - is the first page again, and one
+        // that holds every flight has no other page.
+        int& scroll = p ? m_rcScroll : m_rcScrollMine;
+        if (!paged || scroll < 0 || scroll >= (int)rows.size())
             scroll = 0;
 
-        const int top = kRcPaneTopSvg[p];
-        RECT pane = { X(10), Y(top), X(2058), Y(kRcPaneBottomSvg[p]) };
+        const int top = kRcPaneTopSvg[p] + (p ? grow0 : 0);
+        const int bottom = kRcPaneBottomSvg[p] + (p ? growAll : grow0);
+        RECT pane = { X(10), Y(top), X(2058), Y(bottom) };
         Theme::FlatFill(hDC, pane, Theme::ListPaneFill);
 
         // Heading row: the light band, the grey plates standing in it, and each
-        // title centred on its plate. A plate sorts the list by its column.
+        // title centred on its plate - Regular above, Medium below, as the
+        // export has them. A plate sorts the list by its column.
         RECT band = { X(10), Y(top), X(2058), Y(top + kRcHeadSvg) };
         Theme::FlatFill(hDC, band, Theme::ListHeadRule);
         for (int c = 0; c < kRcCols; c++)
@@ -6649,15 +6947,15 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
             RECT plate = { X(kRcColumns[c].svgLeft), Y(top + kRcPlateInsetSvg),
                            X(kRcColumns[c].svgRight), Y(top + kRcHeadSvg - kRcPlateInsetSvg) };
             Theme::FlatFill(hDC, plate, Theme::ListHeadFill);
-            Theme::DrawLine(hDC, plate, kRcColumns[c].title, m_rcFont, Theme::ListHeadText,
+            Theme::DrawLine(hDC, plate, Tr(kRcColumns[c].title), p ? m_rcFont : m_rcHeadFont, Theme::ListHeadText,
                 DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
 
             char id[8];
             sprintf_s(id, "%d", c);
-            AddScreenObject(SO_RC_SORT, id, plate, false, "Сортировать по столбцу");
+            RcObject(SO_RC_SORT, id, plate, false, Tr("Сортировать по столбцу"));
         }
 
-        for (int i = 0; i < kRcRows; i++)
+        for (int i = 0; i < pageRows; i++)
         {
             int index = scroll + i;
             if (index >= (int)rows.size())
@@ -6666,17 +6964,23 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
 
             const int rowTop = top + kRcHeadSvg + kRcPlateInsetSvg + kRcRowPitchSvg * i;
             RECT line = { X(10), Y(rowTop), X(2058), Y(rowTop + kRcRowSvg) };
-            Theme::FlatFill(hDC, line, row.mine ? Theme::ListRowMine : Theme::ListRowOther);
+            Theme::FlatFill(hDC, line, row.east ? Theme::ListRowEast : Theme::ListRowWest);
 
-            RECT rule = { X(kRcDividerSvg), line.top, X(kRcDividerSvg) + 1, line.bottom };
-            Theme::FlatFill(hDC, rule, Theme::ListRowRule);
+            for (float d : kRcDividerSvg)
+            {
+                const int l = ox + (int)(SF(d) + 0.5f);
+                RECT rule = { l, line.top, l + max(1, (int)(SF(kRcDividerWSvg) + 0.5f)), line.bottom };
+                Theme::FlatFill(hDC, rule, Theme::ListRowRule);
+            }
 
             for (int c = 0; c < kRcCols; c++)
             {
                 COLORREF ink = Theme::ListText;
+                HFONT font = m_rcRowFont;
                 if (c == RC_KF && !row.cells[c].empty())
                 {
                     ink = Theme::ListConflict;
+                    font = m_rcKfFont;
                 }
                 else if (c == RC_CRD && !row.cells[c].empty())
                 {
@@ -6687,67 +6991,66 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
 
                 RECT cell = { X(kRcColumns[c].svgLeft) + 1, line.top,
                               X(kRcColumns[c].svgRight) - 1, line.bottom };
-                Theme::DrawLine(hDC, cell, row.cells[c], m_rcRowFont, ink,
+                Theme::DrawLine(hDC, cell, row.cells[c], font, ink,
                     DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
             }
 
             // The whole row answers a click by selecting the aircraft, which is
             // what makes the list a way into the traffic rather than a readout.
-            AddScreenObject(SO_RC_ROW, row.callsign.c_str(), line, false,
-                "Выбрать борт (ПКМ - следующая страница)");
+            RcObject(SO_RC_ROW, row.callsign.c_str(), line, false,
+                paged ? Tr("Выбрать борт (ПКМ - следующая страница)") : Tr("Выбрать борт"));
         }
     }
 
     // ---- The filter strip under the panes -------------------------------------
     // "Рейс:" and its field on the left; "До (мин)" and "После (мин)" with
-    // theirs on the right, clear of the grip. Black fields in a light frame;
-    // a click opens EuroScope's edit box, and an empty field is no limit.
+    // theirs on the right - each field where the export has it, a black box in
+    // a white frame 2 units wide, and each label centred on its field's height.
+    // A click opens EuroScope's edit box, and an empty field is no limit.
     {
-        const int g = max(10, S(36));   // the grip's size, drawn below
-        const int fieldTop = Y(823), fieldBottom = Y(883), fieldW = S(180);
-        const int gap = S(14);
-
-        auto label = [&](int right, const std::wstring& text) -> int
+        // A field is given by the export's rectangle; its frame is stroked on
+        // that outline, so half of it stands outside.
+        auto field = [&](int svgX, int svgY, const std::wstring& text, const char* id, const char* tip) -> RECT
         {
-            const int w = Theme::MeasureText(hDC, m_rcFont, text).cx;
-            RECT r = { right - w, fieldTop, right, fieldBottom };
-            Theme::DrawLine(hDC, r, text, m_rcFont, Theme::ListTitleText, DT_LEFT | DT_VCENTER);
-            return r.left;
-        };
-        auto field = [&](const RECT& r, const std::wstring& text, const char* id, const char* tip)
-        {
+            const int fw = max(1, S(2));
+            RECT r = { X(svgX) - fw / 2, Y(svgY) - fw / 2, X(svgX + 182) + (fw + 1) / 2, Y(svgY + 54) + (fw + 1) / 2 };
             Theme::FlatFill(hDC, r, Theme::ListPaneFill);
-            Theme::FlatFrame(hDC, r, 1, Theme::ListHeadRule);
+            Theme::FlatFrame(hDC, r, fw, Theme::ListFieldFrame);
             RECT inner = { r.left + S(12), r.top, r.right - S(8), r.bottom };
             Theme::DrawLine(hDC, inner, text, m_rcRowFont, Theme::ListTitleText,
                 DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-            AddScreenObject(SO_RC_FILTER, id, r, false, tip);
+            RcObject(SO_RC_FILTER, id, r, false, tip);
+            return r;
+        };
+        // "Рейс:" starts at the export's 13; the other two end where it ends them.
+        auto label = [&](const RECT& f, int svgEdge, bool rightAligned, const std::wstring& text)
+        {
+            RECT r = rightAligned ? RECT{ area.left, f.top, X(svgEdge), f.bottom }
+                                  : RECT{ X(svgEdge), f.top, f.left, f.bottom };
+            Theme::DrawLine(hDC, r, text, m_rcFont, Theme::ListTitleText,
+                (rightAligned ? DT_RIGHT : DT_LEFT) | DT_VCENTER);
         };
         auto minutes = [](int value) { return value >= 0 ? std::to_wstring(value) : std::wstring(); };
 
-        const std::wstring callsignLabel = L"Рейс:";
-        const int callsignLabelW = Theme::MeasureText(hDC, m_rcFont, callsignLabel).cx;
-        label(X(20) + callsignLabelW, callsignLabel);
-        const int callsignLeft = X(20) + callsignLabelW + gap;
-        field({ callsignLeft, fieldTop, callsignLeft + fieldW, fieldBottom }, m_rcFilterCallsign,
-            "callsign", "Фильтр по рейсу");
+        RECT callsign = field(120, 825 + growAll, m_rcFilterCallsign, "callsign", Tr("Фильтр по рейсу"));
+        label(callsign, 13, false, Tr(L"Рейс:"));
 
-        const int afterRight = m_rcArea.right - g - S(8);
-        RECT after = { afterRight - fieldW, fieldTop, afterRight, fieldBottom };
-        field(after, minutes(m_rcFilterAfter), "after", "Сколько минут держать рейс после выхода из сектора");
-        const int afterLabelLeft = label(after.left - gap, L"После (мин)");
+        RECT before = field(1467, 829 + growAll, minutes(m_rcFilterBefore), "before",
+            Tr("За сколько минут до входа в сектор показывать рейс"));
+        label(before, 1453, true, Tr(L"До (мин)"));
 
-        RECT before = { afterLabelLeft - S(40) - fieldW, fieldTop, afterLabelLeft - S(40), fieldBottom };
-        field(before, minutes(m_rcFilterBefore), "before", "За сколько минут до входа в сектор показывать рейс");
-        label(before.left - gap, L"До (мин)");
+        RECT after = field(1865, 829 + growAll, minutes(m_rcFilterAfter), "after",
+            Tr("Сколько минут держать рейс после выхода из сектора"));
+        label(after, 1856, true, Tr(L"После (мин)"));
     }
 
     // ---- The grip that scales it -------------------------------------------
-    // Three short diagonals in the bottom right corner, below the lower pane,
-    // in the light of the heading band. Pulled, the window keeps its top left
-    // corner and its shape, and its width follows the cursor.
-    const int g = max(10, S(36));
-    RECT grip = { m_rcArea.right - g, m_rcArea.bottom - g, m_rcArea.right, m_rcArea.bottom };
+    // Three short diagonals in the bottom right corner, in the 20 units the
+    // export leaves right of and under the "После (мин)" field, in the light of
+    // the heading band. Pulled, the window keeps its top left corner and its
+    // shape, and its width follows the cursor.
+    const int g = max(8, S(20));
+    RECT grip = { area.right - g, area.bottom - g, area.right, area.bottom };
     {
         HPEN pen = CreatePen(PS_SOLID, 1, Theme::ListHeadRule);
         HPEN old = (HPEN)SelectObject(hDC, pen);
@@ -6760,9 +7063,264 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
         SelectObject(hDC, old);
         DeleteObject(pen);
     }
-    AddScreenObject(SO_RC_RESIZE, "RC_RESIZE", grip, true, "Потяните, чтобы изменить размер");
+    RcObject(SO_RC_RESIZE, "RC_RESIZE", grip, true, Tr("Потяните, чтобы изменить размер"));
 
+    m_rcDrawingFloat = false;
     RestoreDC(hDC, saved);
+}
+
+// ---- "Список РЦ" outside EuroScope -------------------------------------------
+namespace
+{
+    // EuroScope's main window - what the list's own window belongs to when it
+    // has to be made without a click to find it from, as for a list the ASR
+    // left outside. The biggest visible top-level window of this process that
+    // nothing owns.
+    HWND EuroScopeMainWindow()
+    {
+        struct Found { HWND hwnd; LONG area; } found = { NULL, 0 };
+        EnumWindows([](HWND h, LPARAM lp) -> BOOL
+            {
+                DWORD pid = 0;
+                GetWindowThreadProcessId(h, &pid);
+                if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER) != NULL)
+                    return TRUE;
+                RECT r;
+                GetWindowRect(h, &r);
+                Found* f = (Found*)lp;
+                const LONG area = (r.right - r.left) * (r.bottom - r.top);
+                if (area > f->area)
+                    *f = { h, area };
+                return TRUE;
+            }, (LPARAM)&found);
+        return found.hwnd;
+    }
+}
+
+// The list's own window, made once and answering through this screen: its
+// title bar is Windows' to drag, the rest is the list's.
+bool CGalaxyATMSystemRadarScreen::CreateRcFloat(HWND owner)
+{
+    if (m_rcFloat.IsCreated())
+        return true;
+    if (owner == NULL || !m_rcFloat.Create(owner))
+        return false;
+    m_rcFloat.onHitTest = [this](POINT pt)
+    {
+        for (const RcHit& h : m_rcFloatHits)
+            if (h.type == SO_RC_HEADER && PtInRect(&h.rect, pt))
+                return FloatWindow::Hit::Caption;
+        return FloatWindow::Hit::Client;
+    };
+    m_rcFloat.onMouse = [this](UINT msg, POINT pt) { RcFloatMouse(msg, pt); };
+    m_rcFloat.onMoveStart = [this]() { m_rcEntry.Close(); };
+    m_rcFloat.onMoved = [this]() { RcFloatMoved(); };
+    return true;
+}
+
+bool CGalaxyATMSystemRadarScreen::UndockSectorList(RECT requested)
+{
+    // The view the drag is on, to turn its coordinates into the screen's.
+    HWND view = m_rcDragView;
+    if (view == NULL || !IsWindow(view))
+        return false;
+    if (!CreateRcFloat(GetAncestor(view, GA_ROOT)))
+        return false;
+
+    // The size it had on the radar, which may have been less than asked for:
+    // it is not to jump bigger under the cursor on the way out.
+    const RECT ra = GetRadarArea();
+    m_rcScale = RcScale(ra.right - ra.left, ra.bottom - ra.top);
+
+    POINT at = { requested.left, requested.top };
+    ClientToScreen(view, &at);
+    m_rcFloatPos = at;
+    m_rcFloating = true;
+    m_rcFloat.MoveTo(at);
+    RenderRcFloat();
+    m_rcFloat.ContinueDrag();
+
+    m_dragOffset = { 0, 0 };
+    RequestRefresh();
+    Log::Info("rc", "sector list taken off the radar");
+    return true;
+}
+
+void CGalaxyATMSystemRadarScreen::RenderRcFloat()
+{
+    if (!m_rcFloat.IsCreated())
+    {
+        // Left outside by the last session: made again where it stood, or on
+        // the main monitor if that one is no longer there.
+        if (!CreateRcFloat(EuroScopeMainWindow()))
+            return;
+        if (MonitorFromPoint(m_rcFloatPos, MONITOR_DEFAULTTONULL) == NULL)
+            m_rcFloatPos = { 100, 100 };
+        m_rcFloat.MoveTo(m_rcFloatPos);
+    }
+
+    std::vector<SectorListRow> all;
+    BuildSectorList(all);
+
+    // No bigger than the monitor it is on. It grows down from where it stands,
+    // not moving under the controller's eye, as far as the monitor's bottom.
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(MonitorFromWindow(m_rcFloat.Handle(), MONITOR_DEFAULTTONEAREST), &mi);
+    const int scale = RcScale(mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top);
+    const int svgH = PlanSectorList(all, (mi.rcWork.bottom - m_rcFloat.Position().y) * 100 / scale);
+    const int W = (kRcSvgW * scale + 50) / 100, H = (svgH * scale + 50) / 100;
+
+    HDC dc = m_rcFloat.BeginFrame(W, H);
+    if (dc == NULL)
+        return;
+    RECT area = { 0, 0, W, H };
+    DrawSectorList(dc, area, scale, true, all);
+    m_rcFloat.EndFrame();
+    m_rcFloatDrawn = GetTickCount64();
+}
+
+// The window takes its clicks the way the radar gives them to the list: on
+// the button's release, to whatever box is under it. The grip is pulled with
+// the mouse held by the window, so it can go past the window's own edge.
+void CGalaxyATMSystemRadarScreen::RcFloatMouse(UINT msg, POINT pt)
+{
+    if (m_rcFloatResizing)
+    {
+        const int width = pt.x + m_rcFloatGrab;
+        m_rcScale = max(kRcScaleMin, min(kRcScaleMax, (int)lround(width * 100.0 / kRcSvgW)));
+        if (msg == WM_LBUTTONUP)
+        {
+            m_rcFloatResizing = false;
+            m_rcFloat.ReleaseMouse();
+        }
+        RenderRcFloat();
+        return;
+    }
+    if (msg == WM_MOUSEMOVE)
+        return;
+
+    const RcHit* hit = NULL;
+    for (auto it = m_rcFloatHits.rbegin(); it != m_rcFloatHits.rend(); ++it)
+    {
+        if (PtInRect(&it->rect, pt))
+        {
+            hit = &*it;
+            break;
+        }
+    }
+    if (hit == NULL)
+        return;
+
+    if (msg == WM_LBUTTONDOWN && hit->type == SO_RC_RESIZE)
+    {
+        RECT r;
+        GetClientRect(m_rcFloat.Handle(), &r);
+        m_rcFloatResizing = true;
+        m_rcFloatGrab = r.right - pt.x;
+        m_rcEntry.Close();
+        m_rcFloat.CaptureMouse();
+        return;
+    }
+    if (msg != WM_LBUTTONUP && msg != WM_RBUTTONUP)
+        return;
+    const int button = (msg == WM_LBUTTONUP) ? BUTTON_LEFT : BUTTON_RIGHT;
+
+    // A copy: the drawing that follows the click fills the list afresh.
+    const RcHit h = *hit;
+    m_rcEntry.Close();
+    if (h.type == SO_RC_FILTER)
+    {
+        if (button != BUTTON_LEFT)
+            return;
+        const bool isCallsign = h.id == "callsign";
+        const bool isBefore = h.id == "before";
+        const int fn = isCallsign ? FN_RC_FILTER_CALLSIGN : isBefore ? FN_RC_FILTER_BEFORE : FN_RC_FILTER_AFTER;
+        std::wstring initial = m_rcFilterCallsign;
+        if (!isCallsign)
+        {
+            const int value = isBefore ? m_rcFilterBefore : m_rcFilterAfter;
+            initial = value >= 0 ? std::to_wstring(value) : std::wstring();
+        }
+        m_rcEntry.Open(m_rcFloat.Handle(), h.rect, m_rcRowFont, initial, false, isCallsign ? 10 : 4,
+            [this, fn](TextEntry::End end)
+            {
+                if (end != TextEntry::End::Cancel)
+                    ApplyRcFilter(fn, m_rcEntry.Text());
+                m_rcEntry.Close();
+                RenderRcFloat();
+            });
+        return;
+    }
+    if (h.type == SO_RC_CLOSE)
+    {
+        // Put away where it stands: ".rc" brings it back out there.
+        m_rcOpen = false;
+        m_rcFloat.Hide();
+        RequestRefresh();
+        return;
+    }
+
+    RECT screenArea = h.rect;
+    OnClickScreenObject(h.type, h.id.c_str(), pt, screenArea, button);
+    RenderRcFloat();
+}
+
+// Dropped wholly inside the radar it came from, the list goes back onto it,
+// where it was dropped; anywhere else it stays out, and that is where it is
+// remembered to be.
+void CGalaxyATMSystemRadarScreen::RcFloatMoved()
+{
+    RECT wr;
+    GetWindowRect(m_rcFloat.Handle(), &wr);
+    m_rcFloatPos = { wr.left, wr.top };
+
+    HWND owner = GetWindow(m_rcFloat.Handle(), GW_OWNER);
+    if (owner == NULL || IsIconic(owner))
+        return;
+
+    // The windows under the list's middle, from EuroScope's main one down;
+    // the radar is the deepest of them the radar area fits into - the main
+    // window's own client area would take it too, off by the toolbars.
+    const POINT mid = { (wr.left + wr.right) / 2, (wr.top + wr.bottom) / 2 };
+    std::vector<HWND> chain;
+    for (HWND h = owner; h != NULL && chain.size() < 16; )
+    {
+        chain.push_back(h);
+        POINT p = mid;
+        ScreenToClient(h, &p);
+        HWND child = ChildWindowFromPointEx(h, p, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+        h = (child == h) ? NULL : child;
+    }
+
+    const RECT ra = GetRadarArea();
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+    {
+        POINT tl = { wr.left, wr.top }, br = { wr.right, wr.bottom };
+        ScreenToClient(*it, &tl);
+        ScreenToClient(*it, &br);
+        if (tl.x >= ra.left && tl.y >= ra.top && br.x <= ra.right && br.y <= ra.bottom)
+        {
+            m_rcArea = { tl.x, tl.y, br.x, br.y };
+            m_rcPositioned = true;
+            m_rcFloating = false;
+            m_rcEntry.Close();
+            m_rcFloat.Hide();
+            RequestRefresh();
+            Log::Info("rc", "sector list put back on the radar");
+            return;
+        }
+    }
+}
+
+void CGalaxyATMSystemRadarScreen::TickRcFloat()
+{
+    // Not painted for a while: this display is not the one on screen - another
+    // ASR's tab is - or the panel is off. Its list goes away with it.
+    if (m_rcFloat.Visible() && !m_rcFloatResizing && GetTickCount64() - m_rcFloatDrawn > 3000)
+    {
+        m_rcEntry.Close();
+        m_rcFloat.Hide();
+    }
 }
 
 // Grabs the thumb by its middle, so the point taken hold of stays under the
@@ -7718,7 +8276,7 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
     {
         char id[16];
         sprintf_s(id, "%d", index);
-        AddScreenObject(SO_RULER_LABEL, id, r.labelRect, true, "Перетащить информацию линейки");
+        AddScreenObject(SO_RULER_LABEL, id, r.labelRect, true, Tr("Перетащить информацию линейки"));
     }
 
     RestoreDC(hDC, saved);
@@ -7838,20 +8396,20 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             m_authBypassed = false;
             if (Plugin()->AccessSuspended())
             {
-                m_authMessage = L"Доступ приостановлен";
+                m_authMessage = Tr(L"Доступ приостановлен");
                 ShowNotice(m_authMessage);
                 Log::Warn("auth", "LOGIN " + who + " refused: access suspended - the name was removed from the user base");
             }
             else if (!Plugin()->LiveConnection())
             {
-                m_authMessage = L"Нет подключения к VATSIM";
+                m_authMessage = Tr(L"Нет подключения к VATSIM");
                 m_authFailed = true;
                 Log::Error("auth", "LOGIN " + who + " failed: not controlling on the live VATSIM network"
                     " (EuroScope connection type " + std::to_string(GetPlugIn()->GetConnectionType()) + ")");
             }
             else if (Plugin()->GetConfig().SquawkServerUrl().empty())
             {
-                m_authMessage = L"База пользователей недоступна";
+                m_authMessage = Tr(L"База пользователей недоступна");
                 m_authFailed = true;
                 Log::Error("auth", "LOGIN " + who + " failed: Squawk.ServerUrl is not set in GalaxyATMSystem.json");
             }
@@ -7896,12 +8454,12 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             else if (Plugin()->AccessSuspended())
             {
                 Log::Warn("auth", "Bypass refused: access suspended");
-                ShowNotice(L"Доступ приостановлен");
+                ShowNotice(Tr(L"Доступ приостановлен"));
             }
             else
             {
                 Log::Info("auth", "Bypass refused: no LOGIN has failed - told to register");
-                ShowNotice(L"Пожалуйста, зарегистрируйтесь в системе в установленном порядке");
+                ShowNotice(Tr(L"Пожалуйста, зарегистрируйтесь в системе в установленном порядке"));
             }
         }
         RequestRefresh();
@@ -8075,14 +8633,15 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         CFlightPlan picked = GetPlugIn()->FlightPlanSelect(sObjectId);
         if (Button == BUTTON_RIGHT)
         {
-            // Nor a scrollbar: a right click turns the pane the row is in on by
-            // a page. The pane is the row's own - the flight's tracking says
-            // which - and a page past the end wraps back to the first as the
-            // window draws.
+            // Nor a scrollbar: a pane that has outgrown the screen turns on by
+            // a page with a right click. The pane is the row's own - the
+            // flight's tracking says which - and a page past the end wraps
+            // back to the first as the window draws.
             if (picked.IsValid())
             {
-                int& scroll = picked.GetTrackingControllerIsMe() ? m_rcScrollMine : m_rcScroll;
-                scroll += kRcRows;
+                const bool mine = picked.GetTrackingControllerIsMe();
+                int& scroll = mine ? m_rcScrollMine : m_rcScroll;
+                scroll += m_rcPageRows[mine ? 0 : 1];
             }
         }
         else if (picked.IsValid())
@@ -8216,6 +8775,40 @@ void CGalaxyATMSystemRadarScreen::OnDoubleClickScreenObject(int ObjectType, cons
         RemoveRulerNear(Pt);
 }
 
+// "Список РЦ"'s filter strip, typed into EuroScope's edit box on the radar or
+// into ours on the list's own window. A callsign is kept upper case and
+// without spaces; a number of minutes is taken only as plain digits, and
+// nothing at all clears the limit. Either way both panes go back to their
+// first page.
+void CGalaxyATMSystemRadarScreen::ApplyRcFilter(int functionId, const std::wstring& typed)
+{
+    if (functionId == FN_RC_FILTER_CALLSIGN)
+    {
+        std::wstring callsign;
+        for (wchar_t c : typed)
+            if (!iswspace(c) && callsign.size() < 10)
+                callsign += c;
+        m_rcFilterCallsign = RcUpper(callsign);
+    }
+    else
+    {
+        std::wstring digits = typed;
+        digits.erase(0, digits.find_first_not_of(L" \t"));
+        digits.erase(digits.find_last_not_of(L" \t") + 1);
+
+        int value = -1;
+        if (!digits.empty())
+        {
+            if (digits.size() > 4 || digits.find_first_not_of(L"0123456789") != std::wstring::npos)
+                return;   // not a number of minutes - the field keeps what it had
+            value = _wtoi(digits.c_str());
+        }
+        (functionId == FN_RC_FILTER_BEFORE ? m_rcFilterBefore : m_rcFilterAfter) = value;
+    }
+    m_rcScroll = m_rcScrollMine = 0;
+    RequestRefresh();
+}
+
 void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)
 {
     // The "ULLL Squawk" column's clicks and menu. EuroScope may deliver a TAG
@@ -8238,36 +8831,10 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
         return;
     }
 
-    // "Список РЦ"'s filter strip. A callsign is kept upper case and without
-    // spaces; a number of minutes is taken only as plain digits, and nothing
-    // at all clears the limit. Either way both panes go back to their first page.
-    if (FunctionId == FN_RC_FILTER_CALLSIGN)
+    if (FunctionId == FN_RC_FILTER_CALLSIGN || FunctionId == FN_RC_FILTER_BEFORE
+        || FunctionId == FN_RC_FILTER_AFTER)
     {
-        std::wstring typed;
-        for (wchar_t c : (sItemString != NULL) ? Widen(sItemString) : std::wstring())
-            if (!iswspace(c) && typed.size() < 10)
-                typed += c;
-        m_rcFilterCallsign = RcUpper(typed);
-        m_rcScroll = m_rcScrollMine = 0;
-        RequestRefresh();
-        return;
-    }
-    if (FunctionId == FN_RC_FILTER_BEFORE || FunctionId == FN_RC_FILTER_AFTER)
-    {
-        std::string typed = (sItemString != NULL) ? sItemString : "";
-        typed.erase(0, typed.find_first_not_of(" \t"));
-        typed.erase(typed.find_last_not_of(" \t") + 1);
-
-        int value = -1;
-        if (!typed.empty())
-        {
-            if (typed.size() > 4 || typed.find_first_not_of("0123456789") != std::string::npos)
-                return;   // not a number of minutes - the field keeps what it had
-            value = atoi(typed.c_str());
-        }
-        (FunctionId == FN_RC_FILTER_BEFORE ? m_rcFilterBefore : m_rcFilterAfter) = value;
-        m_rcScroll = m_rcScrollMine = 0;
-        RequestRefresh();
+        ApplyRcFilter(FunctionId, (sItemString != NULL) ? Widen(sItemString) : std::wstring());
         return;
     }
 
@@ -8447,6 +9014,46 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
+    // The sector list pulled well past an edge of the radar comes out of
+    // EuroScope into a window of its own, and the rest of the drag is that
+    // window's (see UndockSectorList). A little way past, it only stops at the
+    // edge, as every window here does.
+    if (ObjectType == SO_RC_HEADER)
+    {
+        // What EuroScope may still send for the drag it handed over - moves
+        // with the button long since let go included, which would otherwise
+        // pick up a list put back on the radar and carry it off on the cursor.
+        if (m_rcFloating || (!Released && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)))
+        {
+            m_dragOffset = { 0, 0 };
+            return;
+        }
+        if (!Released)
+        {
+            if (m_dragOffset.x == 0 && m_dragOffset.y == 0)
+            {
+                m_dragOffset.x = Pt.x - m_rcArea.left;
+                m_dragOffset.y = Pt.y - m_rcArea.top;
+
+                // The view, found while the cursor is still on the title bar:
+                // by the time the list is pulled out it may be off the radar.
+                POINT cursor;
+                HWND view = NULL;
+                m_rcDragView = CursorRadarPoint(cursor, &view) ? view : NULL;
+            }
+            RECT want = { Pt.x - m_dragOffset.x, Pt.y - m_dragOffset.y, 0, 0 };
+            want.right = want.left + (m_rcArea.right - m_rcArea.left);
+            want.bottom = want.top + (m_rcArea.bottom - m_rcArea.top);
+
+            const int kPull = 40;
+            const RECT ra = GetRadarArea();
+            if ((want.left < ra.left - kPull || want.top < ra.top - kPull
+                 || want.right > ra.right + kPull || want.bottom > ra.bottom + kPull)
+                && UndockSectorList(want))
+                return;
+        }
+    }
+
     // The АТИС report, the sector list and the Вход window are the only
     // windows that can be dragged - the panel is docked to the right edge of
     // the radar area, and the АТИС index strip is docked to the panel.
@@ -8490,6 +9097,22 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
+    // ".eng" puts the whole plugin into English - every caption, label,
+    // tooltip, window title and command message it draws itself - and ".rus"
+    // puts it back. Nothing that comes off the network or out of the config
+    // is touched: callsigns, position names, зоны and the АТИС text stay as
+    // they were written.
+    if (cmd == ".eng" || cmd == ".rus")
+    {
+        Lang::Set(cmd == ".eng" ? Lang::Id::En : Lang::Id::Ru);
+        // In the language just switched to, so the answer is itself the proof
+        // that the switch took.
+        std::string msg = Narrow(Tr(cmd == ".eng" ? L"английский" : L"русский"));
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Язык")).c_str(),
+            msg.c_str(), true, false, false, false, false);
+        RequestRefresh();
+        return true;
+    }
     // The plugin's own формуляр on and off - for a display whose tag family
     // still draws EuroScope's.
     if (cmd == ".formular")
@@ -8513,14 +9136,14 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
 
         static const wchar_t* const kLabelNames[] = {
             L"РДЦ (Контроль)", L"ДПК/ДПП (Круг/Подход)", L"КДП (Вышка)" };
-        std::wstring what = kLabelNames[(int)CurrentFormularKind()];
+        std::wstring what = Tr(kLabelNames[(int)CurrentFormularKind()]);
         if (m_formularKindSetting == FormularKindSetting::Auto)
-            what += L" - по позиции";
+            what += Tr(L" - по позиции");
         // What EuroScope says the connection is - decides whether the "{}"
         // of a simulator session shows.
-        what += L", подключение: " + std::to_wstring(GetPlugIn()->GetConnectionType());
+        what += Tr(L", подключение: ") + std::to_wstring(GetPlugIn()->GetConnectionType());
         std::string msg = Narrow(what);
-        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(L"Формуляр").c_str(),
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Формуляр")).c_str(),
             msg.c_str(), true, false, false, false, false);
         RequestRefresh();
         return true;
@@ -8592,6 +9215,7 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     // Back to the Авторизация block, as at the start of a session.
     if (cmd == ".logout")
     {
+        Plugin()->SetSessionAuthorized(false);   // every display, not only this one
         m_authState = AuthState::LoggedOut;
         m_authMessage.clear();
         m_authFailed = false;
@@ -8609,11 +9233,11 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         // The count comes along with the toggle: a feed that could not be
         // reached leaves the overlay empty and otherwise says nothing at all,
         // and "показаны, 0" is the only way to tell that from clear weather.
-        std::wstring what = m_sigmetsVisible ? L"показаны" : L"скрыты";
+        std::wstring what = m_sigmetsVisible ? Tr(L"показаны") : Tr(L"скрыты");
         std::shared_ptr<const std::vector<Sigmet>> list = Plugin()->Sigmets();
-        what += L", загружено: " + std::to_wstring(list ? list->size() : 0);
+        what += Tr(L", загружено: ") + std::to_wstring(list ? list->size() : 0);
         std::string msg = Narrow(what);
-        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(L"Сигметы").c_str(),
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Сигметы")).c_str(),
             msg.c_str(), true, false, false, false, false);
         RequestRefresh();
         return true;
@@ -8629,24 +9253,24 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         size_t active = 0;
         for (char on : m_zoneActive)
             active += on ? 1 : 0;
-        std::wstring what = m_zonesVisible ? L"показаны" : L"скрыты";
-        what += L", активно: " + std::to_wstring(active)
-            + L" из " + std::to_wstring(Plugin()->GetConfig().Zones().size());
+        std::wstring what = m_zonesVisible ? Tr(L"показаны") : Tr(L"скрыты");
+        what += Tr(L", активно: ") + std::to_wstring(active)
+            + Tr(L" из ") + std::to_wstring(Plugin()->GetConfig().Zones().size());
 
         // What the two feeds have to say, since between them they decide most
         // of that count: a plan that did not come back and a NOTAM source that
         // was never configured look identical on the radar.
         std::shared_ptr<const std::vector<ZoneBooking>> aup = Plugin()->AupBookings();
-        what += L", план: " + std::to_wstring(aup ? aup->size() : 0);
+        what += Tr(L", план: ") + std::to_wstring(aup ? aup->size() : 0);
 
         std::shared_ptr<const std::vector<ZoneBooking>> notams = Plugin()->Notams();
-        what += L", нотамы: ";
+        what += Tr(L", нотамы: ");
         if (!notams)
-            what += Plugin()->GetConfig().NotamSource().empty() ? L"источник не задан" : L"не прочитаны";
+            what += Plugin()->GetConfig().NotamSource().empty() ? Tr(L"источник не задан") : Tr(L"не прочитаны");
         else
             what += std::to_wstring(notams->size());
         std::string msg = Narrow(what);
-        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(L"Зоны").c_str(),
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Зоны")).c_str(),
             msg.c_str(), true, false, false, false, false);
         RequestRefresh();
         return true;
@@ -8696,15 +9320,15 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     {
         std::string arg = cmd.substr(10);
         const wchar_t* what = NULL;
-        if (arg == "0")      { m_rulerButton = 0;            what = L"боковая кнопка отключена"; }
-        else if (arg == "1") { m_rulerButton = VK_XBUTTON1;  what = L"боковая кнопка 1"; }
-        else if (arg == "2") { m_rulerButton = VK_XBUTTON2;  what = L"боковая кнопка 2"; }
+        if (arg == "0")      { m_rulerButton = 0;            what = Tr(L"боковая кнопка отключена"); }
+        else if (arg == "1") { m_rulerButton = VK_XBUTTON1;  what = Tr(L"боковая кнопка 1"); }
+        else if (arg == "2") { m_rulerButton = VK_XBUTTON2;  what = Tr(L"боковая кнопка 2"); }
         if (what == NULL)
             return false;
 
         m_rulerButtonDown = false;
         std::string msg = Narrow(what);
-        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(L"Линейка").c_str(),
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Линейка")).c_str(),
             msg.c_str(), true, false, false, false, false);
         return true;
     }
@@ -8728,13 +9352,13 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         m_notams.reset();
 
         const Config& cfg = Plugin()->GetConfig();
-        std::wstring what = L"зон: " + std::to_wstring(cfg.Zones().size())
-            + L", постов: " + std::to_wstring(cfg.PositionCount());
+        std::wstring what = Tr(L"зон: ") + std::to_wstring(cfg.Zones().size())
+            + Tr(L", постов: ") + std::to_wstring(cfg.PositionCount());
         if (!cfg.LoadError().empty())
             what += L" - " + cfg.LoadError();
 
         std::string msg = Narrow(what);
-        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(L"Конфигурация").c_str(),
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Конфигурация")).c_str(),
             msg.c_str(), true, false, false, false, false);
         RequestRefresh();
         return true;
@@ -8804,6 +9428,9 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
     sprintf_s(buf, "%d,%d,%s", m_rcFilterBefore, m_rcFilterAfter, Narrow(m_rcFilterCallsign).c_str());
     SaveDataToAsr("SectorListFilter", "minutesBefore,minutesAfter (-1 = no limit),callsign", buf);
 
+    sprintf_s(buf, "%d,%ld,%ld", m_rcFloating ? 1 : 0, m_rcFloatPos.x, m_rcFloatPos.y);
+    SaveDataToAsr("SectorListOutside", "outside EuroScope,screenX,screenY", buf);
+
     // The gain is written for the sake of the format only - it is the radar
     // scale now, which EuroScope stores in the ASR itself and which the slider
     // re-derives on the first frame.
@@ -8812,6 +9439,11 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
     SaveDataToAsr("CodeBlock", "all,bp,extra,gain", buf);
 
     SaveDataToAsr("CodeFilter", "ВВ1 code filter", Narrow(m_codeFilter).c_str());
+
+    // The language is plugin-wide, but the ASR is the only place a setting
+    // survives a restart - so it is written with every screen and the last one
+    // read wins, which is the same answer whichever screen that is.
+    SaveDataToAsr("Language", "plugin language: rus, eng", Lang::Name(Lang::Current()));
 }
 
 void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
@@ -8931,6 +9563,12 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
     if (codeFilter != NULL)
         m_codeFilter = Widen(codeFilter);
 
+    const char* language = GetDataFromAsr("Language");
+    if (language != NULL && strcmp(language, Lang::Name(Lang::Id::En)) == 0)
+        Lang::Set(Lang::Id::En);
+    else if (language != NULL && strcmp(language, Lang::Name(Lang::Id::Ru)) == 0)
+        Lang::Set(Lang::Id::Ru);
+
     // "Список РЦ": whether it is up, how it was last sorted and how big it is
     // - an ASR from before it could be scaled carries only the first three.
     // The scroll position is not restored - the traffic will have moved on by
@@ -8960,6 +9598,20 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
             m_rcFilterBefore = max(-1, min(9999, before));
             m_rcFilterAfter = max(-1, min(9999, after));
             m_rcFilterCallsign = RcUpper(Widen(callsign));
+        }
+    }
+
+    // Out of EuroScope, and where on the desktop - put on the main monitor
+    // instead when the one it was on is not connected (RenderRcFloat).
+    const char* rcOutside = GetDataFromAsr("SectorListOutside");
+    if (rcOutside != NULL)
+    {
+        int outside = 0;
+        long x = 0, y = 0;
+        if (sscanf_s(rcOutside, "%d,%ld,%ld", &outside, &x, &y) == 3)
+        {
+            m_rcFloating = (outside != 0);
+            m_rcFloatPos = { x, y };
         }
     }
 }

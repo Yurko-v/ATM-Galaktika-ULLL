@@ -4,6 +4,7 @@
 #include "Net.h"
 
 #include <algorithm>
+#include <vector>
 
 namespace
 {
@@ -30,6 +31,44 @@ namespace
     {
         return s.size() >= tail.size()
             && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+    }
+
+    // The index the report itself announces - "INFORMATION E" or "INFORMATION
+    // ECHO" - or empty when it names none. The feed's own "atis_code" is set
+    // apart from the text and has been seen a report behind it, so the
+    // window read "D" over a text that said "E"; the text is what the pilots
+    // hear, and it wins.
+    std::wstring LetterFromText(const std::wstring& text)
+    {
+        static const wchar_t* kPhonetic[] = {
+            L"ALFA", L"BRAVO", L"CHARLIE", L"DELTA", L"ECHO", L"FOXTROT", L"GOLF",
+            L"HOTEL", L"INDIA", L"JULIETT", L"KILO", L"LIMA", L"MIKE", L"NOVEMBER",
+            L"OSCAR", L"PAPA", L"QUEBEC", L"ROMEO", L"SIERRA", L"TANGO", L"UNIFORM",
+            L"VICTOR", L"WHISKEY", L"XRAY", L"YANKEE", L"ZULU",
+        };
+
+        std::vector<std::wstring> words(1);
+        for (wchar_t c : ToUpper(text))
+        {
+            if (iswalnum(c))
+                words.back() += c;
+            else if (!words.back().empty())
+                words.emplace_back();
+        }
+
+        for (size_t i = 0; i + 1 < words.size(); i++)
+        {
+            if (words[i] != L"INFORMATION")
+                continue;
+            const std::wstring& w = words[i + 1];
+            if (w.size() == 1 && w[0] >= L'A' && w[0] <= L'Z')
+                return w;
+            for (const wchar_t* p : kPhonetic)
+                if (w == p || (w == L"ALPHA" && p[0] == L'A') || (w == L"JULIET" && p[0] == L'J')
+                    || (w == L"WHISKY" && p[0] == L'W'))
+                    return std::wstring(1, p[0]);
+        }
+        return std::wstring();
     }
 
     // "ULLI_ATIS" is the station; "ULLI_A_ATIS" / "ULLI_D_ATIS" are the split
@@ -98,6 +137,14 @@ bool ParseVatsimAtis(const std::string& body, const std::string& icao, AtisRepor
             {
                 report.text = text->AsString();
             }
+        }
+
+        const std::wstring spoken = LetterFromText(report.text);
+        if (!spoken.empty() && spoken != report.letter)
+        {
+            Log::Info("atis", "feed's atis_code \"" + Log::Utf8(report.letter) + "\" differs from the text's \""
+                + Log::Utf8(spoken) + "\" - the text's is shown");
+            report.letter = spoken;
         }
 
         if (report.Empty())

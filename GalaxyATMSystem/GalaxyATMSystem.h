@@ -16,6 +16,7 @@
 #include "Atis.h"
 #include "UserName.h"
 #include "TextEntry.h"
+#include "FloatWindow.h"
 #include "Apw.h"
 #include "Squawk.h"
 
@@ -141,6 +142,14 @@ public:
     LoginState MyLogin(std::wstring* message = NULL, bool* serverFault = NULL) const;
     void ResetLogin();
 
+    // Past the Авторизация check - through the base or Bypass - for the whole
+    // EuroScope session rather than for one display: each ASR gets a radar
+    // screen of its own, and switching to another one must not ask for the
+    // name and password again. A display that finishes the check sets it,
+    // ".logout" and a suspension clear it, and every display follows it.
+    bool SessionAuthorized() const { return m_sessionAuthorized; }
+    void SetSessionAuthorized(bool on) { m_sessionAuthorized = on; }
+
     // The site's registration page, beside the squawk API: "http://host/api" ->
     // "http://host/register/". Empty with no server configured.
     std::string RegisterPageUrl() const;
@@ -242,6 +251,7 @@ private:
     // lands, which is what makes the config file the fallback.
     void StartAtisFetch();
     std::thread m_atisFetch;
+    std::atomic<bool> m_atisBusy{ false };   // a read is on its way
     mutable std::mutex m_atisMutex;
     AtisReport m_atisLive;
 
@@ -265,6 +275,8 @@ private:
     LoginState m_loginState = LoginState::Idle;
     std::wstring m_loginMessage;
     bool m_loginServerFault = false;
+
+    bool m_sessionAuthorized = false;   // see SessionAuthorized
 
     // And once more for the day's airspace use plan, which is what says whether
     // a restricted area exists at this moment.
@@ -417,7 +429,8 @@ struct RulerLine
 struct SectorListRow
 {
     std::wstring cells[14];
-    bool mine = false;      // I am the tracking controller: yellow ground, lower pane
+    bool mine = false;      // I am the tracking controller: upper pane
+    bool east = true;       // flying east: yellow ground, blue when west
     int  crdState = 0;      // COORDINATION_STATE_... - colours the "Крд" cell
     std::string callsign;   // for the click that selects the aircraft
 };
@@ -480,6 +493,24 @@ private:
     // its sort order and filter are remembered in the ASR.
     void DrawSectorListWindow(HDC hDC);
     void BuildSectorList(std::vector<SectorListRow>& out);
+    // The window itself at 'area', 'scale' per cent of "rc.svg" - on the radar,
+    // or into the bitmap of its own window once it has been pulled off it.
+    void DrawSectorList(HDC hDC, RECT area, int scale, bool floating, const std::vector<SectorListRow>& all);
+    int  PlanSectorList(const std::vector<SectorListRow>& all, int maxSvgH);  // rows per pane; the height in "rc.svg" units
+    int  RcScale(int availW, int availH);      // m_rcScale, cut down to what fits
+    void RcObject(int type, const char* id, RECT r, bool moveable, const char* tip);
+
+    // Pulled past the edge of the radar by its title bar, the list leaves
+    // EuroScope's window for one of its own (FloatWindow), which goes wherever
+    // it is dragged - onto another monitor included. Dropped back wholly inside
+    // the radar, it is drawn on the radar again.
+    bool CreateRcFloat(HWND owner);
+    bool UndockSectorList(RECT requested);   // false: it stays on the radar
+    void RenderRcFloat();          // paints the window from the live traffic, and shows it
+    void RcFloatMouse(UINT msg, POINT pt);
+    void RcFloatMoved();
+    void TickRcFloat();            // 1 s timer: a window this display no longer paints is put away
+    void ApplyRcFilter(int functionId, const std::wstring& typed);
     void ScrollAtisTo(POINT pt, RECT track);   // maps a click/drag on the scrollbar to a scroll offset
     void SetVvGainFrom(POINT pt);              // maps a click/drag on the ВВ1 slider to 0..100
 
@@ -542,6 +573,7 @@ private:
         POINT callsignAt = { 0, 0 };   // that point on the screen this frame - the leader's end, the drag's grip
         bool  placed = false;      // offset set - by the default or by a drag
         bool  highlighted = false; // callsign lit up orange by a middle click
+        bool  zone = false;        // защитный объём round the метка - left click on GS
         POINT anchor = { 0, 0 };   // the target this frame
         RECT  area = { 0, 0, 0, 0 };
         std::vector<FormularItem> items;
@@ -573,6 +605,8 @@ private:
     // diverging variant on RAM or CLAM, the uncontrolled one for a VFR flight
     // nobody has assumed).
     void  DrawTargetSymbols(HDC hDC);
+    // Защитный объём: the 10 km ring round a target whose формуляр has one up.
+    void  DrawProtectionZone(HDC hDC, EuroScopePlugIn::CPosition center, POINT tp, COLORREF color);
     // What the last DrawTargetSymbols did with the targets, for ".symbols".
     struct SymbolStats
     {
@@ -699,13 +733,16 @@ private:
     // panel is the header and the Авторизация block alone, and the things the
     // panel drives (its windows, the ruler, the vectors) stay off. In the
     // trainer nobody is asked: the panel is simply open. Deliberately not saved
-    // to the ASR, so every session starts at the login.
+    // to the ASR, so every session starts at the login - but held for the
+    // session by the plugin, so an ASR opened or switched to after it is
+    // already in, and every display logs in and out together (SyncAuth).
     enum class AuthState { LoggedOut, Checking, LoggedIn };
     AuthState m_authState;
     ULONGLONG m_authStartTick;  // when "Вход" was pressed
     std::wstring m_authMessage; // why LOGIN did not open the panel - on the Авторизация card until the next LOGIN
     bool Authorized() { return m_authState == AuthState::LoggedIn || Plugin()->TrainingSession(); }
     void TickAuth();            // fast timer: animates the check and ends it
+    void SyncAuth();            // follows the session's login - see CGalaxyATMSystemPlugin::SessionAuthorized
     void StartAuthCheck();      // the server let the controller in - or Bypass
 
     // Bypass - past the base, for when the base is what is broken. Only once
@@ -821,21 +858,24 @@ private:
     bool m_rcOpen;
     RECT m_rcArea;
     bool m_rcPositioned;
-    int  m_rcScroll;        // first visible row of the upper pane, a page at a time
-    int  m_rcScrollMine;    // and of the lower one
+    int  m_rcScroll;        // first visible row of the lower pane (on their way in), a page at a time
+    int  m_rcScrollMine;    // and of the upper one (mine)
+    int  m_rcPageRows[2];   // rows each pane shows - mine, then the rest; six, or one per flight
     int  m_rcSortKey;       // the column it is sorted by, index into kRcColumns
     bool m_rcSortAsc;
 
-    // How big it is drawn: percent of "New Window.svg"'s own size, 40 being
+    // How big it is drawn: percent of "rc.svg"'s own size, 40 being
     // the two fifths it started at. Set by pulling the grip in its bottom
     // right corner, or by ".rc <percent>"; remembered in the ASR. Its fonts
     // are made for the size and made again when it changes.
     int   m_rcScale;
     bool  m_rcResizing;     // the grip is being pulled
     int   m_rcResizeGrab;   // the window's right edge minus the cursor when the pull began
-    HFONT m_rcFont;         // caption and headings
-    HFONT m_rcRowFont;      // the values in the rows
-    int   m_rcFontScale;    // the scale those two were made for, 0 for none
+    HFONT m_rcFont;         // caption, lower pane's headings, filter strip - Medium
+    HFONT m_rcHeadFont;     // the upper pane's headings - Regular
+    HFONT m_rcRowFont;      // the values in the rows - Medium
+    HFONT m_rcKfFont;       // the КФ mark - Bold
+    int   m_rcFontScale;    // the scale those were made for, 0 for none
 
     // The filter strip under the two panes, each field set through EuroScope's
     // edit box and remembered in the ASR. Рейс: only callsigns with that in
@@ -848,6 +888,29 @@ private:
     // When each flight was last inside the sector or on its way in - EuroScope
     // says when a flight will enter and leave, never how long ago it left.
     std::map<std::string, ULONGLONG> m_rcLastInSector;
+
+    // Out of EuroScope - see UndockSectorList. Where it stands is remembered
+    // in the ASR, so it opens on the monitor it was left on.
+    bool  m_rcFloating;
+    POINT m_rcFloatPos;         // its top left corner, screen pixels
+    HWND  m_rcDragView;         // the radar view the title bar was taken hold of on
+    FloatWindow m_rcFloat;
+    ULONGLONG m_rcFloatDrawn;   // when it was last painted
+    // Its hit-boxes, as the radar's screen objects are on the radar, in the
+    // window's own pixels; filled while it is being drawn.
+    struct RcHit
+    {
+        int type;
+        std::string id;
+        RECT rect;
+    };
+    std::vector<RcHit> m_rcFloatHits;
+    bool  m_rcDrawingFloat;     // RcObject collects rather than registers
+    bool  m_rcFloatResizing;
+    int   m_rcFloatGrab;        // the grip pulled: window width minus the cursor's x
+    // A filter field is typed into in a box of ours over the window, since
+    // EuroScope's edit box opens only on its own radar.
+    TextEntry m_rcEntry;
 
     bool m_atisOpen;
     int  m_atisScrollPx;

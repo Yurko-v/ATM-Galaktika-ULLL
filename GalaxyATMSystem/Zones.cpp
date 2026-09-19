@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Zones.h"
 #include "Json.h"
+#include "Lang.h"
 #include "Net.h"
 
 #include <algorithm>
@@ -841,9 +842,9 @@ std::wstring Zone::KindLabel() const
 {
     switch (kind)
     {
-    case ZoneKind::Prohibited: return L"Запретная зона";
-    case ZoneKind::Danger:     return L"Опасная зона";
-    default:                   return L"Зона ограничения полётов";
+    case ZoneKind::Prohibited: return Tr(L"Запретная зона");
+    case ZoneKind::Danger:     return Tr(L"Опасная зона");
+    default:                   return Tr(L"Зона ограничения полётов");
     }
 }
 

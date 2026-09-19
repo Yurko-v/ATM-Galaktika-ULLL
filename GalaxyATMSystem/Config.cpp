@@ -190,6 +190,8 @@ void Config::Load(HINSTANCE hModule)
                 m_AtisLive = v->AsBool(m_AtisLive);
             if (const Json::Value* v = atis->Find(L"RefreshMinutes"))
                 m_AtisRefreshMin = (int)max(1LL, min(60LL, v->AsInt(m_AtisRefreshMin)));
+            if (const Json::Value* v = atis->Find(L"RefreshSeconds"))
+                m_AtisRefreshSec = (int)max(15LL, min(3600LL, v->AsInt(m_AtisRefreshSec)));
             // Clamped to the top half of any sane display: the strip is docked
             // to the corner, and an offset that walks it off the screen would
             // leave nothing to click and no way to see that it happened.

@@ -213,7 +213,10 @@ public:
     // Whether to read the live broadcast off the network at all. With it off,
     // or with nothing on the air, the text above is what the windows show.
     bool AtisLive() const { return m_AtisLive; }
-    int  AtisRefreshMinutes() const { return m_AtisRefreshMin; }
+    // How often it is read: "RefreshSeconds", 20 unless set - the feed itself
+    // is rebuilt every 15 - and never slower than an older config's
+    // "RefreshMinutes", which the seconds replace.
+    int  AtisRefreshSeconds() const { return min(m_AtisRefreshSec, m_AtisRefreshMin * 60); }
 
     // How tall TopSky's menu bar is, in pixels: the least the plug-in's own
     // menu bar is drawn at, so it covers TopSky's, with the АТИС index strip
@@ -307,7 +310,8 @@ private:
     std::wstring m_AtisTextEn;
     std::wstring m_AtisMessage = L"ATIS TEXT NOT CONFIGURED - edit GalaxyATMSystem.json";
     bool m_AtisLive = true;
-    int  m_AtisRefreshMin = 1;
+    int  m_AtisRefreshMin = 60;   // read only when the file sets it
+    int  m_AtisRefreshSec = 20;
     int  m_AtisTopOffset = 22;
     bool m_SigmetsEnabled = true;
     int  m_SigmetRefreshMin = 1;
