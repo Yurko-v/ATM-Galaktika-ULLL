@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../lib/bootstrap.php';
-require __DIR__ . '/../lib/page.php';
+require __DIR__ . '/../../lib/bootstrap.php';
+require __DIR__ . '/../../lib/page.php';
 
 const REGISTER_TRIES_PER_MIN = 5;
 
