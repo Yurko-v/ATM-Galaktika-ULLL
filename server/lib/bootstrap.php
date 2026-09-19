@@ -268,25 +268,51 @@ function require_ksa_caller(string $position): string
         json_out(400, ['error' => 'no_cid']);
     }
 
-    $st = db()->prepare(
-        'SELECT rating_id
-         FROM user_names
-         WHERE cid = ?'
-    );
+    $profile = ksa_profile($cid);
 
-    $st->execute([$cid]);
-    $ratingId = $st->fetchColumn();
-
-    if ($ratingId === false || !rating_allows_ksa((int)$ratingId)) {
+    if ($profile === null || !rating_allows_ksa(profile_rating_id($profile))) {
         error_log(
             'squawk auth: ' . $position
             . ' (CID ' . $cid . ') has no KSA access'
+            . ($profile === null
+                ? ' - no profile'
+                : ' - rating ' . (controller_rating_short(profile_rating_id($profile)) ?? 'id ' . $profile['rating_id']))
         );
 
         json_out(403, ['error' => 'not_registered']);
     }
 
     return $cid;
+}
+
+// The КСА profile of a CID: the user_names row, or null when there is none.
+// Read once per request - require_ksa_caller() has already asked for it by the
+// time an endpoint answers with the name and the rating.
+function ksa_profile(string $cid): ?array
+{
+    static $seen = [];
+
+    if (!array_key_exists($cid, $seen)) {
+        $st = db()->prepare(
+            'SELECT cid, rating_id, name, surname, first_name, patronymic, is_engineer
+             FROM user_names
+             WHERE cid = ?'
+        );
+
+        $st->execute([$cid]);
+        $row = $st->fetch();
+
+        $seen[$cid] = $row === false ? null : $row;
+    }
+
+    return $seen[$cid];
+}
+
+// The rating id of a profile row, as the number it is everywhere else: the
+// database hands columns back as strings.
+function profile_rating_id(array $profile): int
+{
+    return (int)$profile['rating_id'];
 }
 
 function read_json_body(): array

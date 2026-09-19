@@ -121,15 +121,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     }
 
     if ($action === 'save') {
-        $ratingIdRaw = trim((string)($_POST['rating_id'] ?? ''));
+        // The id VATSIM itself gives the rating, not its name - see lib/ratings.php.
+        $ratingId = clean_rating_id($_POST['rating_id'] ?? '');
 
-        if (!preg_match('/^\d+$/', $ratingIdRaw)) {
+        if ($ratingId === null) {
             $_SESSION['form'] = $_POST;
             flash('error', 'Выберите диспетчерский рейтинг.');
             back_to_page();
         }
-
-        $ratingId = (int)$ratingIdRaw;
 
         if (!rating_allows_ksa($ratingId)) {
             $_SESSION['form'] = $_POST;
@@ -505,7 +504,7 @@ $ratingOptions = ksa_rating_options();
                             value="<?= h((string)$ratingId) ?>"
                             <?= (string)$form['rating_id'] === (string)$ratingId ? 'selected' : '' ?>
                         >
-                            <?= h($rating['short']) ?>
+                            <?= h($rating['short']) ?> — <?= h($rating['long']) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>

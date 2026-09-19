@@ -60,11 +60,23 @@ CREATE TABLE IF NOT EXISTS network_observers (
 -- The name fields are entered locally because the KSA displays the controller
 -- name in Russian.
 --
--- rating_id determines whether the controller may use the KSA.
+-- rating_id is VATSIM's own number for the rating - -1 INA, 0 SUS, 1 OBS,
+-- 2 S1, and so on up to 12 ADM, the same numbers the data feed and the OAuth
+-- profile use (lib/ratings.php). S1 and above may use the KSA; 0 is what a row
+-- from before ratings is left at, and lets nobody in until it is corrected.
 -- is_engineer grants access to the engineer panel.
+--
+-- On a server set up before ratings, add the two columns once, and then give
+-- every controller already in the table their rating on the admin page:
+--   ALTER TABLE user_names
+--     ADD COLUMN rating_id   SMALLINT   NOT NULL DEFAULT 0 AFTER cid,
+--     ADD COLUMN is_engineer TINYINT(1) NOT NULL DEFAULT 0 AFTER patronymic;
+-- The first engineer has to be made by hand - the admin page cannot be opened
+-- until there is one:
+--   UPDATE user_names SET is_engineer = 1, rating_id = 5 WHERE cid = 'ВАШ_CID';
 CREATE TABLE IF NOT EXISTS user_names (
     cid           VARCHAR(12)  NOT NULL,
-    rating_id     SMALLINT     NOT NULL,
+    rating_id     SMALLINT     NOT NULL DEFAULT 0,
     name          VARCHAR(100) NOT NULL,
     surname       VARCHAR(40)  NULL,
     first_name    VARCHAR(40)  NULL,

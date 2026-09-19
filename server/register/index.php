@@ -65,11 +65,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $refuse('CID — ваш номер участника VATSIM, 6–8 цифр.');
     }
 
-    if (!preg_match('/^\d+$/', $form['rating_id'])) {
+    // The id VATSIM itself gives the rating, not its name - see lib/ratings.php.
+    $ratingId = clean_rating_id($form['rating_id']);
+
+    if ($ratingId === null) {
         $refuse('Выберите диспетчерский рейтинг.');
     }
-
-    $ratingId = (int)$form['rating_id'];
 
     if (!rating_allows_ksa($ratingId)) {
         $refuse('С данным диспетчерским рейтингом доступ к системе КСА не предоставляется.');
@@ -284,7 +285,7 @@ $ratingOptions = ksa_rating_options();
                         value="<?= h((string)$ratingId) ?>"
                         <?= $form['rating_id'] === (string)$ratingId ? 'selected' : '' ?>
                     >
-                        <?= h($rating['short']) ?>
+                        <?= h($rating['short']) ?> — <?= h($rating['long']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>

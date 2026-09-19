@@ -8,8 +8,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../../bootstrap.php';
-require __DIR__ . '/../../codes.php';
+require __DIR__ . '/../../lib/bootstrap.php';
+require __DIR__ . '/../../lib/codes.php';
 
 $active      = (int)db()->query('SELECT COUNT(*) FROM assignments WHERE released_at IS NULL')->fetchColumn();
 $controllers = (int)db()->query('SELECT COUNT(*) FROM network_controllers')->fetchColumn();
@@ -20,9 +20,14 @@ try {
 } catch (PDOException $e) {
     $observers = null;
 }
-$registered = (int)db()->query(
-    'SELECT COUNT(*) FROM user_names WHERE rating_id IS NOT NULL'
-)->fetchColumn();
+// Profiles whose rating opens the КСА - S1 and above. The rest are rows that
+// exist but let nobody in: an observer, a suspended account, a profile left at
+// rating 0 by the migration of a database from before ratings.
+$stRegistered = db()->prepare(
+    'SELECT COUNT(*) FROM user_names WHERE rating_id >= ?'
+);
+$stRegistered->execute([RATING_MIN_KSA]);
+$registered = (int)$stRegistered->fetchColumn();
 
 json_out(200, [
     'ok'                  => true,
