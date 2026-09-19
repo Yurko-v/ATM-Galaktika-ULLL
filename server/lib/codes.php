@@ -174,7 +174,7 @@ function release_assignment(int $id): void
 }
 
 // 'ok', or which of the two unique keys another request got to first. The CID
-// is the one require_caller() found online on that position - kept so a code
+// is the one require_ksa_caller() found online on that position - kept so a code
 // can be traced to a person, which is the part the shared API key never gave.
 function try_insert(string $callsign, string $code, string $position, ?string $cid = null): string
 {

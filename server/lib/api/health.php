@@ -1,15 +1,15 @@
 <?php
 // GET -> {"ok", "network_updated", "network_fresh", "controllers_updated",
 //         "controllers_fresh", "controllers_online", "api_key", "active",
-//         "user_names"}
+//         "user_names", "registered"}
 //
 // No key needed and nothing private in it: a quick look, from a browser, that
 // the database is reachable and the cron job is keeping the network current.
 
 declare(strict_types=1);
 
-require __DIR__ . '/../../lib/bootstrap.php';
-require __DIR__ . '/../../lib/codes.php';
+require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../codes.php';
 
 $active      = (int)db()->query('SELECT COUNT(*) FROM assignments WHERE released_at IS NULL')->fetchColumn();
 $controllers = (int)db()->query('SELECT COUNT(*) FROM network_controllers')->fetchColumn();
@@ -20,12 +20,9 @@ try {
 } catch (PDOException $e) {
     $observers = null;
 }
-// null while user_names has no password column - the ALTER in schema.sql not run.
-try {
-    $registered = (int)db()->query('SELECT COUNT(*) FROM user_names WHERE password_hash IS NOT NULL')->fetchColumn();
-} catch (PDOException $e) {
-    $registered = null;
-}
+$registered = (int)db()->query(
+    'SELECT COUNT(*) FROM user_names WHERE rating_id IS NOT NULL'
+)->fetchColumn();
 
 json_out(200, [
     'ok'                  => true,
@@ -42,6 +39,6 @@ json_out(200, [
     'active'              => $active,
     // How many controllers have a name entered - a count, not the names.
     'user_names'          => $userNames,
-    // Of them, how many have registered with a password and can log in.
+    // How many local profiles have a controller rating.
     'registered'          => $registered,
 ]);

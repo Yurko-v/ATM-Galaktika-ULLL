@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const CONTROLLER_RATINGS = [
+const VATSIM_CONTROLLER_RATINGS = [
     -1 => 'INA',
     0  => 'SUS',
     1  => 'OBS',
@@ -19,21 +19,26 @@ const CONTROLLER_RATINGS = [
     12 => 'ADM',
 ];
 
-const KSA_ALLOWED_RATINGS = [
-    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
-];
-
 function is_valid_controller_rating(int $ratingId): bool
 {
-    return array_key_exists($ratingId, CONTROLLER_RATINGS);
+    return array_key_exists($ratingId, VATSIM_CONTROLLER_RATINGS);
 }
 
 function rating_allows_ksa(?int $ratingId): bool
 {
-    return $ratingId !== null && in_array($ratingId, KSA_ALLOWED_RATINGS, true);
+    return $ratingId !== null && $ratingId >= 2 && $ratingId <= 12;
 }
 
 function controller_rating_short(int $ratingId): ?string
 {
-    return CONTROLLER_RATINGS[$ratingId] ?? null;
+    return VATSIM_CONTROLLER_RATINGS[$ratingId] ?? null;
+}
+
+function ksa_rating_options(): array
+{
+    return array_filter(
+        VATSIM_CONTROLLER_RATINGS,
+        static fn (int $ratingId): bool => $ratingId >= 2,
+        ARRAY_FILTER_USE_KEY
+    );
 }

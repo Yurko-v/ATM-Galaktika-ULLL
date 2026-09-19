@@ -10,8 +10,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../../lib/bootstrap.php';
-require __DIR__ . '/../../lib/codes.php';
+require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../codes.php';
 
 require_method('POST');
 
@@ -23,7 +23,7 @@ if ($callsign === null || $position === null || $code === null) {
     json_out(400, ['error' => 'bad_request']);
 }
 
-$cid = require_caller($position);
+$cid = require_ksa_caller($position);
 
 // 2000, 7000, emergencies and the like belong to nobody.
 if (in_array($code, app_config()['reserved'], true)) {

@@ -82,7 +82,7 @@ function take_flash(): ?array
 }
 
 // After every POST, back to a plain GET of the page, so a reload never sends
-// the form again. $query keeps the view the form was sent from - "?reset".
+// the form again. $query keeps an optional query string for the redirect.
 function back_to_page(string $query = ''): void
 {
     header('Location: ' . $_SERVER['SCRIPT_NAME'] . $query, true, 303);

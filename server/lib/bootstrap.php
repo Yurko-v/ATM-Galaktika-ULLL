@@ -218,31 +218,32 @@ function check_rate_limit(string $position): void
 // caller's CID, for the record kept against the codes they hand out.
 // $observerToo lets an observer in as well - only api/name.php does: an OBS may
 // open the plug-in's panel, but never hands out a code.
-function require_caller(string $position, bool $observerToo = false): ?string
+function require_ksa_caller(string $position): string
 {
-    check_rate_limit($position);
-    check_api_key();
+    $cid = require_caller($position, true);
 
-    // A position let in without the online check - for testing the server from
-    // the command line. Empty in normal use; see config.sample.php.
-    if (in_array($position, (array)(app_config()['test_positions'] ?? []), true)) {
-        return null;
-    }
-
-    $cid = caller_cid($position, $observerToo);
-    if ($cid === null || !controllers_are_fresh()) {
-        refresh_controllers_if_due();
-        $cid = caller_cid($position, $observerToo);
-    }
-
-    if (!controllers_are_fresh()) {
-        // Nobody can be checked, so nobody is let in: the alternative is a
-        // service that quietly stops checking the moment VATSIM is unreachable.
-        json_out(503, ['error' => 'network_stale']);
-    }
     if ($cid === null) {
-        json_out(401, ['error' => 'not_online']);
+        json_out(400, ['error' => 'no_cid']);
     }
+
+    $st = db()->prepare(
+        'SELECT rating_id
+         FROM user_names
+         WHERE cid = ?'
+    );
+
+    $st->execute([$cid]);
+    $ratingId = $st->fetchColumn();
+
+    if ($ratingId === false || !rating_allows_ksa((int)$ratingId)) {
+        error_log(
+            'squawk auth: ' . $position
+            . ' (CID ' . $cid . ') has no KSA access'
+        );
+
+        json_out(403, ['error' => 'not_registered']);
+    }
+
     return $cid;
 }
 

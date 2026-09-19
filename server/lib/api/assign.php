@@ -11,8 +11,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../../lib/bootstrap.php';
-require __DIR__ . '/../../lib/codes.php';
+require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../codes.php';
 
 require_method('POST');
 
@@ -26,7 +26,7 @@ if ($callsign === null || $position === null) {
 
 // Read first, checked second: the position in the body is what the caller is
 // checked against - they must be controlling it on the network right now.
-$cid = require_caller($position);
+$cid = require_ksa_caller($position);
 
 $exclude = [];
 for ($attempt = 0; $attempt < 3; $attempt++) {

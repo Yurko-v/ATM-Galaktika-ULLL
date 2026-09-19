@@ -53,35 +53,23 @@ CREATE TABLE IF NOT EXISTS network_observers (
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- The users of the КСА, by CID: who may log in to the plug-in's panel, and the
--- name the Пользователь block shows for them.
+-- Local KSA profiles, identified by VATSIM CID.
 --
--- A controller registers on the site (register/): CID, surname, first
--- name, patronymic and a password of their own. LOGIN in the plug-in then asks
--- for the same surname, first name, patronymic and password, and api/login.php
--- checks them against the row for the CID the network lists for the position.
--- A row without password_hash - one the admin entered by name only - logs
--- nobody in until its controller registers on the site.
+-- The CID and controller rating will be obtained from VATSIM OAuth in the
+-- production version. The current development version accepts them manually.
+-- The name fields are entered locally because the KSA displays the controller
+-- name in Russian.
 --
--- 'name' is what is shown: written out in full - "Велбовец Юрий Владимирович"
--- - or already shortened, "Велбовец Ю.В."; the plug-in shortens it either way.
--- The admin page may correct it; the three parts are what LOGIN is checked by.
---
--- On a server set up before registration, add the new columns once:
---   ALTER TABLE user_names
---     ADD COLUMN surname       VARCHAR(40)  NULL AFTER name,
---     ADD COLUMN first_name    VARCHAR(40)  NULL AFTER surname,
---     ADD COLUMN patronymic    VARCHAR(40)  NULL AFTER first_name,
---     ADD COLUMN password_hash VARCHAR(255) NULL AFTER patronymic,
---     ADD COLUMN registered_at DATETIME     NULL AFTER password_hash;
+-- rating_id determines whether the controller may use the KSA.
+-- is_engineer grants access to the engineer panel.
 CREATE TABLE IF NOT EXISTS user_names (
     cid           VARCHAR(12)  NOT NULL,
-    rating_id     SMALLINT     NULL,
+    rating_id     SMALLINT     NOT NULL,
     name          VARCHAR(100) NOT NULL,
     surname       VARCHAR(40)  NULL,
     first_name    VARCHAR(40)  NULL,
     patronymic    VARCHAR(40)  NULL,
-    password_hash VARCHAR(255) NULL,
+    is_engineer   TINYINT(1)   NOT NULL DEFAULT 0,
     registered_at DATETIME     NULL,
     updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (cid)

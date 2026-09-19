@@ -4,11 +4,11 @@
 // Every code held right now, polled by each plugin so the column shows the
 // same code at every position. The position goes in the query string rather
 // than a body because this is a GET; it is checked exactly as on the other two
-// endpoints - see require_caller().
+// endpoints - see require_ksa_caller().
 
 declare(strict_types=1);
 
-require __DIR__ . '/../../lib/bootstrap.php';
+require __DIR__ . '/../bootstrap.php';
 
 require_method('GET');
 
@@ -16,7 +16,7 @@ $position = clean_position($_GET['position'] ?? '');
 if ($position === null) {
     json_out(400, ['error' => 'bad_request']);
 }
-require_caller($position);
+require_ksa_caller($position);
 
 $map = [];
 foreach (db()->query('SELECT callsign, code FROM assignments WHERE released_at IS NULL ORDER BY callsign') as $row) {
