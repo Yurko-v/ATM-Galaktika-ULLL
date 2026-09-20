@@ -56,7 +56,7 @@ jobs:
 
           ssh -i ~/.ssh/beget -o BatchMode=yes "$BEGET_USER@$BEGET_HOST" \
             "cd '$REPO_DIR' && git fetch origin '$BRANCH' && \
-             git checkout '$BRANCH' && git pull --ff-only origin '$BRANCH' && git log -1 --oneline && \
+             git checkout -B '$BRANCH' 'origin/$BRANCH' -- && git log -1 --oneline && \
              sh server/deploy.sh server \"\$HOME/$WEB_ROOT\""
 
       - name: Check health
