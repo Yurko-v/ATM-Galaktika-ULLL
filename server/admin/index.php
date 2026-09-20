@@ -500,6 +500,19 @@ $ratingOptions = ksa_rating_options();
                 display: none;
             }
 
+            .shell:has(.user-row.is-editing) {
+                max-width: 1400px;
+            }
+
+            .shell:has(.user-row.is-editing) .table-wrap {
+                overflow-x: visible;
+            }
+
+            .shell:has(.user-row.is-editing) table {
+                width: 100%;
+                min-width: 1180px;
+            }
+
             .user-row .inline-edit-form {
                 display: contents;
             }
