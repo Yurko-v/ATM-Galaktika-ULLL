@@ -2417,6 +2417,8 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
         DrawTargetSymbols(hDC);
         DrawFormulars(hDC, !(m_rulerArmed || m_rulerPlacing));
+        if (m_cflOpen)
+            DrawCflPicker(hDC);
 
         for (size_t i = 0; i < m_rulers.size(); i++)
             DrawRulerLine(hDC, m_rulers[i], (int)i);
@@ -2505,6 +2507,21 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
 namespace
 {
+    // эшелонатор levels, top down: 510..430 by 20, then 410..010 by 10
+    const std::vector<int>& CflLevels()
+    {
+        static std::vector<int> levels;
+        if (levels.empty())
+        {
+            for (int fl = 510; fl > 410; fl -= 20)
+                levels.push_back(fl);
+            for (int fl = 410; fl >= 10; fl -= 10)
+                levels.push_back(fl);
+        }
+        return levels;
+    }
+    const int kCflRows = 9;
+
     struct FormularRun
     {
         std::wstring text;
@@ -3299,7 +3316,12 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             levels.push_back({ trend, base, NULL });
 
         if (correlated)
-            levels.push_back({ cflText, cflColor, ctrLabel ? &kFnCfl : &kFnAppCfl });
+        {
+            // orange while its эшелонатор is open
+            const bool picking = m_cflOpen && m_cflCallsign == callsign;
+            levels.push_back({ cflText, picking ? Theme::Text : cflColor, ctrLabel ? &kFnCfl : &kFnAppCfl,
+                picking ? Theme::FormularHoverTarget : CLR_INVALID });
+        }
         if (m_osSpeed && ctrLabel)
             levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
                 base, correlated ? &kFnGs : NULL });
@@ -3889,6 +3911,310 @@ int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor
     return hdg;
 }
 
+void CGalaxyATMSystemRadarScreen::OpenCflPicker(const char* callsign)
+{
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(callsign);
+    if (!fp.IsValid())
+        return;
+
+    // start with the cleared level (or the current one) in the middle
+    int fl = fp.GetControllerAssignedData().GetClearedAltitude() / 100;
+    if (fl <= 2)
+        fl = fp.GetCorrelatedRadarTarget().GetPosition().GetFlightLevel() / 100;
+    const std::vector<int>& levels = CflLevels();
+    size_t best = 0;
+    for (size_t i = 0; i < levels.size(); i++)
+        if (abs(levels[i] - fl) < abs(levels[best] - fl))
+            best = i;
+
+    m_cflOpen = true;
+    m_cflCallsign = callsign;
+    m_cflTopRow = 0;
+    m_cflHoverLevel = -1;
+    m_cflButtonsDown = true;
+    m_cflEntryPending = false;
+    m_cflCells.clear();
+    ScrollCfl((int)best / 2 - kCflRows / 2);
+
+    POINT cursor;
+    HWND view = NULL;
+    if (CursorRadarPoint(cursor, &view))
+        m_cflView = view;
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::CloseCflPicker()
+{
+    m_cflEntry.Close();
+    m_cflOpen = false;
+    m_cflEntryPending = false;
+    m_cflCells.clear();
+    m_cflArea = { 0, 0, 0, 0 };
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::ScrollCfl(int rows)
+{
+    const int total = (int)((CflLevels().size() + 1) / 2);
+    m_cflTopRow = max(0, min(total - kCflRows, m_cflTopRow + rows));
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::ApplyCfl(int fl)
+{
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_cflCallsign.c_str());
+    if (fp.IsValid() && fl > 0)
+    {
+        if (!fp.GetControllerAssignedData().SetClearedAltitude(fl * 100))
+            Log::Warn("formular", m_cflCallsign + ": EuroScope refused CFL " + std::to_string(fl));
+    }
+    CloseCflPicker();
+}
+
+void CGalaxyATMSystemRadarScreen::ApplyCflText(const std::wstring& text)
+{
+    // "150", "F150", "FL150"
+    int fl = 0, digits = 0;
+    for (wchar_t ch : text)
+    {
+        if (ch >= L'0' && ch <= L'9')
+        {
+            fl = fl * 10 + (ch - L'0');
+            digits++;
+        }
+    }
+    if (digits >= 1 && digits <= 3)
+        ApplyCfl(fl);
+    else
+        CloseCflPicker();
+}
+
+void CGalaxyATMSystemRadarScreen::TickCflPicker()
+{
+    if (!m_cflOpen)
+        return;
+
+    auto label = m_formulars.find(m_cflCallsign);
+    if (label == m_formulars.end() || label->second.items.empty())
+    {
+        CloseCflPicker();
+        return;
+    }
+
+    POINT cursor;
+    const bool onRadar = CursorRadarPoint(cursor);
+
+    int hover = -1;
+    if (onRadar)
+        for (const auto& cell : m_cflCells)
+            if (PtInRect(&cell.first, cursor))
+                hover = cell.second;
+    if (hover != m_cflHoverLevel)
+    {
+        m_cflHoverLevel = hover;
+        RequestRefresh();
+    }
+
+    // a click anywhere else closes it
+    const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+        || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    if (down && !m_cflButtonsDown)
+    {
+        const bool inside = onRadar
+            && (PtInRect(&m_cflArea, cursor) || PtInRect(&label->second.area, cursor));
+        if (!inside && !m_cflEntry.IsOpen())
+        {
+            m_cflButtonsDown = down;
+            CloseCflPicker();
+            return;
+        }
+    }
+    m_cflButtonsDown = down;
+
+    // the edit box opens a tick later, over a freshly drawn field
+    if (m_cflEntryPending && m_cflDrawnTick > m_cflPendingTick && m_cflView != NULL)
+    {
+        m_cflEntryPending = false;
+        m_cflEntry.Open(m_cflView, m_cflField, GetFormularFont(), L"", false, 3,
+            [this](TextEntry::End end)
+            {
+                if (end == TextEntry::End::Cancel)
+                {
+                    m_cflEntry.Close();
+                    RequestRefresh();
+                }
+                else
+                {
+                    ApplyCflText(m_cflEntry.Text());
+                }
+            });
+    }
+}
+
+void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
+{
+    auto label = m_formulars.find(m_cflCallsign);
+    if (label == m_formulars.end() || label->second.items.empty())
+        return;
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_cflCallsign.c_str());
+    if (!fp.IsValid())
+        return;
+
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+    HFONT font = GetFormularFont();
+    SelectObject(hDC, font);
+    TEXTMETRICW tm;
+    GetTextMetricsW(hDC, &tm);
+    const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
+    SIZE digits = { 0, 0 };
+    GetTextExtentPoint32W(hDC, L"000", 3, &digits);
+    SIZE okSize = { 0, 0 };
+    GetTextExtentPoint32W(hDC, L"Ok", 2, &okSize);
+
+    const int pad = 3;
+    const int cellH = lineH * 3 / 2 + 2;
+    const int cellW = digits.cx + lineH;
+    const int scrollW = max(12, lineH * 2 / 3);
+    const int listW = 2 * cellW;
+    const int listH = kCflRows * cellH + cellH / 2;
+    const int width = pad + listW + 2 + scrollW + pad;
+    const int height = pad + listH + pad + cellH + pad;
+
+    // right of the label box, top aligned; to the left if it doesn't fit
+    const RECT& box = label->second.area;
+    RECT ra = GetRadarArea();
+    int left = box.right + 1;
+    if (left + width > ra.right)
+        left = box.left - 1 - width;
+    int top = max(ra.top, min(box.top, ra.bottom - height));
+    RECT area = { left, top, left + width, top + height };
+    m_cflArea = area;
+    AddScreenObject(SO_CFL_WINDOW, "CFL_WINDOW", area, false, "");
+
+    HBRUSH frame = CreateSolidBrush(Theme::CflFrame);
+    FillRect(hDC, &area, frame);
+    DeleteObject(frame);
+
+    RECT list = { left + pad, top + pad, left + pad + listW, top + pad + listH };
+    HBRUSH black = CreateSolidBrush(RGB(0, 0, 0));
+    FillRect(hDC, &list, black);
+
+    const std::vector<int>& levels = CflLevels();
+    HBRUSH hoverFill = CreateSolidBrush(Theme::CflHover);
+    HPEN cellPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
+    m_cflCells.clear();
+
+    int clipSaved = SaveDC(hDC);
+    IntersectClipRect(hDC, list.left, list.top, list.right, list.bottom);
+    SelectObject(hDC, cellPen);
+    SelectObject(hDC, GetStockObject(NULL_BRUSH));
+    // left column L[2r], right column L[2r+1] half a cell lower
+    for (int col = 0; col < 2; col++)
+    {
+        for (int k = (col == 0 ? 0 : -1); k < kCflRows; k++)
+        {
+            const int idx = 2 * (m_cflTopRow + k) + col;
+            if (idx < 0 || idx >= (int)levels.size())
+                continue;
+            const int y = list.top + k * cellH + (col == 1 ? cellH / 2 : 0);
+            RECT cell = { list.left + col * cellW, y, list.left + (col + 1) * cellW, y + cellH };
+            if (levels[idx] == m_cflHoverLevel)
+                FillRect(hDC, &cell, hoverFill);
+            Rectangle(hDC, cell.left, cell.top, cell.right + (col == 0 ? 1 : 0), cell.bottom + 1);
+
+            wchar_t text[8];
+            swprintf_s(text, L"%03d", levels[idx]);
+            RECT textR = { cell.left + lineH / 2, cell.top, cell.right, cell.bottom };
+            SetTextColor(hDC, Theme::Text);
+            DrawTextW(hDC, text, -1, &textR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+            RECT hit;
+            if (IntersectRect(&hit, &cell, &list))
+            {
+                char id[8];
+                sprintf_s(id, "%d", levels[idx]);
+                AddScreenObject(SO_CFL_LEVEL, id, hit, false, "");
+                m_cflCells.push_back(std::make_pair(hit, levels[idx]));
+            }
+        }
+    }
+    RestoreDC(hDC, clipSaved);
+    DeleteObject(hoverFill);
+    DeleteObject(cellPen);
+
+    // scrollbar: squares at the ends, grey thumb
+    RECT track = { list.right + 2, list.top, list.right + 2 + scrollW, list.bottom };
+    FillRect(hDC, &track, black);
+    HBRUSH line = CreateSolidBrush(Theme::CflCellLine);
+    FrameRect(hDC, &track, line);
+    RECT up = { track.left, track.top, track.right, track.top + scrollW };
+    RECT down = { track.left, track.bottom - scrollW, track.right, track.bottom };
+    for (const RECT* b : { &up, &down })
+    {
+        FrameRect(hDC, b, line);
+        const int m = scrollW / 2;
+        RECT mark = { (b->left + b->right) / 2 - m / 3 - 1, (b->top + b->bottom) / 2 - m / 3 - 1,
+                      (b->left + b->right) / 2 + m / 3 + 1, (b->top + b->bottom) / 2 + m / 3 + 1 };
+        FrameRect(hDC, &mark, line);
+    }
+    RECT inner = { track.left + 1, up.bottom, track.right - 1, down.top };
+    m_cflTrack = inner;
+    const int totalRows = (int)((levels.size() + 1) / 2);
+    const int innerH = inner.bottom - inner.top;
+    if (innerH > 0 && totalRows > kCflRows)
+    {
+        const int thumbH = max(8, innerH * kCflRows / totalRows);
+        const int thumbTop = inner.top + (innerH - thumbH) * m_cflTopRow / (totalRows - kCflRows);
+        RECT thumb = { inner.left, thumbTop, inner.right, thumbTop + thumbH };
+        HBRUSH tb = CreateSolidBrush(Theme::CflThumb);
+        FillRect(hDC, &thumb, tb);
+        DeleteObject(tb);
+    }
+    AddScreenObject(SO_CFL_TRACK, "CFL_TRACK", inner, false, "");
+    AddScreenObject(SO_CFL_UP, "CFL_UP", up, false, "");
+    AddScreenObject(SO_CFL_DOWN, "CFL_DOWN", down, false, "");
+    DeleteObject(line);
+    DeleteObject(black);
+
+    // bottom row: the field with the current CFL, and Ok
+    const int rowTop = list.bottom + pad;
+    const int okW = okSize.cx + lineH;
+    RECT ok = { area.right - pad - okW, rowTop, area.right - pad, rowTop + cellH };
+    RECT field = { list.left, rowTop, ok.left - pad, rowTop + cellH };
+    m_cflField = field;
+
+    HBRUSH fieldFill = CreateSolidBrush(Theme::CflField);
+    FillRect(hDC, &field, fieldFill);
+    DeleteObject(fieldFill);
+    int cfl = fp.GetControllerAssignedData().GetClearedAltitude() / 100;
+    if (cfl > 0)
+    {
+        wchar_t text[8];
+        swprintf_s(text, L"%03d", cfl);
+        RECT textR = { field.left + 4, field.top, field.right, field.bottom };
+        SetTextColor(hDC, Theme::CflFieldText);
+        DrawTextW(hDC, text, -1, &textR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    AddScreenObject(SO_CFL_FIELD, "CFL_FIELD", field, false, "");
+
+    HBRUSH okFill = CreateSolidBrush(Theme::CflButton);
+    HPEN okPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
+    SelectObject(hDC, okFill);
+    SelectObject(hDC, okPen);
+    RoundRect(hDC, ok.left, ok.top, ok.right, ok.bottom, 6, 6);
+    SetTextColor(hDC, Theme::Text);
+    DrawTextW(hDC, L"Ok", -1, &ok, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    AddScreenObject(SO_CFL_OK, "CFL_OK", ok, false, "");
+
+    RestoreDC(hDC, saved);
+    DeleteObject(okFill);
+    DeleteObject(okPen);
+
+    m_cflEntry.Move(field);
+    m_cflDrawnTick = GetTickCount64();
+}
+
 void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt, int button)
 {
     if (GetTickCount64() - m_hdgDragEndTick < 500)
@@ -3905,6 +4231,10 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
+    const bool pickerWasOpen = m_cflOpen && m_cflCallsign == sCallsign;
+    if (m_cflOpen)
+        CloseCflPicker();
+
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
     if (fp.IsValid())
         GetPlugIn()->SetASELAircraft(fp);
@@ -3917,6 +4247,15 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
             hit = &item;
             break;
         }
+    }
+
+    // left click on CFL of the РЦ label: our эшелонатор instead of TopSky's menu
+    if (hit != NULL && fp.IsValid() && hit->fn == &kFnCfl && button == BUTTON_LEFT)
+    {
+        if (!pickerWasOpen)
+            OpenCflPicker(sCallsign);
+        RequestRefresh();
+        return;
     }
 
     // right click on AFL: aircraft speaks English
@@ -7069,7 +7408,11 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
     {
         std::string hover;
         POINT cursor;
-        if (m_formularsVisible && CursorRadarPoint(cursor))
+        if (m_cflOpen)
+        {
+            hover = m_cflCallsign;
+        }
+        else if (m_formularsVisible && CursorRadarPoint(cursor))
         {
             for (const auto& entry : m_formulars)
             {
@@ -7086,6 +7429,8 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
             RequestRefresh();
         }
     }
+
+    TickCflPicker();
 
     if (m_hdgDragging)
     {
@@ -7372,6 +7717,50 @@ void CGalaxyATMSystemRadarScreen::RemoveRulerNear(POINT pt)
 void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, int Button)
 {
+    switch (ObjectType)
+    {
+    case SO_CFL_WINDOW:
+        return;
+    case SO_CFL_LEVEL:
+        if (Button == BUTTON_LEFT)
+            ApplyCfl(atoi(sObjectId));
+        return;
+    case SO_CFL_UP:
+        ScrollCfl(-1);
+        return;
+    case SO_CFL_DOWN:
+        ScrollCfl(1);
+        return;
+    case SO_CFL_TRACK:
+    {
+        const int h = m_cflTrack.bottom - m_cflTrack.top;
+        if (h > 0)
+        {
+            const int total = (int)((CflLevels().size() + 1) / 2) - kCflRows;
+            const int row = (int)lround((double)(Pt.y - m_cflTrack.top) / h * total);
+            ScrollCfl(row - m_cflTopRow);
+        }
+        return;
+    }
+    case SO_CFL_FIELD:
+        m_cflEntryPending = true;
+        m_cflPendingTick = GetTickCount64();
+        {
+            POINT cursor;
+            HWND view = NULL;
+            if (CursorRadarPoint(cursor, &view))
+                m_cflView = view;
+        }
+        RequestRefresh();
+        return;
+    case SO_CFL_OK:
+        if (m_cflEntry.IsOpen())
+            ApplyCflText(m_cflEntry.Text());
+        else
+            CloseCflPicker();
+        return;
+    }
+
     if (ObjectType == SO_FORMULAR || ObjectType == SO_FORMULAR_AHDG)
     {
         FormularClick(sObjectId, Pt, Button);

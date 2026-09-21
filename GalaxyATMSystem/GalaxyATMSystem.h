@@ -383,6 +383,29 @@ private:
         std::vector<FormularItem> items;
     };
     std::map<std::string, FormularState> m_formulars;
+
+    // эшелонатор: our CFL picker, left click on CFL of the РЦ label
+    bool m_cflOpen = false;
+    std::string m_cflCallsign;
+    int  m_cflTopRow = 0;
+    int  m_cflHoverLevel = -1;
+    bool m_cflButtonsDown = true;
+    bool m_cflEntryPending = false;
+    ULONGLONG m_cflPendingTick = 0;
+    ULONGLONG m_cflDrawnTick = 0;
+    RECT m_cflArea = { 0, 0, 0, 0 };
+    RECT m_cflField = { 0, 0, 0, 0 };
+    RECT m_cflTrack = { 0, 0, 0, 0 };
+    std::vector<std::pair<RECT, int>> m_cflCells;
+    HWND m_cflView = NULL;
+    TextEntry m_cflEntry;
+    void OpenCflPicker(const char* callsign);
+    void CloseCflPicker();
+    void DrawCflPicker(HDC hDC);
+    void ApplyCfl(int fl);
+    void ApplyCflText(const std::wstring& text);
+    void ScrollCfl(int rows);
+    void TickCflPicker();
     bool  m_formularsVisible;
     std::string m_formularHover;
     HFONT m_formularFont;
@@ -646,6 +669,14 @@ const int SO_PANEL_COLLAPSE = 2;
 const int SO_TIMER_TOGGLE = 5;
 
 const int SO_AUTH_LOGIN   = 90;
+
+const int SO_CFL_WINDOW = 100;
+const int SO_CFL_LEVEL  = 101;   // sObjectId = the flight level
+const int SO_CFL_UP     = 102;
+const int SO_CFL_DOWN   = 103;
+const int SO_CFL_TRACK  = 104;
+const int SO_CFL_FIELD  = 105;
+const int SO_CFL_OK     = 106;
 const int SO_AUTH_BYPASS  = 96;
 
 const int SO_NOTICE_WINDOW = 84;

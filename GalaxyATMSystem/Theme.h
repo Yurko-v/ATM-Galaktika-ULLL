@@ -53,6 +53,15 @@ namespace Theme
     const int TrackHistoryDots = 5;
 
     const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);
+    // эшелонатор (CFL picker)
+    const COLORREF CflFrame      = RGB(0x5C, 0x6A, 0x58);
+    const COLORREF CflCellLine   = RGB(0xB4, 0xB4, 0xB4);
+    const COLORREF CflHover      = RGB(0x8C, 0x8C, 0x8C);
+    const COLORREF CflField      = RGB(0x8A, 0x8F, 0x8A);
+    const COLORREF CflFieldText  = RGB(0xCC, 0xCC, 0xCC);
+    const COLORREF CflButton     = RGB(0x8C, 0x94, 0x8C);
+    const COLORREF CflThumb      = RGB(0xA0, 0xA0, 0xA0);
+
     // target symbol and vector while the РЦ label is hovered
     const COLORREF FormularHoverTarget = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);
