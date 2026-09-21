@@ -115,110 +115,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $cid = trim((string)($_POST['cid'] ?? ''));
 
     if (!preg_match('/^\d{6,8}$/', $cid)) {
-        $_SESSION['form'] = $_POST;
         flash('error', 'CID — это номер на VATSIM, только 6–8 цифр.');
-        back_to_page();
-    }
-
-    if ($action === 'create') {
-        $ratingId = clean_rating_id($_POST['rating_id'] ?? '');
-
-        if ($ratingId === null) {
-            $_SESSION['form'] = $_POST;
-            flash('error', 'Выберите диспетчерский рейтинг.');
-            back_to_page();
-        }
-
-        if (!rating_allows_ksa($ratingId)) {
-            $_SESSION['form'] = $_POST;
-            flash('error', 'Этот рейтинг не даёт доступа к КСА.');
-            back_to_page();
-        }
-
-        $surname = clean_name_part($_POST['surname'] ?? '');
-        $firstName = clean_name_part($_POST['first_name'] ?? '');
-
-        $patronymic = '';
-
-        if (trim((string)($_POST['patronymic'] ?? '')) !== '') {
-            $patronymic = clean_name_part($_POST['patronymic']);
-
-            if ($patronymic === null) {
-                $_SESSION['form'] = $_POST;
-                flash('error', 'Отчество должно быть указано русскими буквами.');
-                back_to_page();
-            }
-        }
-
-        if ($surname === null || $firstName === null) {
-            $_SESSION['form'] = $_POST;
-            flash('error', 'Фамилия и имя должны быть указаны русскими буквами.');
-            back_to_page();
-        }
-
-        $name = user_display_name(
-            $surname,
-            $firstName,
-            $patronymic
-        );
-
-        $isEngineer = isset($_POST['is_engineer']) ? 1 : 0;
-
-        $st = db()->prepare(
-            'SELECT cid
-             FROM user_names
-             WHERE cid = ?'
-        );
-        $st->execute([$cid]);
-
-        if ($st->fetchColumn() !== false) {
-            $_SESSION['form'] = $_POST;
-            flash('error', 'Пользователь с этим CID уже существует.');
-            back_to_page();
-        }
-
-        $st = db()->prepare(
-            'INSERT INTO user_names
-                (
-                    cid,
-                    rating_id,
-                    name,
-                    surname,
-                    first_name,
-                    patronymic,
-                    is_engineer,
-                    registered_at
-                )
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())'
-        );
-
-        $st->execute([
-            $cid,
-            $ratingId,
-            $name,
-            $surname,
-            $firstName,
-            $patronymic,
-            $isEngineer,
-        ]);
-
-        flash(
-            'ok',
-            'Добавлен: ' . $cid
-            . ' — ' . $name
-            . ' (' . controller_rating_short($ratingId) . ').'
-        );
-
-        error_log(
-            'squawk admin: '
-            . $engineer['cid']
-            . ' added CID '
-            . $cid
-            . ' as "'
-            . $name
-            . '"'
-        );
-
         back_to_page();
     }
 
@@ -290,8 +187,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
         flash(
             'ok',
-            'Сохранено: ' . $cid
-            . ' — ' . $name
+            'Изменения сохранены у пользователя: ' . $cid
+            . ' - ' . $name
             . ' (' . controller_rating_short($ratingId) . ').'
         );
 
@@ -334,17 +231,6 @@ $engineer = current_engineer();
 
 $flash = take_flash();
 
-$form = $_SESSION['form'] ?? [
-    'cid' => '',
-    'rating_id' => '',
-    'surname' => '',
-    'first_name' => '',
-    'patronymic' => '',
-    'is_engineer' => '',
-];
-
-unset($_SESSION['form']);
-
 $rows = [];
 
 if ($engineer !== null) {
@@ -380,33 +266,6 @@ $ratingOptions = ksa_rating_options();
             .shell,
             .foot {
                 max-width: 1040px;
-            }
-
-            .row {
-                display: flex;
-                gap: 16px;
-                flex-wrap: wrap;
-                align-items: flex-end;
-            }
-
-            .row .cid {
-                flex: 0 1 180px;
-            }
-
-            .row .rating {
-                flex: 0 1 180px;
-            }
-
-            .row .name {
-                flex: 1 1 280px;
-            }
-
-            .row .field {
-                margin-bottom: 0;
-            }
-
-            .row button {
-                height: 52px;
             }
 
             .top {
@@ -471,17 +330,6 @@ $ratingOptions = ksa_rating_options();
                 width: 100%;
                 height: 56px;
                 margin-top: 8px;
-            }
-
-            .engineer-check {
-                display: flex;
-                gap: 10px;
-                align-items: center;
-                margin: 18px 0 0;
-            }
-
-            .engineer-check input {
-                width: auto;
             }
 
             .user-row .edit-field {
@@ -591,45 +439,6 @@ $ratingOptions = ksa_rating_options();
                             <?= h($flash[1]) ?>
                         </div>
                     <?php endif; ?>
-                    <form method="post" class="card" id="edit">
-                        <h2>Добавить пользователя</h2>
-                        <input type="hidden" name="action" value="create">
-                        <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
-                        <div class="row">
-                            <div class="field cid">
-                                <label for="cid">CID на VATSIM</label>
-                                <input id="cid" name="cid" inputmode="numeric" pattern="\d{6,8}" maxlength="8" required value="<?= h($form['cid']) ?>" placeholder="1234567">
-                            </div>
-                            <div class="field rating">
-                                <label for="rating_id">Рейтинг</label>
-                                <select id="rating_id" name="rating_id" required>
-                                    <option value="">Выберите рейтинг</option>
-                                    <?php foreach ($ratingOptions as $ratingId => $rating): ?>
-                                        <option value="<?= h((string)$ratingId) ?>" <?= (string)$form['rating_id'] === (string)$ratingId ? 'selected' : '' ?>><?= h($rating) ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <div class="field name">
-                                <label for="surname">Фамилия</label>
-                                <input id="surname" name="surname" maxlength="40" required value="<?= h($form['surname']) ?>" placeholder="Свахин">
-                            </div>
-                            <button type="submit">Добавить</button>
-                        </div>
-                        <div class="pair" style="margin-top:16px;">
-                            <div class="field">
-                                <label for="first_name">Имя</label>
-                                <input id="first_name" name="first_name" maxlength="40" required value="<?= h($form['first_name']) ?>" placeholder="Алексей">
-                            </div>
-                            <div class="field">
-                                <label for="patronymic">Отчество</label>
-                                <input id="patronymic" name="patronymic" maxlength="40" value="<?= h($form['patronymic']) ?>" placeholder="Сергеевич">
-                            </div>
-                        </div>
-                        <label class="engineer-check">
-                            <input type="checkbox" name="is_engineer" value="1" <?= !empty($form['is_engineer']) ? 'checked' : '' ?>>
-                            <span>Дать доступ к инженерной панели</span>
-                        </label>
-                    </form>
                     <div class="card">
                         <div class="top">
                             <h2>Пользователи <span class="count"><?= count($rows) ?></span></h2>
