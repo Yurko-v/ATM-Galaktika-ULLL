@@ -50,8 +50,10 @@ jobs:
           fi
 
           mkdir -p ~/.ssh
-          printf '%s\n' "$BEGET_SSH_KEY" > ~/.ssh/beget
+          # a key pasted from Windows carries \r, which ssh rejects as "error in libcrypto"
+          printf '%s\n' "$BEGET_SSH_KEY" | tr -d '\r' > ~/.ssh/beget
           chmod 600 ~/.ssh/beget
+          ssh-keygen -y -f ~/.ssh/beget || { echo "::error::BEGET_SSH_KEY is not a valid OpenSSH private key"; exit 1; }
           ssh-keyscan -H "$BEGET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           ssh -i ~/.ssh/beget -o BatchMode=yes "$BEGET_USER@$BEGET_HOST" \
