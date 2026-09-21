@@ -2937,6 +2937,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         codeCount[c]++;
     }
 
+    // the hovered label goes in a second pass, on top of the others
+    for (int pass = 0; pass < 2; pass++)
     for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
          rt = plugin->RadarTargetSelectNext(rt))
     {
@@ -2950,18 +2952,21 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
         if (!plugin->AltFilterPasses(pos.GetPressureAltitude()))
             continue;
-        const ApwResult& apw = plugin->ApwForTarget(rt);
 
         CFlightPlan fp = rt.GetCorrelatedFlightPlan();
         const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
         if (cs == NULL || *cs == '\0')
             continue;
         const std::string callsign = cs;
+        const bool expanded = !m_formularHover.empty() && m_formularHover == callsign;
+        if (expanded != (pass == 1))
+            continue;
+
+        const ApwResult& apw = plugin->ApwForTarget(rt);
         const COLORREF base = GetTagColorForFlightPlan(fp);
         const char* sq = pos.GetSquawk();
 
         const bool correlated = fp.IsValid();
-        const bool expanded = !m_formularHover.empty() && m_formularHover == callsign;
 
         std::vector<FormularRun> warnings;
         if (simulator && correlated)
@@ -3396,21 +3401,47 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         area.bottom = area.top + height;
         state.area = area;
 
+        // hovered: black box with a white frame, white text and leader
+        const int kBoxPad = 3;
+        RECT box = area;
+        InflateRect(&box, kBoxPad, kBoxPad);
+        if (expanded)
+            state.area = box;
+
         std::vector<RECT> rows;
-        for (size_t l = 0; l < lines.size(); l++)
+        if (expanded)
         {
-            RECT row = { area.left, area.top + (int)l * lineH,
-                         area.left + lineWidths[l], area.top + (int)(l + 1) * lineH };
-            InflateRect(&row, 3, 1);
-            rows.push_back(row);
+            rows.push_back(box);
+        }
+        else
+        {
+            for (size_t l = 0; l < lines.size(); l++)
+            {
+                RECT row = { area.left, area.top + (int)l * lineH,
+                             area.left + lineWidths[l], area.top + (int)(l + 1) * lineH };
+                InflateRect(&row, 3, 1);
+                rows.push_back(row);
+            }
         }
 
-        const POINT aim = { area.left + lineWidths[identLine] / 2, callsignAt.y };
+        const POINT aim = expanded
+            ? POINT{ (box.left + box.right) / 2, (box.top + box.bottom) / 2 }
+            : POINT{ area.left + lineWidths[identLine] / 2, callsignAt.y };
         POINT leaderFrom, leaderTo;
-        if (ClipLeaderToText(tp, aim, rows, 6.0, leaderFrom, leaderTo))
+        if (ClipLeaderToText(tp, aim, rows, expanded ? 4.0 : 6.0, leaderFrom, leaderTo))
         {
-            VectorCanvas canvas(hDC, base, 1.0f);
+            VectorCanvas canvas(hDC, expanded ? Theme::Text : base, 1.0f);
             canvas.Line(leaderFrom.x, leaderFrom.y, leaderTo.x, leaderTo.y);
+        }
+
+        if (expanded)
+        {
+            HBRUSH fill = CreateSolidBrush(RGB(0, 0, 0));
+            FillRect(hDC, &box, fill);
+            DeleteObject(fill);
+            HBRUSH edge = CreateSolidBrush(Theme::Text);
+            FrameRect(hDC, &box, edge);
+            DeleteObject(edge);
         }
 
         RECT ahdgRect = { 0, 0, 0, 0 };
@@ -3422,7 +3453,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             for (size_t r = 0; r < lines[l].size(); r++)
             {
                 const FormularRun& run = lines[l][r];
-                SetTextColor(hDC, run.color);
+                SetTextColor(hDC, (expanded && run.color == base) ? Theme::Text : run.color);
                 TextOutW(hDC, x, y, run.text.c_str(), (int)run.text.size());
 
                 FormularItem item;
