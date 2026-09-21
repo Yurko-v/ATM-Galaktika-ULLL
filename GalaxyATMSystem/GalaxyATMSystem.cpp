@@ -2807,8 +2807,11 @@ namespace
             {
                 std::wstring dir = path;
                 dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
-                for (const std::wstring& file : { dir + L"ICAO_Airlines.txt", dir + L"..\\..\\Data\\ICAO_Airlines.txt" })
+                std::vector<std::wstring> files = { dir + L"ICAO_Airlines.txt",
+                    dir + L"..\\..\\ICAO\\ICAO_Airlines.txt", dir + L"..\\..\\Data\\ICAO_Airlines.txt" };
+                for (size_t i = 0; i < files.size() && i < 8; i++)
                 {
+                    const std::wstring file = files[i];
                     FILE* f = NULL;
                     if (_wfopen_s(&f, file.c_str(), L"rb") != 0 || f == NULL)
                         continue;
@@ -2817,6 +2820,21 @@ namespace
                     {
                         if (line[0] == ';')
                             continue;
+                        // TopSky allows a file that only holds the path of the real one,
+                        // e.g. "..\..\ICAO\ICAO_Airlines.txt"
+                        if (strchr(line, '\t') == NULL && names.empty())
+                        {
+                            std::wstring target = Widen(line);
+                            while (!target.empty() && iswspace(target.back()))
+                                target.pop_back();
+                            if (target.size() > 4 && _wcsicmp(target.c_str() + target.size() - 4, L".txt") == 0)
+                            {
+                                const bool absolute = target.size() > 1 && (target[1] == L':' || target[0] == L'\\');
+                                const std::wstring base = file.substr(0, file.find_last_of(L"\\/") + 1);
+                                files.insert(files.begin() + i + 1, absolute ? target : base + target);
+                            }
+                            continue;
+                        }
                         std::vector<std::string> fields;
                         std::string cur;
                         for (const char* p = line; *p != '\0' && *p != '\r' && *p != '\n'; p++)
@@ -2839,7 +2857,8 @@ namespace
                     }
                     fclose(f);
                     Log::Info("formular", Log::Utf8(file) + ": " + std::to_string(names.size()) + " airlines");
-                    break;
+                    if (!names.empty())
+                        break;
                 }
             }
         }
