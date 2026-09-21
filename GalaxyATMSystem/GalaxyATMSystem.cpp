@@ -3250,8 +3250,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
         const bool english = ctrLabel && plugin->IsEnglish(callsign);
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit).c_str()),
-            english ? Theme::Text : base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL,
-            english ? Theme::FormularHoverTarget : CLR_INVALID });
+            (english && expanded) ? Theme::Text : base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL,
+            (english && expanded) ? Theme::FormularHoverTarget : CLR_INVALID });   // orange only on hover
         const int vs = rt.GetVerticalSpeed();
         std::wstring cflText;
         COLORREF cflColor = base;
