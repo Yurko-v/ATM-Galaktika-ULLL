@@ -62,6 +62,13 @@ namespace Theme
     const COLORREF CflButton     = RGB(0x8C, 0x94, 0x8C);
     const COLORREF CflThumb      = RGB(0xA0, 0xA0, 0xA0);
 
+    // Speed window
+    const COLORREF SpdTitle     = RGB(0x6C, 0xC0, 0xE8);
+    const COLORREF SpdBody      = RGB(0x50, 0x6C, 0x3C);
+    const COLORREF SpdSelected  = RGB(0xB4, 0xB4, 0xB4);
+    const COLORREF SpdTabOn     = RGB(0x9A, 0x9A, 0x9A);
+    const COLORREF SpdButton    = RGB(0x8C, 0x8C, 0x8C);
+
     // anything clickable under the mouse
     const COLORREF HoverFill = RGB(0xE8, 0x8E, 0x2C);
     const BYTE     HoverAlpha = 150;

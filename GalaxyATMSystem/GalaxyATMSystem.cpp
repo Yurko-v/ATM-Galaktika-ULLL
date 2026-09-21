@@ -1985,6 +1985,8 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 
 CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
 {
+    m_cflOpen = m_spdOpen = false;
+    UpdateWheelHook();
     m_rcEntry.Close();
     m_rcFloat.Destroy();
     if (m_timerId != 0)
@@ -2420,6 +2422,8 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         DrawFormulars(hDC, !(m_rulerArmed || m_rulerPlacing));
         if (m_cflOpen)
             DrawCflPicker(hDC);
+        if (m_spdOpen)
+            DrawSpeedWindow(hDC);
 
         for (size_t i = 0; i < m_rulers.size(); i++)
             DrawRulerLine(hDC, m_rulers[i], (int)i);
@@ -2522,6 +2526,61 @@ namespace
         return levels;
     }
     const int kCflRows = 9;
+
+    // Speed window values, top down: N400..N100, M095..M060
+    const std::vector<int>& SpeedValues(bool mach)
+    {
+        static std::vector<int> kt, m;
+        if (kt.empty())
+        {
+            for (int v = 400; v >= 100; v -= 10)
+                kt.push_back(v);
+            for (int v = 95; v >= 60; v--)
+                m.push_back(v);
+        }
+        return mach ? m : kt;
+    }
+    const int kSpdRows = 3;
+
+    // ES gives plugins no mouse wheel, so a thread mouse hook catches it while a list is open
+    HHOOK g_wheelHook = NULL;
+    CGalaxyATMSystemRadarScreen* g_wheelScreen = NULL;
+
+    LRESULT CALLBACK WheelHookProc(int code, WPARAM wp, LPARAM lp)
+    {
+        if (code == HC_ACTION && wp == WM_MOUSEWHEEL && g_wheelScreen != NULL)
+        {
+            const MOUSEHOOKSTRUCTEX* ms = (const MOUSEHOOKSTRUCTEX*)lp;
+            const int delta = (short)HIWORD(ms->mouseData);
+            if (g_wheelScreen->OnMouseWheel(delta))
+                return 1;
+        }
+        return CallNextHookEx(g_wheelHook, code, wp, lp);
+    }
+
+    // TopSky keeps "or greater/or less" in strip annotation 7 as the field "s+" / "s-"
+    std::string WithSpeedModifier(const char* annotation, char modifier)
+    {
+        std::vector<std::string> fields;
+        const std::string text = annotation != NULL ? annotation : "";
+        size_t pos = 0;
+        while (pos <= text.size())
+        {
+            size_t end = text.find('/', pos);
+            std::string field = text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+            if (!field.empty() && !(field.size() >= 2 && field[0] == 's' && (field[1] == '+' || field[1] == '-')))
+                fields.push_back(field);
+            if (end == std::string::npos)
+                break;
+            pos = end + 1;
+        }
+        if (modifier != 0)
+            fields.push_back(std::string("s") + modifier);
+        std::string out;
+        for (const std::string& f : fields)
+            out += f + "/";
+        return out;
+    }
 
     struct FormularRun
     {
@@ -3973,6 +4032,7 @@ void CGalaxyATMSystemRadarScreen::OpenCflPicker(const char* callsign)
     HWND view = NULL;
     if (CursorRadarPoint(cursor, &view))
         m_cflView = view;
+    UpdateWheelHook();
     RequestRefresh();
 }
 
@@ -3983,6 +4043,7 @@ void CGalaxyATMSystemRadarScreen::CloseCflPicker()
     m_cflEntryPending = false;
     m_cflCells.clear();
     m_cflArea = { 0, 0, 0, 0 };
+    UpdateWheelHook();
     RequestRefresh();
 }
 
@@ -4248,6 +4309,429 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
     m_cflDrawnTick = GetTickCount64();
 }
 
+void CGalaxyATMSystemRadarScreen::UpdateWheelHook()
+{
+    const bool want = m_cflOpen || m_spdOpen;
+    if (want)
+    {
+        g_wheelScreen = this;
+        if (g_wheelHook == NULL)
+            g_wheelHook = SetWindowsHookExW(WH_MOUSE, WheelHookProc, NULL, GetCurrentThreadId());
+    }
+    else if (g_wheelScreen == this)
+    {
+        g_wheelScreen = NULL;
+        if (g_wheelHook != NULL)
+        {
+            UnhookWindowsHookEx(g_wheelHook);
+            g_wheelHook = NULL;
+        }
+    }
+}
+
+bool CGalaxyATMSystemRadarScreen::OnMouseWheel(int delta)
+{
+    POINT cursor;
+    if (delta == 0 || !CursorRadarPoint(cursor))
+        return false;
+    const int rows = delta > 0 ? -max(1, delta / WHEEL_DELTA) : max(1, -delta / WHEEL_DELTA);
+    if (m_cflOpen && PtInRect(&m_cflArea, cursor))
+    {
+        ScrollCfl(rows);
+        return true;
+    }
+    if (m_spdOpen && PtInRect(&m_spdArea, cursor))
+    {
+        ScrollSpeed(rows);
+        return true;
+    }
+    return false;
+}
+
+void CGalaxyATMSystemRadarScreen::OpenSpeedWindow(const char* callsign)
+{
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(callsign);
+    if (!fp.IsValid())
+        return;
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+
+    m_spdOpen = true;
+    m_spdCallsign = callsign;
+    m_spdButtonsDown = true;
+    m_spdEntryPending = false;
+    const char modifier = TopSkySpeedModifier(cad);
+    m_spdMode = modifier == '+' ? 1 : modifier == '-' ? 2 : 0;
+
+    int mach = cad.GetAssignedMach();
+    if (mach > 100)
+        mach /= 10;
+    if (mach > 0)
+    {
+        m_spdMach = true;
+        m_spdSelected = mach;
+    }
+    else
+    {
+        m_spdMach = false;
+        m_spdSelected = cad.GetAssignedSpeed();
+        if (m_spdSelected <= 0)
+        {
+            int ias = 0, machX100 = 0;
+            CRadarTarget rt = fp.GetCorrelatedRadarTarget();
+            if (rt.IsValid() && CalculatedIasMach(rt.GetGS(), rt.GetPosition().GetFlightLevel(), ias, machX100))
+                m_spdSelected = (ias + 5) / 10 * 10;
+            else
+                m_spdSelected = 250;
+        }
+    }
+    SelectSpeedTab(m_spdMach);
+
+    POINT cursor;
+    HWND view = NULL;
+    if (CursorRadarPoint(cursor, &view))
+        m_popupView = view;
+    UpdateWheelHook();
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::CloseSpeedWindow()
+{
+    m_spdEntry.Close();
+    m_spdOpen = false;
+    m_spdEntryPending = false;
+    m_spdArea = { 0, 0, 0, 0 };
+    UpdateWheelHook();
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::SelectSpeedTab(bool mach)
+{
+    const std::vector<int>& values = SpeedValues(mach);
+    if (mach != m_spdMach)
+        m_spdSelected = mach ? 78 : 250;
+    m_spdMach = mach;
+    size_t best = 0;
+    for (size_t i = 0; i < values.size(); i++)
+        if (abs(values[i] - m_spdSelected) < abs(values[best] - m_spdSelected))
+            best = i;
+    m_spdSelected = values[best];
+    m_spdTopRow = 0;
+    ScrollSpeed((int)best);   // selected one at the top
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::ScrollSpeed(int rows)
+{
+    const int total = (int)SpeedValues(m_spdMach).size();
+    m_spdTopRow = max(0, min(total - kSpdRows, m_spdTopRow + rows));
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::ApplySpeed()
+{
+    bool mach = m_spdMach;
+    int value = m_spdSelected;
+
+    // typed: "250", "N250", "M78", ".78"
+    if (m_spdEntry.IsOpen())
+    {
+        const std::wstring text = m_spdEntry.Text();
+        int v = 0, digits = 0;
+        bool m = mach, typed = false;
+        for (wchar_t ch : text)
+        {
+            if (ch == L'M' || ch == L'm' || ch == L'.')
+                m = true;
+            else if (ch == L'N' || ch == L'n' || ch == L'K' || ch == L'k')
+                m = false;
+            else if (ch >= L'0' && ch <= L'9')
+            {
+                v = v * 10 + (ch - L'0');
+                digits++;
+                typed = true;
+            }
+        }
+        if (typed && digits <= 3)
+        {
+            mach = m;
+            value = v;
+        }
+    }
+
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_spdCallsign.c_str());
+    if (fp.IsValid() && value > 0)
+    {
+        CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+        bool ok;
+        if (mach)
+        {
+            ok = cad.SetAssignedMach(value);
+            cad.SetAssignedSpeed(0);
+        }
+        else
+        {
+            ok = cad.SetAssignedSpeed(value);
+            cad.SetAssignedMach(0);
+        }
+        if (!ok)
+            Log::Warn("formular", m_spdCallsign + ": EuroScope refused speed " + std::to_string(value));
+
+        const char modifier = m_spdMode == 1 ? '+' : m_spdMode == 2 ? '-' : 0;
+        const char* annotation = cad.GetFlightStripAnnotation(7);
+        const std::string updated = WithSpeedModifier(annotation, modifier);
+        if (updated != (annotation != NULL ? annotation : ""))
+            cad.SetFlightStripAnnotation(7, updated.c_str());
+    }
+    CloseSpeedWindow();
+}
+
+void CGalaxyATMSystemRadarScreen::TickSpeedWindow()
+{
+    if (!m_spdOpen)
+        return;
+
+    auto label = m_formulars.find(m_spdCallsign);
+    if (label == m_formulars.end() || label->second.items.empty())
+    {
+        CloseSpeedWindow();
+        return;
+    }
+
+    POINT cursor;
+    const bool onRadar = CursorRadarPoint(cursor);
+    const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+        || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    if (down && !m_spdButtonsDown)
+    {
+        const bool inside = onRadar
+            && (PtInRect(&m_spdArea, cursor) || PtInRect(&label->second.area, cursor));
+        if (!inside && !m_spdEntry.IsOpen())
+        {
+            m_spdButtonsDown = down;
+            CloseSpeedWindow();
+            return;
+        }
+    }
+    m_spdButtonsDown = down;
+
+    if (m_spdEntryPending && m_spdDrawnTick > m_spdPendingTick && m_popupView != NULL)
+    {
+        m_spdEntryPending = false;
+        m_spdEntry.Open(m_popupView, m_spdField, GetFormularFont(), L"", false, 5,
+            [this](TextEntry::End end)
+            {
+                if (end == TextEntry::End::Cancel)
+                {
+                    m_spdEntry.Close();
+                    RequestRefresh();
+                }
+                else
+                {
+                    ApplySpeed();
+                }
+            });
+    }
+}
+
+void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
+{
+    auto label = m_formulars.find(m_spdCallsign);
+    if (label == m_formulars.end() || label->second.items.empty())
+        return;
+
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+    HFONT font = GetFormularFont();
+    SelectObject(hDC, font);
+    TEXTMETRICW tm;
+    GetTextMetricsW(hDC, &tm);
+    const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
+
+    const int border = 2;
+    const int pad = lineH * 2 / 3;
+    const int width = lineH * 9;
+    const int titleH = lineH + 6;
+    const int rowH = lineH * 7 / 5;
+    const int listH = kSpdRows * rowH + rowH / 2;
+    const int tabH = lineH * 3 / 2;
+    const int btnH = lineH * 13 / 10;
+    const int gap = lineH / 3;
+    const int height = border + titleH + gap + rowH + gap + rowH + gap + listH + gap + tabH + gap
+        + 3 * rowH + gap + btnH + gap + btnH + pad + border;
+
+    const RECT& box = label->second.area;
+    RECT ra = GetRadarArea();
+    int left = box.right + 1;
+    if (left + width > ra.right)
+        left = box.left - 1 - width;
+    const int top = max(ra.top, min(box.top, ra.bottom - height));
+    RECT area = { left, top, left + width, top + height };
+    m_spdArea = area;
+    AddScreenObject(SO_SPD_WINDOW, "SPD_WINDOW", area, false, "");
+
+    auto fill = [&](const RECT& r, COLORREF color)
+    {
+        HBRUSH b = CreateSolidBrush(color);
+        FillRect(hDC, &r, b);
+        DeleteObject(b);
+    };
+    auto frame = [&](const RECT& r, COLORREF color)
+    {
+        HBRUSH b = CreateSolidBrush(color);
+        FrameRect(hDC, &r, b);
+        DeleteObject(b);
+    };
+    auto text = [&](RECT r, const wchar_t* s, COLORREF color, UINT align)
+    {
+        SetTextColor(hDC, color);
+        DrawTextW(hDC, s, -1, &r, align | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    };
+
+    // light blue frame and title
+    fill(area, Theme::SpdTitle);
+    RECT body = { area.left + border, area.top + border + titleH, area.right - border, area.bottom - border };
+    fill(body, Theme::SpdBody);
+    RECT title = { area.left + border + 4, area.top + border, area.right - border, area.top + border + titleH };
+    text(title, L"Speed", Theme::Text, DT_LEFT);
+    RECT close = { area.right - border - titleH, area.top + border, area.right - border, area.top + border + titleH };
+    text(close, L"\x00D7", Theme::Text, DT_CENTER);
+    AddButton(hDC, SO_SPD_CLOSE, "SPD_CLOSE", close, "");
+
+    const int x0 = body.left + pad, x1 = body.right - pad;
+    int y = body.top + gap;
+
+    RECT cs = { x0, y, x1, y + rowH };
+    const std::wstring callsign = Widen(m_spdCallsign.c_str());
+    text(cs, callsign.c_str(), Theme::Text, DT_CENTER);
+    y += rowH + gap;
+
+    // input field
+    RECT field = { x0, y, x1, y + rowH };
+    fill(field, RGB(0, 0, 0));
+    frame(field, Theme::CflCellLine);
+    m_spdField = field;
+    AddButton(hDC, SO_SPD_FIELD, "SPD_FIELD", field, "");
+    y += rowH + gap;
+
+    // list with a scrollbar
+    const int scrollW = max(12, lineH * 2 / 3);
+    RECT listBox = { x0, y, x1, y + listH };
+    fill(listBox, RGB(0, 0, 0));
+    frame(listBox, Theme::CflCellLine);
+    RECT list = { listBox.left + 1, listBox.top + 1, listBox.right - 1 - scrollW, listBox.bottom - 1 };
+    m_spdList = list;
+    const std::vector<int>& values = SpeedValues(m_spdMach);
+    {
+        int clip = SaveDC(hDC);
+        IntersectClipRect(hDC, list.left, list.top, list.right, list.bottom);
+        for (int k = 0; k <= kSpdRows; k++)
+        {
+            const int idx = m_spdTopRow + k;
+            if (idx < 0 || idx >= (int)values.size())
+                continue;
+            RECT row = { list.left, list.top + k * rowH, list.right, list.top + (k + 1) * rowH };
+            RECT hit;
+            IntersectRect(&hit, &row, &list);
+            const bool hot = Hot(hit);
+            if (hot)
+                fill(row, Theme::HoverFill);
+            else if (values[idx] == m_spdSelected)
+                fill(row, Theme::SpdSelected);
+            wchar_t s[8];
+            swprintf_s(s, m_spdMach ? L"M%03d" : L"N%03d", values[idx]);
+            RECT tr = { row.left + 6, row.top, row.right, row.bottom };
+            text(tr, s, Theme::Text, DT_LEFT);
+            char id[8];
+            sprintf_s(id, "%d", values[idx]);
+            AddScreenObject(SO_SPD_ROW, id, hit, false, "");
+        }
+        RestoreDC(hDC, clip);
+    }
+    RECT track = { list.right, list.top, listBox.right - 1, list.bottom };
+    frame(track, Theme::CflCellLine);
+    RECT up = { track.left, track.top, track.right, track.top + scrollW };
+    RECT down = { track.left, track.bottom - scrollW, track.right, track.bottom };
+    for (const RECT* b : { &up, &down })
+    {
+        frame(*b, Theme::CflCellLine);
+        const int m = scrollW / 5 + 1;
+        RECT mark = { (b->left + b->right) / 2 - m, (b->top + b->bottom) / 2 - m,
+                      (b->left + b->right) / 2 + m, (b->top + b->bottom) / 2 + m };
+        frame(mark, Theme::CflCellLine);
+    }
+    RECT inner = { track.left + 1, up.bottom, track.right - 1, down.top };
+    m_spdTrack = inner;
+    const int total = (int)values.size();
+    const int innerH = inner.bottom - inner.top;
+    if (innerH > 0 && total > kSpdRows)
+    {
+        const int thumbH = max(6, innerH * kSpdRows / total);
+        const int thumbTop = inner.top + (innerH - thumbH) * m_spdTopRow / (total - kSpdRows);
+        RECT thumb = { inner.left, thumbTop, inner.right, thumbTop + thumbH };
+        fill(thumb, Theme::CflThumb);
+    }
+    AddScreenObject(SO_SPD_TRACK, "SPD_TRACK", inner, false, "");
+    AddButton(hDC, SO_SPD_UP, "SPD_UP", up, "");
+    AddButton(hDC, SO_SPD_DOWN, "SPD_DOWN", down, "");
+    y += listH + gap;
+
+    // Kt | M
+    const int mid = (x0 + x1) / 2;
+    RECT tabs[2] = { { x0, y, mid, y + tabH }, { mid, y, x1, y + tabH } };
+    const wchar_t* tabText[2] = { L"Kt", L"M" };
+    for (int i = 0; i < 2; i++)
+    {
+        const bool on = (i == 1) == m_spdMach;
+        if (on)
+            fill(tabs[i], Theme::SpdTabOn);
+        frame(tabs[i], Theme::CflCellLine);
+        text(tabs[i], tabText[i], Theme::Text, DT_CENTER);
+        AddButton(hDC, SO_SPD_TAB, i == 1 ? "1" : "0", tabs[i], "");
+    }
+    y += tabH + gap;
+
+    // equal / or greater / or less
+    const wchar_t* modes[3] = { L"equal", L"or greater", L"or less" };
+    const int dot = lineH - 2;
+    for (int i = 0; i < 3; i++)
+    {
+        RECT row = { x0, y, x1, y + rowH };
+        const int cy = (row.top + row.bottom) / 2;
+        HBRUSH b = CreateSolidBrush(i == m_spdMode ? Theme::Text : Theme::SpdBody);
+        HPEN p = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
+        HGDIOBJ ob = SelectObject(hDC, b), op = SelectObject(hDC, p);
+        Ellipse(hDC, x0, cy - dot / 2, x0 + dot, cy + dot / 2);
+        SelectObject(hDC, ob);
+        SelectObject(hDC, op);
+        DeleteObject(b);
+        DeleteObject(p);
+        RECT tr = { x0 + dot + 6, row.top, x1, row.bottom };
+        text(tr, modes[i], Theme::Text, DT_LEFT);
+        char id[4];
+        sprintf_s(id, "%d", i);
+        AddButton(hDC, SO_SPD_MODE, id, row, "");
+        y += rowH;
+    }
+    y += gap;
+
+    // Да / Отмена
+    const int btnW = (x1 - x0) * 3 / 5;
+    for (int i = 0; i < 2; i++)
+    {
+        RECT btn = { mid - btnW / 2, y, mid + btnW / 2, y + btnH };
+        const bool hot = Hot(btn);
+        fill(btn, hot ? Theme::HoverFill : Theme::SpdButton);
+        frame(btn, Theme::CflCellLine);
+        text(btn, i == 0 ? L"\x0414\x0430" : L"\x041E\x0442\x043C\x0435\x043D\x0430", Theme::Text, DT_CENTER);
+        AddScreenObject(i == 0 ? SO_SPD_YES : SO_SPD_CANCEL, i == 0 ? "SPD_YES" : "SPD_CANCEL", btn, false, "");
+        y += btnH + gap;
+    }
+
+    RestoreDC(hDC, saved);
+    m_spdEntry.Move(field);
+    m_spdDrawnTick = GetTickCount64();
+}
+
 void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt, int button)
 {
     if (GetTickCount64() - m_hdgDragEndTick < 500)
@@ -4265,8 +4749,11 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     }
 
     const bool pickerWasOpen = m_cflOpen && m_cflCallsign == sCallsign;
+    const bool speedWasOpen = m_spdOpen && m_spdCallsign == sCallsign;
     if (m_cflOpen)
         CloseCflPicker();
+    if (m_spdOpen)
+        CloseSpeedWindow();
 
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
     if (fp.IsValid())
@@ -4287,6 +4774,16 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     {
         if (!pickerWasOpen)
             OpenCflPicker(sCallsign);
+        RequestRefresh();
+        return;
+    }
+
+    // left click on ASP of the РЦ label: our Speed window instead of TopSky's menu
+    if (hit != NULL && fp.IsValid() && hit->fn == &kFnAsp && button == BUTTON_LEFT
+        && CurrentFormularKind() == FormularKind::Ctr)
+    {
+        if (!speedWasOpen)
+            OpenSpeedWindow(sCallsign);
         RequestRefresh();
         return;
     }
@@ -7441,9 +7938,9 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
     {
         std::string hover;
         POINT cursor;
-        if (m_cflOpen)
+        if (m_cflOpen || m_spdOpen)
         {
-            hover = m_cflCallsign;
+            hover = m_cflOpen ? m_cflCallsign : m_spdCallsign;
         }
         else if (m_formularsVisible && CursorRadarPoint(cursor))
         {
@@ -7464,6 +7961,7 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
     }
 
     TickCflPicker();
+    TickSpeedWindow();
     TickHot();
 
     if (m_hdgDragging)
@@ -7753,6 +8251,55 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
 {
     switch (ObjectType)
     {
+    case SO_SPD_WINDOW:
+        return;
+    case SO_SPD_CLOSE:
+    case SO_SPD_CANCEL:
+        CloseSpeedWindow();
+        return;
+    case SO_SPD_ROW:
+        m_spdSelected = atoi(sObjectId);
+        m_spdEntry.Close();
+        RequestRefresh();
+        return;
+    case SO_SPD_UP:
+        ScrollSpeed(-1);
+        return;
+    case SO_SPD_DOWN:
+        ScrollSpeed(1);
+        return;
+    case SO_SPD_TRACK:
+    {
+        const int h = m_spdTrack.bottom - m_spdTrack.top;
+        if (h > 0)
+        {
+            const int total = (int)SpeedValues(m_spdMach).size() - kSpdRows;
+            const int row = (int)lround((double)(Pt.y - m_spdTrack.top) / h * total);
+            ScrollSpeed(row - m_spdTopRow);
+        }
+        return;
+    }
+    case SO_SPD_FIELD:
+        m_spdEntryPending = true;
+        m_spdPendingTick = GetTickCount64();
+        {
+            POINT cursor;
+            HWND view = NULL;
+            if (CursorRadarPoint(cursor, &view))
+                m_popupView = view;
+        }
+        RequestRefresh();
+        return;
+    case SO_SPD_TAB:
+        SelectSpeedTab(atoi(sObjectId) == 1);
+        return;
+    case SO_SPD_MODE:
+        m_spdMode = max(0, min(2, atoi(sObjectId)));
+        RequestRefresh();
+        return;
+    case SO_SPD_YES:
+        ApplySpeed();
+        return;
     case SO_CFL_WINDOW:
         return;
     case SO_CFL_LEVEL:

@@ -394,6 +394,30 @@ private:
     void AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip);
     void TickHot();
 
+    // Speed window: left click on ASP of the РЦ label
+    bool m_spdOpen = false;
+    std::string m_spdCallsign;
+    bool m_spdMach = false;
+    int  m_spdTopRow = 0;
+    int  m_spdSelected = 0;
+    int  m_spdMode = 0;             // 0 equal, 1 or greater, 2 or less
+    bool m_spdButtonsDown = true;
+    bool m_spdEntryPending = false;
+    ULONGLONG m_spdPendingTick = 0;
+    ULONGLONG m_spdDrawnTick = 0;
+    RECT m_spdArea = { 0, 0, 0, 0 };
+    RECT m_spdField = { 0, 0, 0, 0 };
+    RECT m_spdList = { 0, 0, 0, 0 };
+    RECT m_spdTrack = { 0, 0, 0, 0 };
+    TextEntry m_spdEntry;
+    void OpenSpeedWindow(const char* callsign);
+    void CloseSpeedWindow();
+    void DrawSpeedWindow(HDC hDC);
+    void SelectSpeedTab(bool mach);
+    void ScrollSpeed(int rows);
+    void ApplySpeed();
+    void TickSpeedWindow();
+
     // эшелонатор: our CFL picker, left click on CFL of the РЦ label
     bool m_cflOpen = false;
     std::string m_cflCallsign;
@@ -416,6 +440,12 @@ private:
     void ApplyCflText(const std::wstring& text);
     void ScrollCfl(int rows);
     void TickCflPicker();
+    HWND m_popupView = NULL;
+    void UpdateWheelHook();
+public:
+    // mouse wheel over the эшелонатор / Speed list, from the thread mouse hook
+    bool OnMouseWheel(int delta);
+private:
     bool  m_formularsVisible;
     std::string m_formularHover;
     HFONT m_formularFont;
@@ -687,6 +717,18 @@ const int SO_CFL_DOWN   = 103;
 const int SO_CFL_TRACK  = 104;
 const int SO_CFL_FIELD  = 105;
 const int SO_CFL_OK     = 106;
+
+const int SO_SPD_WINDOW = 110;
+const int SO_SPD_CLOSE  = 111;
+const int SO_SPD_ROW    = 112;   // sObjectId = the value
+const int SO_SPD_UP     = 113;
+const int SO_SPD_DOWN   = 114;
+const int SO_SPD_TRACK  = 115;
+const int SO_SPD_FIELD  = 116;
+const int SO_SPD_TAB    = 117;   // "0" Kt, "1" M
+const int SO_SPD_MODE   = 118;   // "0" equal, "1" or greater, "2" or less
+const int SO_SPD_YES    = 119;
+const int SO_SPD_CANCEL = 120;
 const int SO_AUTH_BYPASS  = 96;
 
 const int SO_NOTICE_WINDOW = 84;
