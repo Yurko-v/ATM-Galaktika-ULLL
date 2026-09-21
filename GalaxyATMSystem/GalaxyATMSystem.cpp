@@ -1745,8 +1745,73 @@ void CGalaxyATMSystemPlugin::OnFunctionCall(int FunctionId, const char* sItemStr
     HandleSquawkFunction(FunctionId, sItemString, Area, "plugin");
 }
 
+namespace
+{
+    // strip annotation 8 is free: VCH uses 3, IASsure 4, TopSky 5-7
+    const int kEnglishAnnotation = 8;
+    const char* const kEnglishMark = "GAL/EN";
+}
+
+void CGalaxyATMSystemPlugin::ToggleEnglish(CFlightPlan fp)
+{
+    if (!fp.IsValid())
+        return;
+    const std::string callsign = fp.GetCallsign();
+    const bool on = !IsEnglish(callsign);
+    if (on)
+        m_english.insert(callsign);
+    else
+        m_english.erase(callsign);
+
+    // ES only lets the tracking controller (or anyone, if nobody tracks it) change these
+    const char* tracking = fp.GetTrackingControllerId();
+    if (!fp.GetTrackingControllerIsMe() && tracking != NULL && *tracking != '\0')
+    {
+        Log::Info("formular", callsign + ": English mark set only locally, tracked by " + tracking);
+        return;
+    }
+
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+    cad.SetFlightStripAnnotation(kEnglishAnnotation, on ? kEnglishMark : "");
+
+    // scratch pad changes reach everyone, so flash the mark there and put the text back
+    const std::string scratch = cad.GetScratchPadString();
+    const std::string msg = std::string(kEnglishMark) + (on ? "/1" : "/0");
+    if (!cad.SetScratchPadString(msg.c_str()))
+        Log::Error("formular", callsign + ": English mark broadcast refused by EuroScope");
+    cad.SetScratchPadString(scratch.c_str());
+}
+
+void CGalaxyATMSystemPlugin::OnFlightPlanFlightStripPushed(CFlightPlan FlightPlan,
+    const char* sSenderController, const char* sTargetController)
+{
+    if (!FlightPlan.IsValid() || sTargetController == NULL
+        || strcmp(sTargetController, ControllerMyself().GetCallsign()) != 0)
+        return;
+    const char* mark = FlightPlan.GetControllerAssignedData().GetFlightStripAnnotation(kEnglishAnnotation);
+    if (mark != NULL && strcmp(mark, kEnglishMark) == 0)
+        m_english.insert(FlightPlan.GetCallsign());
+    else
+        m_english.erase(FlightPlan.GetCallsign());
+}
+
 void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPlan FlightPlan, int DataType)
 {
+    if (DataType == CTR_DATA_TYPE_SCRATCH_PAD_STRING && FlightPlan.IsValid())
+    {
+        // "GAL/EN/1" or "GAL/EN/0" from ToggleEnglish, ours or someone else's
+        const char* scratch = FlightPlan.GetControllerAssignedData().GetScratchPadString();
+        const size_t n = strlen(kEnglishMark);
+        if (scratch != NULL && strncmp(scratch, kEnglishMark, n) == 0 && scratch[n] == '/')
+        {
+            if (scratch[n + 1] == '1')
+                m_english.insert(FlightPlan.GetCallsign());
+            else
+                m_english.erase(FlightPlan.GetCallsign());
+        }
+        return;
+    }
+
     if (DataType != CTR_DATA_TYPE_SQUAWK || !FlightPlan.IsValid())
         return;
 
@@ -3157,7 +3222,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         // flight rules, I / V
         if (ctrLabel && expanded && planType != NULL && isalpha((unsigned char)planType[0]))
             ident.push_back({ std::wstring(1, (wchar_t)toupper((unsigned char)planType[0])), base, NULL });
-        if (ctrLabel && expanded && highlight != m_formulars.end() && highlight->second.english)
+        if (ctrLabel && expanded && plugin->IsEnglish(callsign))
             ident.push_back({ L"\x221A", base, NULL });
 
         std::vector<FormularRun> levels;
@@ -3817,7 +3882,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     // right click on AFL: aircraft speaks English
     if (hit != NULL && hit->fn == &kFnAfl && button == BUTTON_RIGHT)
     {
-        it->second.english = !it->second.english;
+        Plugin()->ToggleEnglish(GetPlugIn()->FlightPlanSelect(sCallsign));
         RequestRefresh();
         return;
     }

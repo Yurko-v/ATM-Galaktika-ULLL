@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <thread>
 #include <atomic>
 #include <memory>
@@ -51,6 +52,13 @@ public:
     virtual void OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area);
     virtual void OnFlightPlanControllerAssignedDataUpdate(
         EuroScopePlugIn::CFlightPlan FlightPlan, int DataType);
+    virtual void OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan FlightPlan,
+        const char* sSenderController, const char* sTargetController);
+
+    // "√" on the label: the crew speaks English. Shared with the other controllers
+    // through a scratch pad broadcast (like IASsure does) and strip annotation 8.
+    bool IsEnglish(const std::string& callsign) const { return m_english.count(callsign) != 0; }
+    void ToggleEnglish(EuroScopePlugIn::CFlightPlan fp);
 
     void HandleSquawkFunction(int FunctionId, const char* sItemString, RECT Area, const char* source);
 
@@ -187,6 +195,8 @@ private:
     SquawkClient m_squawk;
 
     std::map<std::string, std::string> m_squawkSetByUs;
+
+    std::set<std::string> m_english;
 
     std::string m_squawkMenuCallsign;
     RECT m_squawkMenuArea = { 0, 0, 0, 0 };
@@ -367,7 +377,6 @@ private:
         POINT callsignAt = { 0, 0 };
         bool  placed = false;
         bool  highlighted = false;
-        bool  english = false;      // right click on AFL, "√" after the flight rules
         bool  zone = false;
         POINT anchor = { 0, 0 };
         RECT  area = { 0, 0, 0, 0 };
