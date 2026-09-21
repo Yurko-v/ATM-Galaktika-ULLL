@@ -3157,6 +3157,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         // flight rules, I / V
         if (ctrLabel && expanded && planType != NULL && isalpha((unsigned char)planType[0]))
             ident.push_back({ std::wstring(1, (wchar_t)toupper((unsigned char)planType[0])), base, NULL });
+        if (ctrLabel && expanded && highlight != m_formulars.end() && highlight->second.english)
+            ident.push_back({ L"\x221A", base, NULL });
 
         std::vector<FormularRun> levels;
         const bool belowTL = pos.GetFlightLevel() / 100 < tl;
@@ -3265,7 +3267,15 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             int xfl = fp.GetExitCoordinationAltitude();
             exitLine.push_back({ xfl > 0 ? Widen(FormatAltitudeUnit(xfl, altUnit).c_str())
                                          : std::wstring(L"XFL"), base, &kFnXfl });
+            // exit point of the sector the aircraft is in now (next COPX on the route),
+            // unless an exit point was coordinated by hand
             const char* copx = fp.GetExitCoordinationPointName();
+            if (fp.GetExitCoordinationNameState() == COORDINATION_STATE_NONE || copx == NULL || *copx == '\0')
+            {
+                const char* next = fp.GetNextCopxPointName();
+                if (next != NULL && *next != '\0')
+                    copx = next;
+            }
             exitLine.push_back({ (copx != NULL && *copx != '\0') ? Widen(copx) : std::wstring(L"COPX"),
                 base, &kFnCopx });
             extra.push_back(exitLine);
@@ -3802,6 +3812,14 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
             hit = &item;
             break;
         }
+    }
+
+    // right click on AFL: aircraft speaks English
+    if (hit != NULL && hit->fn == &kFnAfl && button == BUTTON_RIGHT)
+    {
+        it->second.english = !it->second.english;
+        RequestRefresh();
+        return;
     }
 
     if (hit != NULL && IsGsFn(hit->fn) && button == BUTTON_LEFT)

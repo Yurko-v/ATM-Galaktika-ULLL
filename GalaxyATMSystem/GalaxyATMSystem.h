@@ -367,6 +367,7 @@ private:
         POINT callsignAt = { 0, 0 };
         bool  placed = false;
         bool  highlighted = false;
+        bool  english = false;      // right click on AFL, "√" after the flight rules
         bool  zone = false;
         POINT anchor = { 0, 0 };
         RECT  area = { 0, 0, 0, 0 };
