@@ -53,6 +53,8 @@ namespace Theme
     const int TrackHistoryDots = 5;
 
     const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);
+    // target symbol and vector while the РЦ label is hovered
+    const COLORREF FormularHoverTarget = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);
 
     const COLORREF AtisIndexText = RGB(0x9E, 0xFF, 0x3D);

@@ -3518,15 +3518,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         area.bottom = area.top + height;
         state.area = area;
 
-        // hovered: black box with a white frame, white text and leader
+        // hovered РЦ label: black box with a white frame, white text and leader
+        const bool boxed = expanded && ctrLabel;
         const int kBoxPad = 3;
         RECT box = area;
         InflateRect(&box, kBoxPad, kBoxPad);
-        if (expanded)
+        if (boxed)
             state.area = box;
 
         std::vector<RECT> rows;
-        if (expanded)
+        if (boxed)
         {
             rows.push_back(box);
         }
@@ -3541,17 +3542,17 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
         }
 
-        const POINT aim = expanded
+        const POINT aim = boxed
             ? POINT{ (box.left + box.right) / 2, (box.top + box.bottom) / 2 }
             : POINT{ area.left + lineWidths[identLine] / 2, callsignAt.y };
         POINT leaderFrom, leaderTo;
-        if (ClipLeaderToText(tp, aim, rows, expanded ? 4.0 : 6.0, leaderFrom, leaderTo))
+        if (ClipLeaderToText(tp, aim, rows, boxed ? 4.0 : 6.0, leaderFrom, leaderTo))
         {
-            VectorCanvas canvas(hDC, expanded ? Theme::Text : base, 1.0f);
+            VectorCanvas canvas(hDC, boxed ? Theme::Text : base, 1.0f);
             canvas.Line(leaderFrom.x, leaderFrom.y, leaderTo.x, leaderTo.y);
         }
 
-        if (expanded)
+        if (boxed)
         {
             HBRUSH fill = CreateSolidBrush(RGB(0, 0, 0));
             FillRect(hDC, &box, fill);
@@ -3570,7 +3571,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             for (size_t r = 0; r < lines[l].size(); r++)
             {
                 const FormularRun& run = lines[l][r];
-                SetTextColor(hDC, (expanded && run.color == base) ? Theme::Text : run.color);
+                SetTextColor(hDC, (boxed && run.color == base) ? Theme::Text : run.color);
                 TextOutW(hDC, x, y, run.text.c_str(), (int)run.text.size());
 
                 FormularItem item;
@@ -3635,6 +3636,12 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     }
 
     RestoreDC(hDC, saved);
+}
+
+bool CGalaxyATMSystemRadarScreen::HoveredCtrLabel(const char* callsign)
+{
+    return m_formularsVisible && callsign != NULL && !m_formularHover.empty()
+        && m_formularHover == callsign && CurrentFormularKind() == FormularKind::Ctr;
 }
 
 CGalaxyATMSystemRadarScreen::FormularKind CGalaxyATMSystemRadarScreen::CurrentFormularKind()
@@ -3800,9 +3807,10 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
             ? symbols.find("ASSUMED") : symbols.end();
         const bool assumed = star != symbols.end();
 
-        DrawTrackSymbol(hDC, symbol->second, tp, color, assumed ? kAssumedHoleRadius : 0.0);
+        const COLORREF symbolColor = HoveredCtrLabel(cs) ? Theme::FormularHoverTarget : color;
+        DrawTrackSymbol(hDC, symbol->second, tp, symbolColor, assumed ? kAssumedHoleRadius : 0.0);
         if (assumed)
-            DrawTrackSymbol(hDC, star->second, tp, color);
+            DrawTrackSymbol(hDC, star->second, tp, symbolColor);
         m_symbolStats.drawn++;
     }
     RestoreDC(hDC, saved);
@@ -6864,6 +6872,8 @@ void CGalaxyATMSystemRadarScreen::DrawTargetVectors(HDC hDC)
 
         CFlightPlan fp = rt.GetCorrelatedFlightPlan();
         COLORREF color = GetTagColorForFlightPlan(fp);
+        if (HoveredCtrLabel(fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign()))
+            color = Theme::FormularHoverTarget;
 
         if (m_vecTimeEnabled)
         {

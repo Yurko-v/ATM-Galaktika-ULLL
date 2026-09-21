@@ -392,6 +392,7 @@ private:
     enum class FormularKindSetting { Auto, Ctr, App, Twr };
     FormularKindSetting m_formularKindSetting;
     FormularKind CurrentFormularKind();
+    bool HoveredCtrLabel(const char* callsign);
 
     void  DrawFormulars(HDC hDC, bool registerObjects);
 
