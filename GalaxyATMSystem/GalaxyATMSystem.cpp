@@ -3978,7 +3978,13 @@ bool CGalaxyATMSystemRadarScreen::Hot(const RECT& r)
     return m_hotValid && PtInRect(&r, m_hotCursor);
 }
 
-void CGalaxyATMSystemRadarScreen::AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip)
+// the panel, menu bar and windows get no highlight
+void CGalaxyATMSystemRadarScreen::AddButton(HDC, int type, const char* id, RECT r, const char* tip)
+{
+    AddScreenObject(type, id, r, false, tip);
+}
+
+void CGalaxyATMSystemRadarScreen::AddHotButton(HDC hDC, int type, const char* id, RECT r, const char* tip)
 {
     AddScreenObject(type, id, r, false, tip);
     if (Hot(r))
@@ -4266,8 +4272,8 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
         DeleteObject(tb);
     }
     AddScreenObject(SO_CFL_TRACK, "CFL_TRACK", inner, false, "");
-    AddButton(hDC, SO_CFL_UP, "CFL_UP", up, "");
-    AddButton(hDC, SO_CFL_DOWN, "CFL_DOWN", down, "");
+    AddHotButton(hDC, SO_CFL_UP, "CFL_UP", up, "");
+    AddHotButton(hDC, SO_CFL_DOWN, "CFL_DOWN", down, "");
     DeleteObject(line);
     DeleteObject(black);
 
@@ -4290,7 +4296,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
         SetTextColor(hDC, Theme::CflFieldText);
         DrawTextW(hDC, text, -1, &textR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
-    AddButton(hDC, SO_CFL_FIELD, "CFL_FIELD", field, "");
+    AddHotButton(hDC, SO_CFL_FIELD, "CFL_FIELD", field, "");
 
     HBRUSH okFill = CreateSolidBrush(Hot(ok) ? Theme::HoverFill : Theme::CflButton);
     HPEN okPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
@@ -4595,7 +4601,7 @@ void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
     text(title, L"Speed", Theme::Text, DT_LEFT);
     RECT close = { area.right - border - titleH, area.top + border, area.right - border, area.top + border + titleH };
     text(close, L"\x00D7", Theme::Text, DT_CENTER);
-    AddButton(hDC, SO_SPD_CLOSE, "SPD_CLOSE", close, "");
+    AddHotButton(hDC, SO_SPD_CLOSE, "SPD_CLOSE", close, "");
 
     const int x0 = body.left + pad, x1 = body.right - pad;
     int y = body.top + gap;
@@ -4610,7 +4616,7 @@ void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
     fill(field, RGB(0, 0, 0));
     frame(field, Theme::CflCellLine);
     m_spdField = field;
-    AddButton(hDC, SO_SPD_FIELD, "SPD_FIELD", field, "");
+    AddHotButton(hDC, SO_SPD_FIELD, "SPD_FIELD", field, "");
     y += rowH + gap;
 
     // list with a scrollbar
@@ -4671,8 +4677,8 @@ void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
         fill(thumb, Theme::CflThumb);
     }
     AddScreenObject(SO_SPD_TRACK, "SPD_TRACK", inner, false, "");
-    AddButton(hDC, SO_SPD_UP, "SPD_UP", up, "");
-    AddButton(hDC, SO_SPD_DOWN, "SPD_DOWN", down, "");
+    AddHotButton(hDC, SO_SPD_UP, "SPD_UP", up, "");
+    AddHotButton(hDC, SO_SPD_DOWN, "SPD_DOWN", down, "");
     y += listH + gap;
 
     // Kt | M
@@ -4686,7 +4692,7 @@ void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
             fill(tabs[i], Theme::SpdTabOn);
         frame(tabs[i], Theme::CflCellLine);
         text(tabs[i], tabText[i], Theme::Text, DT_CENTER);
-        AddButton(hDC, SO_SPD_TAB, i == 1 ? "1" : "0", tabs[i], "");
+        AddHotButton(hDC, SO_SPD_TAB, i == 1 ? "1" : "0", tabs[i], "");
     }
     y += tabH + gap;
 
@@ -4709,7 +4715,7 @@ void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
         text(tr, modes[i], Theme::Text, DT_LEFT);
         char id[4];
         sprintf_s(id, "%d", i);
-        AddButton(hDC, SO_SPD_MODE, id, row, "");
+        AddHotButton(hDC, SO_SPD_MODE, id, row, "");
         y += rowH;
     }
     y += gap;

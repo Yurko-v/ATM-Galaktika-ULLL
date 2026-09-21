@@ -392,6 +392,7 @@ private:
     std::vector<RECT> m_hotRects;
     bool Hot(const RECT& r);
     void AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip);
+    void AddHotButton(HDC hDC, int type, const char* id, RECT r, const char* tip);   // label popups only
     void TickHot();
 
     // Speed window: left click on ASP of the РЦ label
