@@ -384,6 +384,16 @@ private:
     };
     std::map<std::string, FormularState> m_formulars;
 
+    // orange highlight of whatever clickable thing is under the mouse. Rects are
+    // collected while drawing, the poll timer redraws when the cursor moves to another one.
+    POINT m_hotCursor = { 0, 0 };
+    bool  m_hotValid = false;
+    int   m_hotIndex = -1;
+    std::vector<RECT> m_hotRects;
+    bool Hot(const RECT& r);
+    void AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip);
+    void TickHot();
+
     // эшелонатор: our CFL picker, left click on CFL of the РЦ label
     bool m_cflOpen = false;
     std::string m_cflCallsign;

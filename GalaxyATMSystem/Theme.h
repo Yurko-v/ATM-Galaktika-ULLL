@@ -62,6 +62,10 @@ namespace Theme
     const COLORREF CflButton     = RGB(0x8C, 0x94, 0x8C);
     const COLORREF CflThumb      = RGB(0xA0, 0xA0, 0xA0);
 
+    // anything clickable under the mouse
+    const COLORREF HoverFill = RGB(0xE8, 0x8E, 0x2C);
+    const BYTE     HoverAlpha = 150;
+
     // target symbol and vector while the РЦ label is hovered
     const COLORREF FormularHoverTarget = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);

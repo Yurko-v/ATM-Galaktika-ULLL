@@ -2119,7 +2119,7 @@ void CGalaxyATMSystemRadarScreen::DrawCheckbox(HDC hDC, RECT box, bool checked,
     int objType, const char* objId, const char* tooltip)
 {
     Theme::OutlineBox(hDC, box, checked ? Theme::Active : Theme::ControlFill, Theme::BorderCheck);
-    AddScreenObject(objType, objId, box, false, tooltip);
+    AddButton(hDC, objType, objId, box, tooltip);
 }
 
 void CGalaxyATMSystemRadarScreen::DrawCheckRow(HDC hDC, int top, int x, const std::wstring& label,
@@ -2139,7 +2139,7 @@ void CGalaxyATMSystemRadarScreen::DrawRadioRow(HDC hDC, int top, int x, int labe
     int cy = top + (kRowH - kRadioSize) / 2;
     RECT pill = { x, cy, x + kRadioSize, cy + kRadioSize };
     Theme::DrawRadio(hDC, pill, selected);
-    AddScreenObject(objType, objId, pill, false, tooltip);
+    AddButton(hDC, objType, objId, pill, tooltip);
 
     RECT lbl = { pill.right + 2, top, labelRight, top + kRowH };
     Theme::DrawLine(hDC, lbl, label, m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
@@ -2179,7 +2179,7 @@ void CGalaxyATMSystemRadarScreen::DrawToggleChip(HDC hDC, RECT box, const std::w
         Theme::OutlineBox(hDC, box, idleFill, Theme::BorderStrong);
         Theme::DrawLine(hDC, box, text, m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
     }
-    AddScreenObject(objType, objId, box, false, tooltip);
+    AddButton(hDC, objType, objId, box, tooltip);
 }
 
 void CGalaxyATMSystemRadarScreen::DrawDropdownField(HDC hDC, RECT box, const std::wstring& text,
@@ -2210,7 +2210,7 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownField(HDC hDC, RECT box, const std
     RECT textRect = { box.left + 5, box.top, chevron.left - 2, box.bottom };
     Theme::DrawLine(hDC, textRect, text, m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
 
-    AddScreenObject(objType, objId, chevron, false, tooltip);
+    AddButton(hDC, objType, objId, chevron, tooltip);
 }
 
 void CGalaxyATMSystemRadarScreen::DrawDropdownList(HDC hDC)
@@ -2272,7 +2272,7 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownList(HDC hDC)
 
         char id[8];
         sprintf_s(id, "%d", i);
-        AddScreenObject(SO_DROPDOWN_ITEM, id, row, false, "");
+        AddButton(hDC, SO_DROPDOWN_ITEM, id, row, "");
     }
 
     RestoreDC(hDC, saved);
@@ -2333,6 +2333,7 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
     if (Phase == REFRESH_PHASE_AFTER_TAGS)
     {
+        m_hotRects.clear();
         m_areaShiftDown = ShiftHeldInEuroScope();
         if (m_areaShiftDown || m_zoneInfoIndex >= 0)
             RegisterZoneObjects();
@@ -3267,8 +3268,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
         const bool english = ctrLabel && plugin->IsEnglish(callsign);
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit).c_str()),
-            (english && expanded) ? Theme::Text : base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL,
-            (english && expanded) ? Theme::FormularHoverTarget : CLR_INVALID });   // orange only on hover
+            base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL });
         const int vs = rt.GetVerticalSpeed();
         std::wstring cflText;
         COLORREF cflColor = base;
@@ -3618,14 +3618,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             for (size_t r = 0; r < lines[l].size(); r++)
             {
                 const FormularRun& run = lines[l][r];
-                if (run.back != CLR_INVALID)
+                RECT bg = { x - 1, y, x + runWidths[l][r] + 1, y + lineH };
+                const bool hot = registerObjects && run.fn != NULL && Hot(bg);
+                const COLORREF back = hot ? Theme::HoverFill : run.back;
+                if (back != CLR_INVALID)
                 {
-                    RECT bg = { x - 1, y, x + runWidths[l][r] + 1, y + lineH };
-                    HBRUSH b = CreateSolidBrush(run.back);
+                    HBRUSH b = CreateSolidBrush(back);
                     FillRect(hDC, &bg, b);
                     DeleteObject(b);
                 }
-                SetTextColor(hDC, (boxed && run.color == base) ? Theme::Text : run.color);
+                SetTextColor(hDC, (back != CLR_INVALID || (boxed && run.color == base)) ? Theme::Text : run.color);
                 TextOutW(hDC, x, y, run.text.c_str(), (int)run.text.size());
 
                 FormularItem item;
@@ -3911,6 +3913,37 @@ int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor
     return hdg;
 }
 
+bool CGalaxyATMSystemRadarScreen::Hot(const RECT& r)
+{
+    m_hotRects.push_back(r);
+    return m_hotValid && PtInRect(&r, m_hotCursor);
+}
+
+void CGalaxyATMSystemRadarScreen::AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip)
+{
+    AddScreenObject(type, id, r, false, tip);
+    if (Hot(r))
+        FillAlpha(hDC, r, Theme::HoverFill, Theme::HoverAlpha);
+}
+
+void CGalaxyATMSystemRadarScreen::TickHot()
+{
+    POINT cursor;
+    m_hotValid = CursorRadarPoint(cursor);
+    if (m_hotValid)
+        m_hotCursor = cursor;
+    int index = -1;
+    if (m_hotValid)
+        for (int i = (int)m_hotRects.size() - 1; i >= 0 && index < 0; i--)
+            if (PtInRect(&m_hotRects[i], cursor))
+                index = i;
+    if (index != m_hotIndex)
+    {
+        m_hotIndex = index;
+        RequestRefresh();
+    }
+}
+
 void CGalaxyATMSystemRadarScreen::OpenCflPicker(const char* callsign)
 {
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(callsign);
@@ -4101,7 +4134,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
     FillRect(hDC, &list, black);
 
     const std::vector<int>& levels = CflLevels();
-    HBRUSH hoverFill = CreateSolidBrush(Theme::CflHover);
+    HBRUSH hoverFill = CreateSolidBrush(Theme::HoverFill);
     HPEN cellPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
     m_cflCells.clear();
 
@@ -4120,7 +4153,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
             const int y = list.top + k * cellH + (col == 1 ? cellH / 2 : 0);
             RECT cell = { list.left + col * cellW, y, list.left + (col + 1) * cellW, y + cellH };
             if (levels[idx] == m_cflHoverLevel)
-                FillRect(hDC, &cell, hoverFill);
+                FillRect(hDC, &cell, hoverFill);   // orange under the mouse
             Rectangle(hDC, cell.left, cell.top, cell.right + (col == 0 ? 1 : 0), cell.bottom + 1);
 
             wchar_t text[8];
@@ -4172,8 +4205,8 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
         DeleteObject(tb);
     }
     AddScreenObject(SO_CFL_TRACK, "CFL_TRACK", inner, false, "");
-    AddScreenObject(SO_CFL_UP, "CFL_UP", up, false, "");
-    AddScreenObject(SO_CFL_DOWN, "CFL_DOWN", down, false, "");
+    AddButton(hDC, SO_CFL_UP, "CFL_UP", up, "");
+    AddButton(hDC, SO_CFL_DOWN, "CFL_DOWN", down, "");
     DeleteObject(line);
     DeleteObject(black);
 
@@ -4196,9 +4229,9 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
         SetTextColor(hDC, Theme::CflFieldText);
         DrawTextW(hDC, text, -1, &textR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
-    AddScreenObject(SO_CFL_FIELD, "CFL_FIELD", field, false, "");
+    AddButton(hDC, SO_CFL_FIELD, "CFL_FIELD", field, "");
 
-    HBRUSH okFill = CreateSolidBrush(Theme::CflButton);
+    HBRUSH okFill = CreateSolidBrush(Hot(ok) ? Theme::HoverFill : Theme::CflButton);
     HPEN okPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
     SelectObject(hDC, okFill);
     SelectObject(hDC, okPen);
@@ -5068,7 +5101,7 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
     }
     SelectObject(hDC, oldPen);
     DeleteObject(pen);
-    AddScreenObject(SO_PANEL_COLLAPSE, "PANEL_COLLAPSE", toggle, false,
+    AddButton(hDC, SO_PANEL_COLLAPSE, "PANEL_COLLAPSE", toggle,
         m_collapsed ? Tr("Развернуть панель") : Tr("Свернуть панель"));
 
     SYSTEMTIME st;
@@ -5252,7 +5285,7 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     DrawCloseCross(hDC, close, Theme::MenuText);
 
     AddScreenObject(SO_NOTICE_WINDOW, "NOTICE_WINDOW", win, false, "");
-    AddScreenObject(SO_NOTICE_CLOSE, "NOTICE_CLOSE", close, false, Tr("Закрыть"));
+    AddButton(hDC, SO_NOTICE_CLOSE, "NOTICE_CLOSE", close, Tr("Закрыть"));
 
     RECT textR = { win.left + kPad + 5, title.bottom + kPad, win.right - kPad - 5, title.bottom + kPad + textH };
     HFONT oldFont = (HFONT)SelectObject(hDC, m_fonts.Body);
@@ -5264,7 +5297,7 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     RECT ok = { okLeft, textR.bottom + kGap, okLeft + kBtnW, textR.bottom + kGap + kBtnH };
     Theme::OutlineBox(hDC, ok, Theme::MenuBarFill, Theme::MenuText);
     Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::MenuText, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_NOTICE_OK, "NOTICE_OK", ok, false, Tr("Закрыть"));
+    AddButton(hDC, SO_NOTICE_OK, "NOTICE_OK", ok, Tr("Закрыть"));
 
     RestoreDC(hDC, saved);
 }
@@ -5309,7 +5342,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
 
     AddScreenObject(SO_LOGIN_WINDOW, "LOGIN_WINDOW", win, false, "");
     AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", title, true, Tr("Перетащите окно"));
-    AddScreenObject(SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, false, Tr("Закрыть"));
+    AddButton(hDC, SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, Tr("Закрыть"));
 
     std::wstring message;
     const CGalaxyATMSystemPlugin::LoginState state = Plugin()->MyLogin(&message);
@@ -5344,7 +5377,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
                     DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
         }
         if (!sending)
-            AddScreenObject(SO_LOGIN_FIELD, std::to_string(i).c_str(), field, false,
+            AddButton(hDC, SO_LOGIN_FIELD, std::to_string(i).c_str(), field,
                 Tr("Нажмите, чтобы ввести"));
         y += kRowH + kRowGap;
     }
@@ -5380,7 +5413,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
         RECT linkR = { left, y, right, y + kLine };
         Theme::DrawLine(hDC, linkR, Tr(L"Регистрация: ") + shown, m_fonts.Small, Theme::Text,
             DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-        AddScreenObject(SO_LOGIN_REGISTER, "LOGIN_REGISTER", linkR, false, Tr("Открыть страницу регистрации в браузере"));
+        AddButton(hDC, SO_LOGIN_REGISTER, "LOGIN_REGISTER", linkR, Tr("Открыть страницу регистрации в браузере"));
     }
     y += kLine + kGap;
 
@@ -5389,7 +5422,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     Theme::OutlineBox(hDC, send, Theme::MenuBarFill, ink);
     Theme::DrawLine(hDC, send, Tr(L"Войти"), m_fonts.Body, ink, DT_CENTER | DT_VCENTER);
     if (!sending)
-        AddScreenObject(SO_LOGIN_SEND, "LOGIN_SEND", send, false, Tr("Войти в систему"));
+        AddButton(hDC, SO_LOGIN_SEND, "LOGIN_SEND", send, Tr("Войти в систему"));
 
     RestoreDC(hDC, saved);
 
@@ -5720,14 +5753,14 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAltFilter(HDC hDC, int y)
     RECT maxVal = { valLeft, cy, valRight, cy + L::F_ROW };
     Theme::DrawLine(hDC, maxLbl, Tr(L"Макс:"), m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     DrawOutlinedField(hDC, maxVal, toText, m_fonts.Body);
-    AddScreenObject(SO_ALTFILTER_TO, "ALTFILTER_TO", maxVal, false, Tr("Верхняя граница фильтра высоты"));
+    AddButton(hDC, SO_ALTFILTER_TO, "ALTFILTER_TO", maxVal, Tr("Верхняя граница фильтра высоты"));
     cy += L::F_ROW + L::F_GAP1;
 
     RECT minLbl = { box.left + 8, cy, valLeft, cy + L::F_ROW };
     RECT minVal = { valLeft, cy, valRight, cy + L::F_ROW };
     Theme::DrawLine(hDC, minLbl, Tr(L"Мин :"), m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     DrawOutlinedField(hDC, minVal, fromText, m_fonts.Body);
-    AddScreenObject(SO_ALTFILTER_FROM, "ALTFILTER_FROM", minVal, false, Tr("Нижняя граница фильтра высоты"));
+    AddButton(hDC, SO_ALTFILTER_FROM, "ALTFILTER_FROM", minVal, Tr("Нижняя граница фильтра высоты"));
     cy += L::F_ROW + L::F_GAP2;
 
     DrawCheckRow(hDC, cy, box.left + 39, Tr(L"Использовать"), Plugin()->AltFilterEnabled(),
@@ -5755,12 +5788,12 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
     RECT all = { box.left + 85, box.top + L::C_ALL_TOP, box.left + 125, box.top + L::C_ALL_TOP + L::C_ROW_H };
     Theme::OutlineBox(hDC, all, m_codeAll ? Theme::Active : Theme::ButtonMid, Theme::Border);
     Theme::DrawLine(hDC, all, Tr(L"ВСЕ"), m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_CODE_ALL, "CODE_ALL", all, false, Tr("Пропускать все коды"));
+    AddButton(hDC, SO_CODE_ALL, "CODE_ALL", all, Tr("Пропускать все коды"));
 
     RECT bp = { box.left + 32, box.top + L::C_BP_TOP, box.left + 65, box.top + L::C_BP_TOP + L::C_ROW_H };
     Theme::OutlineBox(hDC, bp, m_codeBp ? Theme::Active : Theme::ButtonMid, Theme::Border);
     Theme::DrawLine(hDC, bp, Tr(L"БП"), m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_CODE_BP, "CODE_BP", bp, false, Tr("Без привязки"));
+    AddButton(hDC, SO_CODE_BP, "CODE_BP", bp, Tr("Без привязки"));
 
     RECT filter = { box.left + 71, box.top + L::C_FLT_TOP, box.left + 183, box.top + L::C_FLT_TOP + L::C_FLT_H };
     Theme::OutlineBox(hDC, filter, Theme::InsetFill, Theme::Border);
@@ -5770,11 +5803,11 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
         Theme::DrawLine(hDC, inner, m_codeFilter, m_fonts.Small, Theme::Text,
             DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
     }
-    AddScreenObject(SO_CODE_FILTER, "CODE_FILTER", filter, false, Tr("Коды источника ВВ1"));
+    AddButton(hDC, SO_CODE_FILTER, "CODE_FILTER", filter, Tr("Коды источника ВВ1"));
 
     RECT extra = { box.left + 189, box.top + L::C_EXTRA_TOP, box.left + 201, box.top + L::C_EXTRA_TOP + L::C_EXTRA_H };
     Theme::OutlineBox(hDC, extra, m_codeExtra ? Theme::Active : Theme::Background, Theme::Border);
-    AddScreenObject(SO_CODE_EXTRA, "CODE_EXTRA", extra, false, Tr("Источник ВВ1 включён"));
+    AddButton(hDC, SO_CODE_EXTRA, "CODE_EXTRA", extra, Tr("Источник ВВ1 включён"));
 
     if (!m_vvDragging)
         SyncSliderFromZoom();
@@ -5878,7 +5911,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
         Theme::DrawValueField(hDC, atisBtn, Tr(L"АТИС"), m_fonts.Body);
     else
         Theme::DrawGhostControl(hDC, atisBtn, Tr(L"АТИС"), m_fonts.Body);
-    AddScreenObject(SO_ATIS_BUTTON, "ATIS_BTN", atisBtn, false,
+    AddButton(hDC, SO_ATIS_BUTTON, "ATIS_BTN", atisBtn,
         Tr("Открыть текст АТИС"));
 
     return box.bottom;
@@ -5955,7 +5988,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
         SelectObject(hDC, old);
         DeleteObject(pen);
     }
-    AddScreenObject(SO_ATIS_CLOSE, "ATIS_CLOSE", close, false, Tr("Закрыть"));
+    AddButton(hDC, SO_ATIS_CLOSE, "ATIS_CLOSE", close, Tr("Закрыть"));
 
     RECT index = { m_atisArea.left + kSide + 4, titleEdge.bottom + 14,
                    m_atisArea.right - kSide, titleEdge.bottom + 36 };
@@ -5968,7 +6001,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     Theme::FlatFill(hDC, ok, Theme::ButtonFace);
     Theme::FlatFrame(hDC, ok, kFrame, Theme::WinFrame);
     Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::ButtonText, DT_CENTER | DT_VCENTER);
-    AddScreenObject(SO_ATIS_OK, "ATIS_OK", ok, false, Tr("Закрыть"));
+    AddButton(hDC, SO_ATIS_OK, "ATIS_OK", ok, Tr("Закрыть"));
 
     RECT panel = { m_atisArea.left + kSide, index.bottom + 17,
                    m_atisArea.right - kSide, ok.top - 6 };
@@ -6016,8 +6049,8 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 
     RECT btnUp = { track.left, track.top, track.right, track.top + kEndBtn };
     RECT btnDn = { track.left, track.bottom - kEndBtn, track.right, track.bottom };
-    AddScreenObject(SO_ATIS_LINE_UP, "ATIS_UP", btnUp, false, Tr("Прокрутить вверх"));
-    AddScreenObject(SO_ATIS_LINE_DN, "ATIS_DN", btnDn, false, Tr("Прокрутить вниз"));
+    AddButton(hDC, SO_ATIS_LINE_UP, "ATIS_UP", btnUp, Tr("Прокрутить вверх"));
+    AddButton(hDC, SO_ATIS_LINE_DN, "ATIS_DN", btnDn, Tr("Прокрутить вниз"));
 
     for (const RECT* btn : { &btnUp, &btnDn })
     {
@@ -6152,9 +6185,9 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         Theme::DrawLine(hDC, bypass, L"Bypass", btnFont, bypassInk, DT_CENTER | DT_VCENTER);
         if (!training)
         {
-            AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, Tr("Войти в систему"));
+            AddButton(hDC, SO_AUTH_LOGIN, "MENU_LOGIN", login, Tr("Войти в систему"));
             if (m_authState == AuthState::LoggedOut)
-                AddScreenObject(SO_AUTH_BYPASS, "MENU_BYPASS", bypass, false,
+                AddButton(hDC, SO_AUTH_BYPASS, "MENU_BYPASS", bypass,
                     bypassLive ? Tr("Войти без проверки в базе") : "");
         }
     }
@@ -7431,6 +7464,7 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
     }
 
     TickCflPicker();
+    TickHot();
 
     if (m_hdgDragging)
     {
