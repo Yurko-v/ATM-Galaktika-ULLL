@@ -2510,6 +2510,7 @@ namespace
         std::wstring text;
         COLORREF color;
         const FormularFn* fn;
+        COLORREF back = CLR_INVALID;   // background fill, CLR_INVALID = none
     };
 
     const char* const kTopSky = "TopSky plugin";
@@ -3241,14 +3242,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         // flight rules, I / V
         if (ctrLabel && expanded && planType != NULL && isalpha((unsigned char)planType[0]))
             ident.push_back({ std::wstring(1, (wchar_t)toupper((unsigned char)planType[0])), base, NULL });
-        if (ctrLabel && expanded && plugin->IsEnglish(callsign))
+        if (ctrLabel && expanded && plugin->IsEnglish(callsign))  // after I
             ident.push_back({ L"\x221A", base, NULL });
 
         std::vector<FormularRun> levels;
         const bool belowTL = pos.GetFlightLevel() / 100 < tl;
         const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
+        const bool english = ctrLabel && plugin->IsEnglish(callsign);
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit).c_str()),
-            base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL });
+            english ? Theme::Text : base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL,
+            english ? Theme::FormularHoverTarget : CLR_INVALID });
         const int vs = rt.GetVerticalSpeed();
         std::wstring cflText;
         COLORREF cflColor = base;
@@ -3300,6 +3303,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (m_osSpeed && ctrLabel)
             levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
                 base, correlated ? &kFnGs : NULL });
+        if (english && !expanded)
+            levels.push_back({ L"\x221A", base, NULL });
         if (ctrLabel && expanded && correlated && fp.GetFlightPlanData().IsRvsm())
             levels.push_back({ L"R", base, NULL });
 
@@ -3313,8 +3318,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 swprintf_s(t, L"H%03d", assigned.GetAssignedHeading());
                 ahdgText = t;
             }
-            else
+            else if (!ctrLabel)
             {
+                // РЦ label: heading only, the COPX point is on its own line
                 const char* direct = assigned.GetDirectToPointName();
                 if (direct != NULL && *direct != '\0')
                     ahdgText = Widen(direct);
@@ -3590,6 +3596,13 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             for (size_t r = 0; r < lines[l].size(); r++)
             {
                 const FormularRun& run = lines[l][r];
+                if (run.back != CLR_INVALID)
+                {
+                    RECT bg = { x - 1, y, x + runWidths[l][r] + 1, y + lineH };
+                    HBRUSH b = CreateSolidBrush(run.back);
+                    FillRect(hDC, &bg, b);
+                    DeleteObject(b);
+                }
                 SetTextColor(hDC, (boxed && run.color == base) ? Theme::Text : run.color);
                 TextOutW(hDC, x, y, run.text.c_str(), (int)run.text.size());
 
