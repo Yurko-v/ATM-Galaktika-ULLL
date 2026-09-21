@@ -1,44 +1,19 @@
 <?php
-// Регистрация в системе КСА: a controller enters their CID on VATSIM, surname,
-// first name, patronymic and a password of their own. From then on LOGIN in the
-// plug-in lets them in with the same name and password (api/login.php).
-//
-// Nothing here proves the CID is the person's own - VATSIM offers no way to
-// check that short of its own sign-in. What limits a stranger is that a CID
-// registers once: a second registration is turned away, and only the admin
-// page's "Сбросить пароль" opens it again. And a registration opens the panel to
-// nobody but the CID's owner, since LOGIN is only let in from a position the
-// network lists under that CID.
-//
-// The same page, under "?reset", sets a new password on a registration that
-// already exists: CID, the surname, first name and patronymic it was made
-// under, and the new password. Matching the name is the whole of the check -
-// so anyone who knows a controller's CID and name can take their password
-// away and shut them out of the panel. What they cannot do is get in: LOGIN
-// still only accepts the position the network lists under that CID, so a
-// stolen registration opens nothing. That trade was made deliberately - the
-// alternative was a person answering every request by hand.
-//
-// The service has no SSL, so the password goes over plain http - the page
-// says as much.
 
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/page.php';
 
-const REGISTER_TRIES_PER_MIN = 5;   // per address
-const RESET_TRIES_PER_MIN = 5;      // per address
-const RESET_TRIES_PER_CID_PER_MIN = 5;  // per CID, on top of the per-address one
+const REGISTER_TRIES_PER_MIN = 5;
+const RESET_TRIES_PER_MIN = 5;
+const RESET_TRIES_PER_CID_PER_MIN = 5;
 const PASSWORD_MIN_CHARS = 8;
-const PASSWORD_MAX_BYTES = 72;      // all bcrypt reads of a password - the rest would be ignored
+const PASSWORD_MAX_BYTES = 72;
 
 html_page_setup('squawk register');
 start_page_session('galaxy_register');
 
-// The three name fields both forms ask for, cleaned: surname, first name and
-// an optional patronymic, or a message saying which of them is not a name.
-// $refuse never returns.
 function posted_name_parts(callable $refuse): array
 {
     $surname = clean_name_part($_POST['surname'] ?? '');
@@ -59,7 +34,6 @@ function posted_name_parts(callable $refuse): array
     return [$surname, $firstName, $patronymic];
 }
 
-// The new password, twice, as both forms ask for it. $refuse never returns.
 function posted_password(callable $refuse): string
 {
     $password = (string)($_POST['password'] ?? '');
@@ -79,7 +53,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $action = (string)($_POST['action'] ?? 'register');
     $query = $action === 'reset' ? '?reset' : '';
 
-    // Everything typed but the passwords comes back into the form after an error.
     $form = [];
     foreach (['cid', 'surname', 'first_name', 'patronymic'] as $field) {
         $form[$field] = substr(trim((string)($_POST[$field] ?? '')), 0, 200);
@@ -104,11 +77,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     }
     [$surname, $firstName, $patronymic] = posted_name_parts($refuse);
 
-    // ---- Сброс пароля -------------------------------------------------------
-    // A new password on a registration that exists already. The name is what
-    // is checked, exactly as LOGIN checks it - case, ё or е and the spaces
-    // around it make no difference - and the name is not a secret: see the top
-    // of the file for what this does and does not protect.
     if ($action === 'reset') {
         if (!within_rate_limit('reset:' . $cid, RESET_TRIES_PER_CID_PER_MIN)) {
             $refuse('Слишком много попыток для этого CID — подождите минуту.');
@@ -131,8 +99,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 . 'было пусто — оставьте пусто.');
         }
 
-        // Only the password. The name stays as it was registered: this form
-        // proves nothing about who is typing, so it changes nothing else.
         db()->prepare('UPDATE user_names SET password_hash = ? WHERE cid = ?')
             ->execute([password_hash($password, PASSWORD_DEFAULT), $cid]);
 
@@ -141,12 +107,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         back_to_page('?reset');
     }
 
-    // ---- Регистрация --------------------------------------------------------
     $password = posted_password($refuse);
 
-    // A row the admin entered by name alone is taken over by the registration;
-    // a row that already has a password is left exactly as it is. password_hash
-    // is assigned last, so every IF before it still sees the old value.
     $name = user_display_name($surname, $firstName, $patronymic);
     $st = db()->prepare(
         'INSERT INTO user_names (cid, name, surname, first_name, patronymic, registered_at, password_hash)
@@ -161,7 +123,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     );
     $st->execute([$cid, $name, $surname, $firstName, $patronymic, password_hash($password, PASSWORD_DEFAULT)]);
 
-    // MySQL counts 1 for a new row, 2 for a changed one, 0 for one left alone.
     if ($st->rowCount() === 0) {
         error_log('squawk register: CID ' . $cid . ' is already registered - refused from ' . client_ip());
         $refuse('CID ' . $cid . ' уже зарегистрирован. Забыли пароль — смените его: '
@@ -238,7 +199,8 @@ $csrf = (string)$_SESSION['csrf'];
         <ol class="steps">
             <li>Подключитесь к VATSIM в EuroScope.</li>
             <li>Нажмите LOGIN на панели.</li>
-            <li>Введите фамилию, имя, отчество и пароль.</li>
+            <li>Введите CID и фамилию, имя, отчество — один раз. Дальше плагин
+                входит сам, при каждом запуске.</li>
         </ol>
     </div>
 <?php elseif ($changed): ?>
@@ -250,11 +212,11 @@ $csrf = (string)$_SESSION['csrf'];
             <dt>Диспетчер</dt><dd><?= h($changed['name']) ?></dd>
         </dl>
         <ol class="steps">
-            <li>Старый пароль при входе больше не подойдёт.</li>
-            <li>В EuroScope нажмите LOGIN и введите те же ФИО и новый пароль.</li>
+            <li>Новый пароль нужен только здесь, на сайте: для смены пароля и
+                для повторной регистрации.</li>
+            <li>Вход в панель пароля не спрашивает — плагину нужны CID и ФИО.</li>
         </ol>
-        <p class="hint">Панель, открытая со старым паролем, доработает до отключения от сети —
-            новый пароль понадобится при следующем входе.</p>
+        <p class="hint">Панель ничего не заметит: смена пароля на вход в неё не влияет.</p>
     </div>
 <?php elseif ($reset): ?>
     <h1>Сброс пароля</h1>

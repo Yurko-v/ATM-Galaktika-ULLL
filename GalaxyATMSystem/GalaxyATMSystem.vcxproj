@@ -97,8 +97,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(SolutionDir)config\GalaxyATMSystem.json" "$(OutDir)"</Command>
-      <Message>Copying GalaxyATMSystem.json config to output directory</Message>
+      <Command>if exist "$(SolutionDir)config\*.json" (xcopy /y /d /q "$(SolutionDir)config\*.json" "$(OutDir)") else (echo No config\*.json beside the solution, so nothing to copy: the DLL is the build's own output and the position keeps its config where EuroScope reads it.)</Command>
+      <Message>Copying the config JSON to the output directory, when the solution carries one</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

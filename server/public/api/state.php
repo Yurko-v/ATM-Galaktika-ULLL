@@ -1,10 +1,4 @@
 <?php
-// GET ?position=ULLI_GND -> {"assignments": {"AFL123": "0761", ...}, "time": "..."}
-//
-// Every code held right now, polled by each plugin so the column shows the
-// same code at every position. The position goes in the query string rather
-// than a body because this is a GET; it is checked exactly as on the other two
-// endpoints - see require_caller().
 
 declare(strict_types=1);
 

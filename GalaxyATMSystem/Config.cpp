@@ -13,7 +13,6 @@ namespace
         return s;
     }
 
-    // Directory containing the loaded module, with trailing backslash.
     std::wstring ModuleDir(HINSTANCE hModule)
     {
         wchar_t path[MAX_PATH] = { 0 };
@@ -23,9 +22,6 @@ namespace
         return (slash == std::wstring::npos) ? std::wstring() : p.substr(0, slash + 1);
     }
 
-    // A config path: taken as written when it is absolute, and from the folder
-    // the plug-in itself sits in when it is not - which is where the files that
-    // ship with it are.
     std::wstring ResolvePath(HINSTANCE hModule, const std::wstring& path)
     {
         bool absolute = (path.size() > 1 && path[1] == L':')
@@ -33,12 +29,6 @@ namespace
         return absolute ? path : ModuleDir(hModule) + path;
     }
 
-    // The JSON reader itself lives in Json.h - the SIGMET feed needs one too,
-    // and needs arrays, which the config file never did.
-
-    // "#D2463C", "D2463C", "0xD2463C" or [ 210, 70, 60 ]. Written the way a
-    // colour is written everywhere else - red first - and turned into the
-    // COLORREF the drawing wants, which is not.
     bool ParseColor(const Json::Value& v, COLORREF& out)
     {
         if (v.kind == Json::Value::Kind::Array)
@@ -86,8 +76,6 @@ namespace
         return true;
     }
 
-    // One kind of area. Anything the node leaves out keeps what the style
-    // already held, which on the first pass is the built-in colour.
     void ParseZoneStyle(const Json::Value& node, ZoneStyle& out)
     {
         if (node.kind != Json::Value::Kind::Object)
@@ -98,8 +86,6 @@ namespace
         if (const Json::Value* v = node.Find(L"Line"))
             ParseColor(*v, out.line);
 
-        // Per cent first, since that is how a wash is talked about; "Alpha" is
-        // the same thing in the units the drawing uses and has the last word.
         if (const Json::Value* v = node.Find(L"Opacity"))
         {
             long long pct = v->AsInt(-1);
@@ -117,9 +103,6 @@ namespace
 
 void Config::Load(HINSTANCE hModule)
 {
-    // Everything back to the defaults first. Load is called again by ".reload",
-    // and a key taken out of the file has to go back to what the build says
-    // rather than to whatever the previous read left behind.
     *this = Config();
     m_Path = ModuleDir(hModule) + L"GalaxyATMSystem.json";
 
@@ -140,8 +123,6 @@ void Config::Load(HINSTANCE hModule)
         return;
     }
 
-    // AsText, not AsString: these three read naturally as bare numbers too,
-    // and a config file that leaves the quotes off a QNH should still work.
     if (const Json::Value* v = root.Find(L"Airport"))
         m_Airport = v->AsText(m_Airport);
     if (const Json::Value* v = root.Find(L"QnhMmHg"))
@@ -192,16 +173,12 @@ void Config::Load(HINSTANCE hModule)
                 m_AtisRefreshMin = (int)max(1LL, min(60LL, v->AsInt(m_AtisRefreshMin)));
             if (const Json::Value* v = atis->Find(L"RefreshSeconds"))
                 m_AtisRefreshSec = (int)max(15LL, min(3600LL, v->AsInt(m_AtisRefreshSec)));
-            // Clamped to the top half of any sane display: the strip is docked
-            // to the corner, and an offset that walks it off the screen would
-            // leave nothing to click and no way to see that it happened.
             if (const Json::Value* v = atis->Find(L"TopOffset"))
                 m_AtisTopOffset = (int)max(0LL, min(400LL, v->AsInt(m_AtisTopOffset)));
             if (const Json::Value* v = atis->Find(L"TextRu"))
                 m_AtisTextRu = v->AsString();
             if (const Json::Value* v = atis->Find(L"TextEn"))
                 m_AtisTextEn = v->AsString();
-            // "Text" is what the English half used to be called.
             if (m_AtisTextEn.empty())
             {
                 if (const Json::Value* v = atis->Find(L"Text"))
@@ -210,8 +187,6 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
-    // APW - the area proximity warning. Every key is optional; the defaults
-    // in ApwSettings are the working ones.
     if (const Json::Value* apw = root.Find(L"Apw"))
     {
         if (apw->kind == Json::Value::Kind::Object)
@@ -227,10 +202,6 @@ void Config::Load(HINSTANCE hModule)
             if (const Json::Value* v = apw->Find(L"ShowZone"))
                 m_Apw.showZone = v->AsBool(m_Apw.showZone);
 
-            // "Kinds": which of the three warn at all, written the way the
-            // areas themselves are typed - "P", "R", "D". An explicit empty
-            // list is a config that has turned the alert off area by area,
-            // and is left as it is rather than read as "all of them".
             if (const Json::Value* v = apw->Find(L"Kinds"))
             {
                 if (v->kind == Json::Value::Kind::Array)
@@ -253,7 +224,6 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
-    // Сигметы: which of them to draw, and how often to go and look.
     if (const Json::Value* sig = root.Find(L"Sigmets"))
     {
         if (sig->kind == Json::Value::Kind::Object)
@@ -266,9 +236,6 @@ void Config::Load(HINSTANCE hModule)
             {
                 if (v->kind == Json::Value::Kind::Array)
                 {
-                    // Replaces the default rather than adding to it, so that
-                    // "Firs": [] is a way of asking for no filter at all and
-                    // not just a list that failed to override anything.
                     m_SigmetFirs.clear();
                     for (const Json::Value& e : v->arr)
                     {
@@ -281,10 +248,6 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
-    // Зоны запретов и ограничений. Normally the whole list comes out of the
-    // TopSky package that the sector file ships with - it is already kept up
-    // to date there - and "Items" is for anything that has to be added on top
-    // of it. A relative path is taken from the folder the config itself is in.
     if (const Json::Value* zones = root.Find(L"Zones"))
     {
         std::wstring areasPath;
@@ -295,8 +258,6 @@ void Config::Load(HINSTANCE hModule)
         }
         if (zones->kind == Json::Value::Kind::Object)
         {
-            // The plan is fetched over plain HTTP(S) and the URL is ASCII, so
-            // it is narrowed on the way in rather than at every fetch.
             if (const Json::Value* v = zones->Find(L"AupUrl"))
             {
                 std::wstring url = v->AsString();
@@ -307,9 +268,6 @@ void Config::Load(HINSTANCE hModule)
             if (const Json::Value* v = zones->Find(L"ShowNotamAreas"))
                 m_ShowNotamAreas = v->AsBool(m_ShowNotamAreas);
 
-            // A URL is narrowed like the plan's; a path is narrowed the same
-            // way and widened again when the file is opened, so a folder name
-            // in Cyrillic survives the round trip.
             if (const Json::Value* v = zones->Find(L"NotamSource"))
             {
                 std::wstring src = v->AsString();
@@ -338,10 +296,6 @@ void Config::Load(HINSTANCE hModule)
                 m_LoadError = L"zones: cannot open " + path;
         }
 
-        // The library of areas that ships with the plug-in: the same package
-        // converted once into JSON (tools/topsky_to_zones.py), so a position
-        // without TopSky installed still has the airspace. Read before
-        // "Items", which is then whatever this controller adds on top.
         if (zones->kind == Json::Value::Kind::Object)
         {
             if (const Json::Value* v = zones->Find(L"ItemsFile"))
@@ -372,9 +326,6 @@ void Config::Load(HINSTANCE hModule)
         ParseZones(*zones, m_Zones, m_ZonesEnabled);
     }
 
-    // Squawks from the shared server. Reset first, so a ".reload" of a file
-    // that has dropped the section switches the client off rather than
-    // keeping the old server. Both strings are ASCII.
     m_SquawkServerUrl.clear();
     m_SquawkApiKey.clear();
     m_SquawkPollSeconds = 15;
@@ -392,11 +343,6 @@ void Config::Load(HINSTANCE hModule)
             if (const Json::Value* v = sq->Find(L"ApiKey"))
                 m_SquawkApiKey = Json::WideToUtf8(v->AsString());
 
-            // Only for a server that asks for a key at all - see
-            // Config::SquawkApiKey. Kept out of the config file itself, so the
-            // config can be handed to another controller, or committed, without
-            // the key riding along with it. Read after "ApiKey" and overrides
-            // it; a relative name is taken from the folder the plug-in sits in.
             if (const Json::Value* v = sq->Find(L"ApiKeyFile"))
             {
                 std::wstring name = v->AsString();
@@ -413,8 +359,6 @@ void Config::Load(HINSTANCE hModule)
                         std::string raw((std::istreambuf_iterator<char>(keyFile)),
                             std::istreambuf_iterator<char>());
 
-                        // The first line of it, however the file ends its lines
-                        // and whatever spacing someone left around the key.
                         size_t line = raw.find_first_of("\r\n");
                         if (line != std::string::npos)
                             raw.erase(line);
@@ -436,10 +380,6 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
-    // The broadcast carries both languages one after the other, and so does
-    // the window. With only one of them configured it stands alone - a lone
-    // heading over a single block would say nothing - and with neither, the
-    // default placeholder is left in place to point at the config file.
     if (!m_AtisTextRu.empty() && !m_AtisTextEn.empty())
         m_AtisMessage = m_AtisTextRu + L"\n\n" + m_AtisTextEn;
     else if (!m_AtisTextRu.empty())

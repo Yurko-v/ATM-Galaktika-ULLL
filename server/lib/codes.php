@@ -1,10 +1,7 @@
 <?php
-// Picking a code: which ones a position may hand out, which of them are taken,
-// and the order the free ones are tried in.
 
 declare(strict_types=1);
 
-// An inclusive octal range as four-digit strings: 0760..0777.
 function codes_in_range(string $from, string $to): array
 {
     $out = [];
@@ -14,9 +11,6 @@ function codes_in_range(string $from, string $to): array
     return $out;
 }
 
-// The position's own ranges, then the fallback pool - as separate groups, so a
-// position empties its own range before it reaches into anyone else's. Each
-// code appears once, reserved codes never.
 function candidate_groups(string $position): array
 {
     $config = app_config();
@@ -58,7 +52,6 @@ function distance_km(float $lat1, float $lon1, float $lat2, float $lon2): float
     return 2 * $r * asin(min(1.0, sqrt($a)));
 }
 
-// True while the cron job is keeping the network snapshot up to date.
 function network_is_fresh(): bool
 {
     $st = db()->prepare("SELECT value FROM sync_state WHERE name = 'network_updated'");
@@ -71,9 +64,6 @@ function network_is_fresh(): bool
     return strtotime($updated . ' UTC') >= time() - $max;
 }
 
-// Codes nobody may be given right now: held by an active assignment, or
-// squawked or assigned to a pilot online near the FIR - except the asking
-// aircraft itself, which may well be squawking the code it is about to get.
 function taken_codes(string $callsign): array
 {
     $pdo = db();
@@ -88,7 +78,6 @@ function taken_codes(string $callsign): array
         [$lat0, $lon0] = $config['network_center'];
         $radius = (float)$config['network_radius_km'];
 
-        // A latitude band first, so only the pilots anywhere near are measured.
         $band = $radius / 111.0;
         $st = $pdo->prepare(
             'SELECT transponder, assigned_transponder, latitude, longitude FROM network_pilots
@@ -110,7 +99,6 @@ function taken_codes(string $callsign): array
     return $taken;
 }
 
-// When each code was last given back, for the codes that ever were.
 function last_released(array $codes): array
 {
     if (!$codes) {
@@ -129,9 +117,6 @@ function last_released(array $codes): array
     return $out;
 }
 
-// The free codes for this position, best first. Within a group a code never
-// handed out comes first, then the one given back longest ago - so a code that
-// has just been released is the last to go out again.
 function free_codes_in_order(string $position, string $callsign, array $exclude): array
 {
     $taken = taken_codes($callsign);
@@ -143,8 +128,6 @@ function free_codes_in_order(string $position, string $callsign, array $exclude)
     foreach (candidate_groups($position) as $group) {
         $free = array_values(array_filter($group, fn($c) => !isset($taken[$c])));
         $last = last_released($free);
-        // '' (never released) sorts before any DATETIME string, and DATETIME
-        // strings sort in time order. usort is stable, so ties keep range order.
         usort($free, fn($a, $b) => strcmp($last[$a] ?? '', $last[$b] ?? ''));
         array_push($out, ...$free);
     }
@@ -173,9 +156,6 @@ function release_assignment(int $id): void
         ->execute([$id]);
 }
 
-// 'ok', or which of the two unique keys another request got to first. The CID
-// is the one require_caller() found online on that position - kept so a code
-// can be traced to a person, which is the part the shared API key never gave.
 function try_insert(string $callsign, string $code, string $position, ?string $cid = null): string
 {
     try {

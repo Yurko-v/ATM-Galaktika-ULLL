@@ -8,16 +8,8 @@
 
 namespace
 {
-    // VATSIM's own status feed. Its "atis" array is the only published source
-    // for the letter and the text together - the METAR endpoint carries the
-    // weather but knows nothing about which index is on the air.
     const char* kFeedUrl = "https://data.vatsim.net/v3/vatsim-data.json";
 
-    // The whole feed is a couple of megabytes of traffic, and only the "atis"
-    // array of it is wanted; the cap is there to bound a runaway response, not
-    // to trim a normal one. Net::HttpGet stops reading at the cap and hands
-    // back what it has, so a cap set near the real size would quietly deliver
-    // a truncated body that then fails to parse.
     const size_t kMaxBytes = 16 * 1024 * 1024;
     const DWORD  kTimeoutMs = 15000;
 
@@ -33,11 +25,6 @@ namespace
             && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
     }
 
-    // The index the report itself announces - "INFORMATION E" or "INFORMATION
-    // ECHO" - or empty when it names none. The feed's own "atis_code" is set
-    // apart from the text and has been seen a report behind it, so the
-    // window read "D" over a text that said "E"; the text is what the pilots
-    // hear, and it wins.
     std::wstring LetterFromText(const std::wstring& text)
     {
         static const wchar_t* kPhonetic[] = {
@@ -71,9 +58,6 @@ namespace
         return std::wstring();
     }
 
-    // "ULLI_ATIS" is the station; "ULLI_A_ATIS" / "ULLI_D_ATIS" are the split
-    // arrival and departure ones some aerodromes run instead. Rank 0 is the
-    // plain station and wins outright, 1 is a split one, -1 is somebody else's.
     int StationRank(const std::wstring& callsign, const std::wstring& icao)
     {
         std::wstring cs = ToUpper(callsign);
@@ -119,9 +103,6 @@ bool ParseVatsimAtis(const std::string& body, const std::string& icao, AtisRepor
         if (const Json::Value* code = entry.Find(L"atis_code"))
             report.letter = code->AsString();
 
-        // The feed breaks the report into the lines the station transmits;
-        // they are kept as they came rather than run together, so the window
-        // shows the broadcast the way it is written.
         if (const Json::Value* text = entry.Find(L"text_atis"))
         {
             if (text->kind == Json::Value::Kind::Array)
@@ -148,12 +129,12 @@ bool ParseVatsimAtis(const std::string& body, const std::string& icao, AtisRepor
         }
 
         if (report.Empty())
-            continue;   // a station logged on with nothing on the air yet
+            continue;
 
         best = report;
         bestRank = rank;
         if (rank == 0)
-            break;      // the plain station: nothing can beat it
+            break;
     }
 
     if (bestRank < 0)
@@ -175,8 +156,6 @@ bool FetchVatsimAtis(const std::string& icao, AtisReport& out)
     if (ParseVatsimAtis(body, icao, out))
         return true;
 
-    // Either the feed could not be read as one, or there is simply no ATIS on
-    // the air for the aerodrome - only the first is an error.
     Json::Value root;
     if (!Json::ParseUtf8(body, root) || root.kind != Json::Value::Kind::Object || root.Find(L"atis") == NULL)
         Log::Error("atis", std::string("feed ") + kFeedUrl + " has no \"atis\" list ("

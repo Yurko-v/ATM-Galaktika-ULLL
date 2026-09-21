@@ -1,9 +1,5 @@
-// dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
 
-// Handle to this DLL module, captured at load time so the plugin can locate
-// its config file (GalaxyATMSystem.json) next to the DLL regardless of EuroScope's
-// current working directory.
 HINSTANCE g_hModule = NULL;
 
 BOOL APIENTRY DllMain(HMODULE hModule,

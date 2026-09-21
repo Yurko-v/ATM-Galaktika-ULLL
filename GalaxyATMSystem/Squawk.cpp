@@ -10,10 +10,6 @@
 
 namespace
 {
-    // Callsigns, positions, codes and the server's error words are all letters,
-    // digits, '_' and '-'. Anything else is dropped rather than escaped, so what
-    // goes into a JSON body can never break out of its quotes, and nothing odd
-    // the server might send back ever reaches the screen.
     std::string Token(const std::string& s, size_t maxLen, bool upper)
     {
         std::string out;
@@ -32,8 +28,6 @@ namespace
         return Token(Json::WideToUtf8(s), maxLen, upper);
     }
 
-    // Not the plugin's working state, just a bound on what a server that has
-    // stopped being read from can pile up.
     const size_t kMaxQueue = 100;
     const size_t kMaxAnswers = 200;
 }
@@ -53,7 +47,6 @@ void SquawkClient::Log(const std::string& line)
     if (path.empty())
         return;
 
-    // The worker thread and EuroScope's own both write here.
     std::lock_guard<std::mutex> lock(m_logMutex);
     std::ofstream file(path, std::ios::app);
     if (!file)
@@ -77,8 +70,6 @@ void SquawkClient::SetPosition(const std::string& position)
             return;
         m_position = clean;
         m_saidNoPosition = false;
-        // Logging in - or on to another position - changes what the server
-        // will answer, so the list is worth asking for again straight away.
         m_pollNow = true;
     }
 
@@ -100,7 +91,7 @@ void SquawkClient::Configure(const std::string& baseUrl, const std::string& apiK
         m_key = apiKey;
         m_pollSeconds = max(5, min(300, pollSeconds));
         m_errors.clear();
-        m_pollNow = true;   // straight away, with whatever the settings now say
+        m_pollNow = true;
         if (url.empty())
         {
             m_queue.clear();
@@ -137,8 +128,6 @@ void SquawkClient::Stop()
     }
     m_wake.notify_all();
 
-    // Joined rather than detached: the DLL can be unloaded straight after, and
-    // a request in flight is bounded by the timeouts in Net::HttpRequest.
     if (m_worker.joinable())
         m_worker.join();
 }
@@ -180,8 +169,6 @@ void SquawkClient::Queue(Request request)
         if (m_url.empty() || m_queue.size() >= kMaxQueue)
             return;
 
-        // A second plain "give it a code" while the first is still out would
-        // only ask the server the same question twice.
         if (request.kind == SquawkAnswer::Kind::Assign && !request.fresh
             && m_pending.count(request.callsign) != 0)
             return;
@@ -220,9 +207,6 @@ std::string SquawkClient::LastError(const std::string& callsign) const
     return it == m_errors.end() ? std::string() : it->second;
 }
 
-// Requests go out one at a time, ahead of any poll; the list of codes is
-// polled on its own clock, and again straight after every request, since a
-// request is exactly what changes it.
 void SquawkClient::Run()
 {
     using Clock = std::chrono::steady_clock;
@@ -366,17 +350,10 @@ SquawkAnswer SquawkClient::Send(const Request& request, const std::string& url, 
     return answer;
 }
 
-// A poll that fails leaves the last list standing: the codes it listed are no
-// less taken because one answer did not come back.
 void SquawkClient::Poll(const std::string& url, const std::string& key, const std::string& position)
 {
-    // The server has nobody to check without a position, and would turn the
-    // poll down every time; before the controller logs in there is nothing to
-    // ask about anyway.
     if (position.empty())
     {
-        // Said once, not once every poll. Log() takes the lock itself, so it
-        // is called after this one has gone.
         bool tell = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);

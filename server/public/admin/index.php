@@ -1,37 +1,15 @@
 <?php
-// Админ-страница: the user_names table - who may log in to the plug-in's panel,
-// and under what name - behind a login of its own, so a person can be handed
-// the list of controllers without the database password, the codes or anything
-// else in the database.
-//
-// Logins are config.php's 'admins', login => password_hash(). Taking a login
-// out, or changing its hash, ends every session it has open on the next click.
-//
-// Controllers register themselves on public/register/. Here a name can be
-// corrected (the one shown - LOGIN still checks the registered parts), a
-// password reset so the CID can register again, or a controller taken out.
-//
-// A controller who has forgotten their password sets a new one themselves on
-// the registration page, by the name they registered under - nothing here is
-// needed for that. "Сбросить" is for the other case: a CID taken by the wrong
-// person, or a registration to be undone, where the password has to go and the
-// CID register again from scratch.
-//
-// The service has no SSL, so the password goes over plain http like everything
-// else does: hand out passwords that are used nowhere else.
 
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/page.php';
 
-const ADMIN_IDLE_SEC = 2 * 3600;        // a session nobody has clicked in for this long is over
-const ADMIN_LOGIN_TRIES_PER_MIN = 5;    // per address, right or wrong
+const ADMIN_IDLE_SEC = 2 * 3600;
+const ADMIN_LOGIN_TRIES_PER_MIN = 5;
 
 html_page_setup('squawk admin');
 
-// login => hash, keeping only entries that really are password_hash() output -
-// a plain password pasted in by mistake lets nobody in.
 function admin_accounts(): array
 {
     $accounts = [];
@@ -44,8 +22,6 @@ function admin_accounts(): array
     return $accounts;
 }
 
-// Who is logged in: a login config.php still has, with the same hash it had at
-// login, clicked in recently enough. Null otherwise.
 function current_admin(array $accounts): ?string
 {
     $login = $_SESSION['login'] ?? null;
@@ -115,7 +91,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             flash('error', 'Имя кириллицей: «Фамилия Имя Отчество» полностью или «Фамилия И.О.» / «Фамилия И.».');
             back_to_page();
         }
-        // MySQL counts 1 for a new row, 2 for a changed one, 0 for the same name again.
         $st = db()->prepare(
             'INSERT INTO user_names (cid, name) VALUES (?, ?)
              ON DUPLICATE KEY UPDATE name = VALUES(name)'
@@ -128,8 +103,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         back_to_page();
     }
 
-    // The password goes, the row and its name stay: the CID can register on
-    // the site again, and until then LOGIN turns it away.
     if ($action === 'reset') {
         $st = db()->prepare('UPDATE user_names SET password_hash = NULL WHERE cid = ? AND password_hash IS NOT NULL');
         $st->execute([$cid]);

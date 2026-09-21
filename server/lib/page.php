@@ -1,20 +1,7 @@
 <?php
-// Shared by the site's two HTML pages - the admin page and registration: the
-// headers and error page, escaping, the one-shot message after a POST, the
-// header with the logos, and the look.
-//
-// The look follows the FIR's own site, vatsim-petersburg.com, so the two feel
-// like one: Ubuntu Sans, a light blue-grey page, a white pill navbar and
-// rounded white cards over it, one navy accent (#3D5376), everything rounded.
-// The names of the colours below are that site's own, copied so that a change
-// there is easy to follow here.
-//
-// The API endpoints answer in JSON and use none of this.
 
 declare(strict_types=1);
 
-// An HTML page, not the API's JSON: a failure here is a page too. $logTag
-// starts the page's lines in the site's error log.
 function html_page_setup(string $logTag): void
 {
     set_exception_handler(function (Throwable $e) use ($logTag): void {
@@ -44,15 +31,11 @@ function client_ip(): string
     return (string)($_SERVER['REMOTE_ADDR'] ?? '');
 }
 
-// A rate-limit bucket for the caller's address, under a prefix of the page's own.
 function client_bucket(string $prefix): string
 {
     return $prefix . substr(hash('sha256', client_ip()), 0, 32);
 }
 
-// A session of the page's own, with a CSRF token in it. Lax rather than
-// Strict, so the page opened from a link in a messenger still finds the
-// session; the forms carry the token either way.
 function start_page_session(string $name): void
 {
     session_name($name);
@@ -73,7 +56,6 @@ function flash(string $kind, string $text): void
     $_SESSION['flash'] = [$kind, $text];
 }
 
-// The message a POST left, once.
 function take_flash(): ?array
 {
     $flash = $_SESSION['flash'] ?? null;
@@ -81,16 +63,12 @@ function take_flash(): ?array
     return is_array($flash) ? $flash : null;
 }
 
-// After every POST, back to a plain GET of the page, so a reload never sends
-// the form again. $query keeps the view the form was sent from - "?reset".
 function back_to_page(string $query = ''): void
 {
     header('Location: ' . $_SERVER['SCRIPT_NAME'] . $query, true, 303);
     exit;
 }
 
-// Ubuntu Sans, the face the FIR's site is set in. If the fonts do not load,
-// the page falls back to the system sans and reads the same.
 function page_fonts(): string
 {
     return '<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -99,10 +77,6 @@ function page_fonts(): string
         . 'family=Ubuntu+Sans:ital,wght@0,300..700;1,300..700&amp;display=swap">';
 }
 
-// The two logos side by side - AZIMUT x ULLL FIR - drawn here rather than
-// served as files: AZIMUT's ring over a half-disc with the word beside it, and
-// the FIR's airliner in a dashed square beside "ULLL FIR" / "VATSIM". Both are
-// drawn in currentColor, so the header sets the one colour.
 function brand_logo(): string
 {
     return '<div class="brand" aria-label="AZIMUT x ULLL FIR">'
@@ -121,16 +95,12 @@ function brand_logo(): string
         . '</div>';
 }
 
-// The floating white pill both pages open with: the logos on the left, and
-// whatever the page puts on the right - a link across to the other page, or
-// the admin's "Выйти".
 function page_header(string $right = ''): string
 {
     return '<header class="nav">' . brand_logo()
         . '<div class="nav-right">' . $right . '</div></header>';
 }
 
-// The line under the page, the way the FIR's site closes its own.
 function page_footer(): string
 {
     return '<footer class="foot">'
@@ -139,10 +109,6 @@ function page_footer(): string
         . '</footer>';
 }
 
-// The look both pages share. The custom properties, their names and their
-// values are the FIR's site's own (its ThemeProvider), so what is written here
-// is only how this site's own pieces - fields, cards, tables - are built out
-// of them.
 function page_css(): string
 {
     return <<<'CSS'
@@ -182,7 +148,6 @@ function page_css(): string
     }
     .sub { font-size: 18px; line-height: 24px; color: var(--text-secondary); margin: 0 0 28px; }
 
-    /* The pill at the top, and the line at the bottom. */
     .nav {
         display: flex; align-items: center; justify-content: space-between; gap: 12px 20px;
         flex-wrap: wrap; min-height: 72px; padding: 12px 16px 12px 28px; margin: 0 0 32px;
@@ -202,7 +167,6 @@ function page_css(): string
     }
     .foot a { color: var(--text-secondary); }
 
-    /* Cards, fields, buttons. */
     .card {
         background: var(--background-page); border-radius: var(--radius-m);
         padding: 32px; margin-bottom: 24px; box-shadow: var(--shadow-m);
@@ -254,7 +218,6 @@ function page_css(): string
     .nav-link:hover { background: var(--background-section-light); color: var(--text-accent); text-decoration: none; }
     .hint { color: var(--text-secondary); font-size: 14px; line-height: 20px; margin: 16px 0 0; }
 
-    /* The message a POST leaves behind. */
     .flash {
         border-radius: var(--radius-s); padding: 14px 22px; margin-bottom: 24px;
         font-size: 16px; line-height: 22px;
@@ -262,7 +225,6 @@ function page_css(): string
     .flash.ok { background: rgba(0,212,0,.10); color: var(--text-primary); box-shadow: inset 0 0 0 1px rgba(0,216,26,.35); }
     .flash.error { background: rgba(179,93,64,.10); color: var(--text-error); box-shadow: inset 0 0 0 1px rgba(179,93,64,.35); }
 
-    /* Lists. */
     .table-wrap { overflow-x: auto; margin: 0 -8px; padding: 0 8px; }
     table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 15px; }
     th {

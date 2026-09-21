@@ -9,8 +9,6 @@ namespace
 {
     const UINT_PTR kSubclassId = 1;
 
-    // The key that ends the box, handed back to the box's own queue: the
-    // callback closes the very window whose message is being handled.
     const UINT kEndMessage = WM_APP + 0x47;
 }
 
@@ -62,7 +60,7 @@ bool TextEntry::Open(HWND view, const RECT& field, HFONT font, const std::wstrin
     SendMessageW(edit, EM_SETLIMITTEXT, (WPARAM)maxChars, 0);
     SendMessageW(edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(5, 5));
     if (password)
-        SendMessageW(edit, EM_SETPASSWORDCHAR, (WPARAM)0x25CF, 0);   // "●"
+        SendMessageW(edit, EM_SETPASSWORDCHAR, (WPARAM)0x25CF, 0);
     const int length = GetWindowTextLengthW(edit);
     SendMessageW(edit, EM_SETSEL, (WPARAM)length, (LPARAM)length);
 
@@ -101,10 +99,8 @@ void TextEntry::Close()
     if (edit == NULL)
         return;
 
-    // The subclass goes first, so nothing the window says while it is being
-    // destroyed reaches back in here.
     RemoveWindowSubclass(edit, Proc, kSubclassId);
-    SetWindowTextW(edit, L"");   // a password does not wait in freed memory for the heap to reuse it
+    SetWindowTextW(edit, L"");
     DestroyWindow(edit);
 }
 
@@ -121,7 +117,6 @@ LRESULT CALLBACK TextEntry::Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT
         }
         break;
 
-    // The characters those keys make, which an edit box answers with a beep.
     case WM_CHAR:
         if (wp == L'\r' || wp == L'\t' || wp == 0x1B)
             return 0;
@@ -130,8 +125,6 @@ LRESULT CALLBACK TextEntry::Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT
     case kEndMessage:
         if (self->m_edit == hwnd && self->m_onEnd)
         {
-            // A copy: the callback may close this box and open the next, which
-            // replaces m_onEnd while it runs.
             std::function<void(End)> onEnd = self->m_onEnd;
             onEnd(wp == 0 ? End::Submit : (wp == 1 ? End::Next : End::Cancel));
         }

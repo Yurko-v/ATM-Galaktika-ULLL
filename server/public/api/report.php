@@ -1,12 +1,4 @@
 <?php
-// POST {"callsign": "AFL123", "code": "0761", "position": "ULLL_APP"}
-//
-// A code a controller typed into EuroScope by hand rather than taking one from
-// the server. It is recorded against the aircraft so the pool knows it is
-// gone - unless another aircraft already holds it, which is the clash this
-// whole service exists to prevent, and is reported back as one.
-//
-// 200 {"status": "ok" | "ignored"} | 409 {"error": "conflict", "holder": "..."}
 
 declare(strict_types=1);
 
@@ -25,7 +17,6 @@ if ($callsign === null || $position === null || $code === null) {
 
 $cid = require_caller($position);
 
-// 2000, 7000, emergencies and the like belong to nobody.
 if (in_array($code, app_config()['reserved'], true)) {
     json_out(200, ['status' => 'ignored']);
 }

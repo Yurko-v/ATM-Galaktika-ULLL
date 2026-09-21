@@ -7,13 +7,8 @@
 
 namespace
 {
-    // aviationweather.gov's international SIGMET feed. It is the only public
-    // source that publishes the areas as coordinates rather than as the raw
-    // "WI N5230 E03000 - ..." text, which is what makes them drawable at all.
     const char* kFeedUrl = "https://aviationweather.gov/api/data/isigmet?format=json";
 
-    // A few hundred reports of a couple of kilobytes each; the cap is there to
-    // bound a runaway response, not to trim a normal one.
     const size_t kMaxBytes = 4 * 1024 * 1024;
     const DWORD  kTimeoutMs = 10000;
 
@@ -23,12 +18,6 @@ namespace
         return s;
     }
 
-    // Reads one list of {lat, lon} objects into a ring on the report, dropping
-    // the ring if what comes out is too small to be a shape.
-    //
-    // A coordinate is checked rather than trusted: the feed does publish null
-    // inside an otherwise good list, and a null read as zero would put a
-    // vertex in the Gulf of Guinea and drag the whole area over the map.
     void AppendRing(const Json::Value& list, Sigmet& s)
     {
         if (list.kind != Json::Value::Kind::Array)
@@ -56,9 +45,6 @@ namespace
             ring.push_back(p);
         }
 
-        // The feed closes its rings by repeating the first point. Drawing it
-        // again over the closing segment costs nothing but leaves a doubled
-        // vertex in the outline hit-boxes, so it is dropped here.
         if (s.closed && ring.size() >= 2 &&
             ring.front().m_Latitude == ring.back().m_Latitude &&
             ring.front().m_Longitude == ring.back().m_Longitude)
@@ -127,8 +113,6 @@ bool ParseSigmets(const std::string& body,
         if (const Json::Value* v = entry.Find(L"firId"))
             s.firId = ToUpper(v->AsString());
 
-        // The filter is on the FIR the report belongs to, which is what a
-        // controller thinks in - not on the issuing station.
         if (!firFilter.empty() &&
             std::find(firFilter.begin(), firFilter.end(), s.firId) == firFilter.end())
             continue;
@@ -149,8 +133,6 @@ bool ParseSigmets(const std::string& body,
             s.chng = v->AsString();
         if (const Json::Value* v = entry.Find(L"rawSigmet"))
             s.raw = v->AsString();
-        // Both are published as null as often as not, and null is not the
-        // surface - it is a report that gave no level, which reads as "—".
         if (const Json::Value* v = entry.Find(L"base"))
             s.baseFt = (int)v->AsInt(-1);
         if (const Json::Value* v = entry.Find(L"top"))
@@ -160,9 +142,6 @@ bool ParseSigmets(const std::string& body,
         if (const Json::Value* v = entry.Find(L"validTimeTo"))
             s.validTo = v->AsInt(0);
 
-        // "AREA" and "AREAS" are closed rings - one, and several. Anything
-        // else the feed publishes with a geometry (a line of weather, say) is
-        // drawn open, as it is meant to be.
         std::wstring geom = L"AREA";
         if (const Json::Value* v = entry.Find(L"geom"))
             geom = ToUpper(v->AsString(L"AREA"));
@@ -172,9 +151,6 @@ bool ParseSigmets(const std::string& body,
         if (coords == NULL || coords->kind != Json::Value::Kind::Array)
             continue;
 
-        // One report, one list of points - except for "AREAS", where the list
-        // holds a list per area. Both shapes are read the same way by looking
-        // at what the first element actually is.
         if (!coords->arr.empty() && coords->arr.front().kind == Json::Value::Kind::Array)
         {
             for (const Json::Value& ring : coords->arr)
@@ -186,7 +162,7 @@ bool ParseSigmets(const std::string& body,
         }
 
         if (s.rings.empty())
-            continue;   // nothing to draw and nothing to click on
+            continue;
 
         out.push_back(std::move(s));
     }

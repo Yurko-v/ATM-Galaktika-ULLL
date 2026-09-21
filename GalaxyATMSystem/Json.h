@@ -4,27 +4,14 @@
 #include <map>
 #include <vector>
 
-// -----------------------------------------------------------------------------
-// Minimal recursive-descent JSON reader: objects, arrays, strings with the
-// usual escapes, and bare literals (numbers / true / false / null) kept as
-// their raw text so a numeric value still comes out usable.
-//
-// A literal is a kind of its own rather than another string, so that a field
-// published as null reads as absent instead of as the four letters "null" -
-// the SIGMET feed publishes null for half its optional fields.
-//
-// It lived inside Config.cpp for the config file alone, which needed no arrays;
-// the SIGMET feed is an array of objects, so it moved here and grew one.
-// Header-only - it is a few hundred lines of parsing with no state of its own.
-// -----------------------------------------------------------------------------
 namespace Json
 {
     struct Value
     {
         enum class Kind { Null, String, Literal, Object, Array } kind = Kind::Null;
-        std::wstring str;                     // Kind::String and Kind::Literal
-        std::map<std::wstring, Value> obj;    // Kind::Object
-        std::vector<Value> arr;               // Kind::Array
+        std::wstring str;
+        std::map<std::wstring, Value> obj;
+        std::vector<Value> arr;
 
         const Value* Find(const wchar_t* key) const
         {
@@ -32,23 +19,16 @@ namespace Json
             return it == obj.end() ? nullptr : &it->second;
         }
 
-        // Quoted strings only: null, true and a number are values, not text,
-        // and handing back their spelling would put "null" on the screen.
         std::wstring AsString(const std::wstring& fallback = L"") const
         {
             return kind == Kind::String ? str : fallback;
         }
 
-        // The raw text of either kind. For a value a human may reasonably
-        // write bare or quoted - a QNH of 1013 in the config file - where
-        // "null" coming back as four letters is not a risk worth guarding.
         std::wstring AsText(const std::wstring& fallback = L"") const
         {
             return (kind == Kind::String || kind == Kind::Literal) ? str : fallback;
         }
 
-        // These read the raw text of either kind - a quoted "1013" is as
-        // usable a number as a bare one, and the config file writes both.
         double AsNumber(double fallback = 0.0) const
         {
             if (!HasText())
@@ -100,10 +80,6 @@ namespace Json
             const std::wstring& m_s;
             size_t m_pos = 0;
 
-            // A hand-written recursive descent needs a floor of its own: the
-            // SIGMET feed comes off the network, and nothing but this stops a
-            // malformed reply that is nothing but brackets from running the
-            // stack out.
             static const int kMaxDepth = 40;
 
             void SkipWs()
@@ -128,8 +104,6 @@ namespace Json
                     out.kind = Value::Kind::String;
                     return ParseString(out.str);
                 }
-                // Bare literal (number/true/false/null): keep the raw text so
-                // numeric values still come out usable, but not as a string.
                 size_t start = m_pos;
                 while (m_pos < m_s.size() && m_s[m_pos] != L',' && m_s[m_pos] != L'}' &&
                     m_s[m_pos] != L']' && !iswspace(m_s[m_pos]))
@@ -144,7 +118,7 @@ namespace Json
             bool ParseObject(Value& out, int depth)
             {
                 out.kind = Value::Kind::Object;
-                m_pos++; // consume '{'
+                m_pos++;
                 SkipWs();
                 if (m_pos < m_s.size() && m_s[m_pos] == L'}')
                 {
@@ -186,7 +160,7 @@ namespace Json
             bool ParseArray(Value& out, int depth)
             {
                 out.kind = Value::Kind::Array;
-                m_pos++; // consume '['
+                m_pos++;
                 SkipWs();
                 if (m_pos < m_s.size() && m_s[m_pos] == L']')
                 {
@@ -217,7 +191,7 @@ namespace Json
 
             bool ParseString(std::wstring& out)
             {
-                m_pos++; // consume opening quote
+                m_pos++;
                 out.clear();
                 while (m_pos < m_s.size() && m_s[m_pos] != L'"')
                 {
@@ -255,7 +229,7 @@ namespace Json
                 }
                 if (m_pos >= m_s.size())
                     return false;
-                m_pos++; // consume closing quote
+                m_pos++;
                 return true;
             }
         };
@@ -271,8 +245,6 @@ namespace Json
         return w;
     }
 
-    // The way back, for the few things that leave the config as bytes: a URL,
-    // or a path handed to something that takes UTF-8.
     inline std::string WideToUtf8(const std::wstring& s)
     {
         if (s.empty())
@@ -288,8 +260,6 @@ namespace Json
         return Detail::Parser(text).Parse(out);
     }
 
-    // Both sources - the config file on disk and the SIGMET feed off the
-    // network - arrive as UTF-8 bytes that may or may not carry a BOM.
     inline bool ParseUtf8(const std::string& raw, Value& out)
     {
         std::string body = raw;

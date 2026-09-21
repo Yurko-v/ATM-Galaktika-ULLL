@@ -12,10 +12,6 @@ namespace
 {
     const double kPi = 3.14159265358979323846;
 
-    // CharUpperBuffW rather than towupper: the CRT's is locale-dependent and
-    // under the default "C" locale it leaves Cyrillic untouched, which would
-    // quietly make every "Запрет" read as an unrecognised type and fall back to
-    // a restricted area. The Win32 one uppercases from the system's own tables.
     std::wstring ToUpper(std::wstring s)
     {
         if (!s.empty())
@@ -38,10 +34,6 @@ namespace
         return fallback;
     }
 
-    // One half of a sector-file coordinate: "N059.48.01.080" / "E030.15.45.000",
-    // and the same thing written with spaces or a leading sign. Returns false on
-    // anything that is not a coordinate at all, so a typo drops its own point
-    // rather than putting a vertex in the Atlantic.
     bool ParseDegreesHalf(const std::wstring& raw, bool& isLat, double& out)
     {
         std::wstring s;
@@ -69,9 +61,6 @@ namespace
         if (s.empty())
             return false;
 
-        // Split on the dots. Two or more parts is the sector-file form
-        // (degrees.minutes.seconds.thousandths); a single part is plain decimal
-        // degrees, where the one dot is the decimal point.
         std::vector<std::wstring> parts;
         std::wstring cur;
         for (wchar_t c : s)
@@ -94,7 +83,6 @@ namespace
 
         if (parts.size() <= 2)
         {
-            // Decimal degrees: put the dot back and read it as one number.
             std::wstring joined = parts[0];
             if (parts.size() == 2)
                 joined += L"." + parts[1];
@@ -109,7 +97,6 @@ namespace
         double sec = _wtof(parts[2].c_str());
         if (parts.size() >= 4 && !parts[3].empty())
         {
-            // Thousandths of a second, as the sector file writes them.
             double frac = _wtof(parts[3].c_str());
             for (size_t i = 0; i < parts[3].size(); i++)
                 frac /= 10.0;
@@ -119,15 +106,11 @@ namespace
         return true;
     }
 
-    // "N059.48.01.080:E030.15.45.000", the two halves separated by a colon,
-    // a comma or a space. The hemisphere letters say which half is which, so
-    // a pair written longitude-first still lands the right way round.
     bool ParsePointString(const std::wstring& raw, EuroScopePlugIn::CPosition& out)
     {
         size_t split = raw.find_first_of(L":,;");
         if (split == std::wstring::npos)
         {
-            // No separator: fall back to the space between the two halves.
             size_t scan = raw.find_first_not_of(L" \t");
             if (scan != std::wstring::npos)
                 split = raw.find_first_of(L" \t", scan);
@@ -155,7 +138,6 @@ namespace
         return true;
     }
 
-    // A point is either [lat, lon] in decimal degrees or a coordinate string.
     bool ParsePoint(const Json::Value& v, EuroScopePlugIn::CPosition& out)
     {
         if (v.kind == Json::Value::Kind::Array)
@@ -176,16 +158,14 @@ namespace
         return false;
     }
 
-    // A circular area, which is what most restricted zones actually are: the
-    // ring is generated here so everything downstream only ever sees a polygon.
     void RingFromCircle(const EuroScopePlugIn::CPosition& centre, double radiusNM,
         std::vector<EuroScopePlugIn::CPosition>& out)
     {
-        const int kSteps = 72;   // every five degrees - smooth at any usable zoom
+        const int kSteps = 72;
         const double kNmPerDegLat = 60.0;
         double cosLat = cos(centre.m_Latitude * kPi / 180.0);
         if (cosLat < 0.01)
-            cosLat = 0.01;   // a zone over the pole would otherwise divide by nothing
+            cosLat = 0.01;
 
         for (int i = 0; i < kSteps; i++)
         {
@@ -215,14 +195,9 @@ namespace
         if (const Json::Value* v = item.Find(L"Note"))
             out.note = v->AsString();
 
-        // Written exactly as TopSky writes it - "1", "AUP:ULR3",
-        // "NOTAM:ULLL:ULD3" - so an area converted out of the package keeps the
-        // switch it came with. Left out, the area is simply always there.
         if (const Json::Value* v = item.Find(L"Activation"))
             out.activation = v->AsText();
 
-        // Where the designator would go, for the areas that carry one: the
-        // centre of gravity is wrong on a horseshoe-shaped area.
         if (const Json::Value* v = item.Find(L"Label"))
         {
             EuroScopePlugIn::CPosition p;
@@ -268,8 +243,6 @@ namespace
             }
         }
 
-        // A ring written closed - first point repeated at the end - would leave
-        // a doubled vertex in the outline and its hit-boxes.
         if (out.ring.size() >= 2
             && out.ring.front().m_Latitude == out.ring.back().m_Latitude
             && out.ring.front().m_Longitude == out.ring.back().m_Longitude)
@@ -287,9 +260,6 @@ namespace
 
 namespace
 {
-    // "AREA:T:ULR100" -> the fields after the key, split on ':'. The last field
-    // of a LABEL is free text and can hold colons of its own, so the split
-    // stops once it has the number of fields the caller asked for.
     std::vector<std::wstring> SplitFields(const std::wstring& line, size_t maxFields)
     {
         std::vector<std::wstring> out;
@@ -328,8 +298,6 @@ bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out)
     Zone current;
     bool have = false;
 
-    // An area ends where the next one begins or the file does, so each is
-    // pushed on the way past rather than as it is read.
     auto flush = [&]()
     {
         if (have && current.ring.size() >= 3)
@@ -360,8 +328,6 @@ bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out)
         if (line.compare(0, 5, L"AREA:") == 0)
         {
             flush();
-            // "AREA:T:ULR100" - the middle field is TopSky's own area type and
-            // is not something this panel distinguishes on.
             std::vector<std::wstring> f = SplitFields(line, 3);
             current.id = (f.size() >= 3) ? Trim(f[2]) : std::wstring();
             have = true;
@@ -369,7 +335,7 @@ bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out)
         }
 
         if (!have)
-            continue;   // CATEGORYDEF and anything else before the first area
+            continue;
 
         if (line.compare(0, 9, L"CATEGORY:") == 0)
         {
@@ -393,7 +359,6 @@ bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out)
         }
         else if (line.compare(0, 6, L"LABEL:") == 0)
         {
-            // "LABEL:N059.20.35.000:E028.13.33.000:ULP3"
             std::vector<std::wstring> f = SplitFields(line, 4);
             if (f.size() >= 4)
             {
@@ -416,9 +381,6 @@ bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out)
         }
         else if (line.compare(0, 7, L"CIRCLE:") == 0)
         {
-            // "CIRCLE:N067.28.00.000:E032.29.00.000:2.7:0.5" - centre, radius
-            // in nautical miles, and the step TopSky draws it at, which is its
-            // business rather than ours.
             std::vector<std::wstring> f = SplitFields(line, 5);
             if (f.size() >= 4)
             {
@@ -440,17 +402,11 @@ bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out)
     return true;
 }
 
-// ---- The airspace use plan ---------------------------------------------------
 namespace
 {
-    // The plan's own limit on a response: a day or two of bookings is a few
-    // tens of kilobytes, so this only bounds a runaway one.
     const size_t kAupMaxBytes = 4 * 1024 * 1024;
     const DWORD  kAupTimeoutMs = 10000;
 
-    // "2026-09-10T10:07:00.000Z" -> seconds since the epoch, UTC. The feed
-    // publishes Zulu throughout, and the panel works in Zulu, so no local time
-    // is involved anywhere in the comparison.
     bool ParseIsoUtc(const std::wstring& s, time_t& out)
     {
         int y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
@@ -535,14 +491,8 @@ bool FetchAup(const std::string& url, std::vector<ZoneBooking>& out)
     return true;
 }
 
-// ---- NOTAMs ------------------------------------------------------------------
-// The other switch an area can hang on, and the one with no feed behind it: no
-// VATSIM service publishes Russian NOTAMs, so what this reads is whatever the
-// config points it at - a URL that speaks the plan's own JSON, or plain ICAO
-// NOTAM text from any source at all, a file included.
 namespace
 {
-    // "2609101800" - the ten digits ICAO writes a NOTAM's B) and C) fields in.
     bool ParseNotamStamp(const std::wstring& s, time_t& out)
     {
         std::wstring d;
@@ -557,7 +507,7 @@ namespace
             return false;
 
         tm t = {};
-        t.tm_year = 100 + _wtoi(d.substr(0, 2).c_str());   // "26" is 2026
+        t.tm_year = 100 + _wtoi(d.substr(0, 2).c_str());
         t.tm_mon = _wtoi(d.substr(2, 2).c_str()) - 1;
         t.tm_mday = _wtoi(d.substr(4, 2).c_str());
         t.tm_hour = _wtoi(d.substr(6, 2).c_str());
@@ -572,8 +522,6 @@ namespace
         return true;
     }
 
-    // The value of an ICAO field: everything from "B)" to the next field marker
-    // or the end of the message.
     std::wstring NotamField(const std::wstring& msg, const wchar_t* key)
     {
         size_t at = msg.find(key);
@@ -592,9 +540,6 @@ namespace
         return Trim(msg.substr(at, end - at));
     }
 
-    // "FL200" / "SFC" / "GND" / "UNL" -> a flight level. A height in feet or
-    // metres is left to the caller's default: the band only feeds a line of text
-    // in the window, and a wrong number there is worse than none.
     bool ParseNotamLevel(const std::wstring& s, int& out)
     {
         std::wstring u = ToUpper(Trim(s));
@@ -618,9 +563,6 @@ namespace
         return false;
     }
 
-    // Every designator in the text: two to four letters followed by one to four
-    // digits, standing as a word of its own - ULD3, ULR100, ULP12. A run with
-    // anything else attached to it is not one.
     void CollectDesignators(const std::wstring& msg, std::vector<std::wstring>& out)
     {
         size_t i = 0;
@@ -652,8 +594,6 @@ namespace
 
 bool ParseNotams(const std::string& body, std::vector<ZoneBooking>& out)
 {
-    // The plan's own shape first: a source that can already speak it needs no
-    // NOTAM decoding at all.
     {
         Json::Value root;
         if (Json::ParseUtf8(body, root) && root.kind == Json::Value::Kind::Object)
@@ -664,10 +604,6 @@ bool ParseNotams(const std::string& body, std::vector<ZoneBooking>& out)
     if (text.empty())
         return false;
 
-    // One message per block, blank lines between them - which is how every
-    // source writes a series of NOTAMs. A source that runs them together is
-    // read as one message, and still books the areas it names for the first
-    // window it carries.
     std::vector<std::wstring> messages;
     std::wstring current;
     size_t pos = 0;
@@ -689,7 +625,7 @@ bool ParseNotams(const std::string& body, std::vector<ZoneBooking>& out)
     if (!current.empty())
         messages.push_back(current);
 
-    const time_t kPermanent = (time_t)2147483647;   // "PERM"
+    const time_t kPermanent = (time_t)2147483647;
 
     bool any = false;
     for (const std::wstring& msg : messages)
@@ -710,8 +646,6 @@ bool ParseNotams(const std::string& body, std::vector<ZoneBooking>& out)
         ParseNotamLevel(NotamField(msg, L"F)"), lower);
         ParseNotamLevel(NotamField(msg, L"G)"), upper);
 
-        // Only the part that says what the NOTAM is about: the header and the
-        // Q line carry codes of their own that read like designators.
         std::wstring subject = NotamField(msg, L"E)");
         if (subject.empty())
             subject = msg;
@@ -748,8 +682,6 @@ bool FetchNotams(const std::string& source, std::vector<ZoneBooking>& out)
     }
     else
     {
-        // A file beside the plug-in, for a position that reads the day's NOTAM
-        // by hand and pastes it in - which beats no NOTAMs at all.
         std::ifstream f(Json::Utf8ToWide(source), std::ios::binary);
         if (!f)
         {
@@ -774,7 +706,6 @@ bool FetchNotams(const std::string& source, std::vector<ZoneBooking>& out)
 
 namespace
 {
-    // The booking for that designator covering nowUtc, if there is one.
     const ZoneBooking* BookingFor(const std::vector<ZoneBooking>* list,
         const std::wstring& id, time_t nowUtc)
     {
@@ -798,20 +729,11 @@ bool ZoneActiveNow(const Zone& zone, const ZoneActivation& what,
     if (booking != NULL)
         *booking = NULL;
 
-    // Nothing said, or "1": the area is simply there, all day every day.
-    if (zone.activation.empty() || zone.activation == L"1")
-        return true;
-
     if (zone.activation.compare(0, 6, L"NOTAM:") == 0)
     {
-        // "NOTAM:ULLL:ULD3", and one area in the package writes its FIR twice.
-        // The designator is the last field either way.
         size_t colon = zone.activation.find_last_of(L':');
         std::wstring id = ToUpper(zone.activation.substr(colon + 1));
 
-        // No source configured is not the same as a source with nothing to
-        // report: there is nothing to answer with, so the area follows the
-        // config's own mind about areas nobody can answer for.
         if (what.notams == NULL)
             return what.showNotamWhenUnknown;
 
@@ -823,10 +745,15 @@ bool ZoneActiveNow(const Zone& zone, const ZoneActivation& what,
         return true;
     }
 
-    if (zone.activation.compare(0, 4, L"AUP:") != 0)
-        return true;   // an activation this build does not know - better shown than lost
+    const bool named = (zone.activation.compare(0, 4, L"AUP:") == 0);
 
-    std::wstring id = ToUpper(zone.activation.substr(4));
+    const bool permanent = (zone.activation.empty() || zone.activation == L"1");
+    if (!named && !(permanent && zone.kind == ZoneKind::Restricted))
+        return true;
+
+    std::wstring id = named ? ToUpper(zone.activation.substr(4)) : std::wstring();
+    if (id.empty())
+        id = ToUpper(zone.id);
     if (id.empty())
         return true;
 

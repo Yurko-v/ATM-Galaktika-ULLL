@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""TopSkyAreas.txt -> the plug-in's own zone library, as JSON.
-
-The areas the panel draws come out of the TopSky package that ships with the
-sector file. That is the right source - somebody already keeps it up to date -
-but it is not a source everyone has: a controller running this plug-in without
-TopSky installed had no зоны at all. So the package is converted once, here,
-and the result is shipped with the plug-in as an ordinary config file.
-
-    python tools/topsky_to_zones.py "<...>/TopSkyAreas.txt" config/Zones.ULLL.json
-
-What survives the conversion: the designator, the kind (P/D/R), the published
-limits, the activation as TopSky writes it ("1", "AUP:ULR3", "NOTAM:ULLL:ULD3"),
-the label position and its text, the free text, and the geometry - a ring of
-points, or a circle kept as a centre and a radius rather than expanded into one.
-
-Anything the file says that the panel has no use for is dropped.
-"""
 
 import json
 import re
@@ -25,12 +8,9 @@ KIND = {"P": "P", "D": "D", "R": "R"}
 
 
 def kind_of(category):
-    """"P", or a package's own prefixed form of it - "UHP", "ULR" - by its last letter."""
     c = category.strip().upper()
     return KIND.get(c) or KIND.get(c[-1:], "R")
 
-# "N059.48.59.000" / "E030.17.00.000", and the plain decimal form some packages
-# use. Returns degrees, positive north and east.
 COORD = re.compile(r"^([NSEW])(\d+(?:\.\d+)*)$", re.IGNORECASE)
 
 
@@ -52,7 +32,6 @@ def parse_half(text):
 
 
 def parse_point(a, b):
-    """Two halves in either order -> (lat, lon), or None."""
     ka, va = parse_half(a)
     kb, vb = parse_half(b)
     if ka is None or kb is None or ka == kb:
@@ -64,7 +43,6 @@ def parse_point(a, b):
 
 
 def level_text(fl):
-    """The way the areas write a level: the ground and the sky by name."""
     if fl <= 0:
         return "GND"
     if fl >= 999:
@@ -79,8 +57,6 @@ def convert(path):
     def flush():
         if cur is None:
             return
-        # A ring of less than three points is not an area; a circle stands on
-        # its own without one.
         if len(cur.get("Points", [])) < 3 and "Circle" not in cur:
             return
         if len(cur.get("Points", [])) < 3:
@@ -100,7 +76,7 @@ def convert(path):
                 continue
 
             if cur is None:
-                continue   # CATEGORYDEF and anything else before the first area
+                continue
 
             if line.startswith("CATEGORY:"):
                 cur["Type"] = kind_of(line[9:])
@@ -137,8 +113,6 @@ def convert(path):
                     except ValueError:
                         radius = 0.0
                     if p and radius > 0:
-                        # Kept as a circle rather than expanded: seventy-two
-                        # points per area would be most of the file.
                         cur["Circle"] = {"Center": [p[0], p[1]], "RadiusNM": round(radius, 3)}
             else:
                 f = line.replace(",", " ").split()
@@ -158,8 +132,6 @@ def main():
 
     areas = convert(sys.argv[1])
 
-    # One area per line: the file is read by people as well as by the plug-in,
-    # and a pretty-printer would put every coordinate on a line of its own.
     body = ",\n".join("    " + json.dumps(a, ensure_ascii=False) for a in areas)
     out = '{\n  "Items": [\n%s\n  ]\n}\n' % body
 

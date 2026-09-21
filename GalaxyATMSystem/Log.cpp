@@ -6,7 +6,6 @@
 #include <map>
 #include <mutex>
 
-// Set in dllmain.cpp - the log goes beside the DLL, as the config does.
 extern HINSTANCE g_hModule;
 
 namespace
@@ -17,12 +16,10 @@ namespace
 
     struct Repeat
     {
-        ULONGLONG writtenTick;   // when this line last went into the file
-        int suppressed;          // copies counted since then
+        ULONGLONG writtenTick;
+        int suppressed;
     };
 
-    // Function-local, so a line logged while another translation unit's
-    // statics are still being set up still finds them made.
     std::mutex& Mutex()
     {
         static std::mutex m;
@@ -41,7 +38,7 @@ namespace
         return p;
     }
 
-    bool g_opened = false;   // under Mutex()
+    bool g_opened = false;
 
     std::wstring LogPathBesideDll()
     {

@@ -4,24 +4,10 @@
 #include <map>
 #include <string>
 
-// -----------------------------------------------------------------------------
-// The plugin's two languages.
-//
-// Every user-visible string is still written in Russian at the place it is
-// drawn - that is the wording the display is specified in - and passed through
-// Tr() on the way out. Tr() hands back the English wording while ".eng" is in
-// force and the Russian one after ".rus", so nothing but the table below has to
-// know that a second language exists.
-//
-// A string the table does not carry comes back unchanged. That is on purpose:
-// callsigns, position names, ATIS text and everything else that arrives from
-// the network or the config is not ours to translate.
-// -----------------------------------------------------------------------------
 namespace Lang
 {
     enum class Id { Ru = 0, En = 1 };
 
-    // Process-wide, not per-screen: one command switches every display at once.
     inline Id& State()
     {
         static Id id = Id::Ru;
@@ -32,19 +18,14 @@ namespace Lang
     inline void Set(Id id)    { State() = id; }
     inline bool English()     { return State() == Id::En; }
 
-    // ".eng" / ".rus" and the ASR write this spelling.
     inline const char* Name(Id id) { return id == Id::En ? "eng" : "rus"; }
 
     struct Pair { const wchar_t* ru; const wchar_t* en; };
 
-    // Russian -> English. Only what the plugin itself puts on the screen: panel
-    // captions and labels, tooltips, window titles, the sector list's headings
-    // and the messages the dot commands print.
     inline const Pair* Table(size_t& count)
     {
         static const Pair kTable[] =
         {
-            // ---- Авторизация / вход -----------------------------------------
             { L"Авторизация",                    L"Authorisation" },
             { L"Вход в систему КСА",             L"KSA system login" },
             { L"Введите данные, указанные при регистрации:",
@@ -80,7 +61,6 @@ namespace Lang
             { L"Закрыть",                        L"Close" },
             { L"Перетащите окно",                L"Drag the window" },
 
-            // Why a LOGIN did not go through.
             { L"Неверные фамилия, имя, отчество или пароль",
                                                  L"Wrong surname, name, patronymic or password" },
             { L"Вы не зарегистрированы в системе КСА",
@@ -100,7 +80,6 @@ namespace Lang
             { L"Ошибка сервера (",               L"Server error (" },
             { L"Нет подключения к VATSIM",       L"Not connected to VATSIM" },
 
-            // ---- Панель ------------------------------------------------------
             { L"Развернуть панель",              L"Expand the panel" },
             { L"Свернуть панель",                L"Collapse the panel" },
             { L"Таймер",                         L"Timer" },
@@ -181,7 +160,6 @@ namespace Lang
             { L"ЛКМ - текст АТИС, .atis - скрыть",
                                                  L"LMB - ATIS text, .atis - hide" },
 
-            // ---- Меню --------------------------------------------------------
             { L"Настройки",                      L"Settings" },
             { L"Вид",                            L"View" },
             { L"Сенсоры",                        L"Sensors" },
@@ -195,7 +173,6 @@ namespace Lang
             { L"Архив",                          L"Archive" },
             { L"Справка",                        L"Help" },
 
-            // ---- Линейка -----------------------------------------------------
             { L"Линейка",                        L"Ruler" },
             { L"ПКМ/2ЛКМ - удалить линейку",     L"RMB / double LMB - delete the ruler" },
             { L"ЛКМ - конец линейки, ПКМ - отмена",
@@ -207,7 +184,6 @@ namespace Lang
             { L"боковая кнопка 1",               L"side button 1" },
             { L"боковая кнопка 2",               L"side button 2" },
 
-            // ---- Формуляр ----------------------------------------------------
             { L"Формуляр",                       L"Tag" },
             { L"Тянуть ЛКМ - курс, ПКМ - меню курса TopSky",
                                                  L"Drag LMB - heading, RMB - TopSky heading menu" },
@@ -217,7 +193,6 @@ namespace Lang
             { L" - по позиции",                  L" - by position" },
             { L", подключение: ",                L", connection: " },
 
-            // ---- Список РЦ ---------------------------------------------------
             { L"Список РЦ",                      L"Sector list" },
             { L"Шрифт Inter не установлен",      L"The Inter font is not installed" },
             { L"Перетащите список РЦ",           L"Drag the sector list" },
@@ -235,7 +210,6 @@ namespace Lang
                                                  L"How many minutes before it enters the sector a flight is shown" },
             { L"Сколько минут держать рейс после выхода из сектора",
                                                  L"How many minutes a flight is kept after it leaves the sector" },
-            // Its column headings, and the two cells that carry a word of their own.
             { L"КФ",                             L"CNF" },
             { L"Рейс",                           L"Flight" },
             { L"ВРЛ",                            L"SSR" },
@@ -247,12 +221,10 @@ namespace Lang
             { L"ПВО",                            L"AD" },
             { L"Крд",                            L"Coord" },
 
-            // ---- Зоны и сигметы ----------------------------------------------
             { L"Запретная зона",                 L"Prohibited area" },
             { L"Опасная зона",                   L"Danger area" },
             { L"Зона ограничения полётов",       L"Restricted area" },
 
-            // ---- Что печатают точечные команды --------------------------------
             { L"Сигметы",                        L"SIGMETs" },
             { L"Зоны",                           L"Areas" },
             { L"Конфигурация",                   L"Configuration" },
@@ -298,10 +270,6 @@ namespace Lang
         return (it == index.end()) ? ru : it->second;
     }
 
-    // The narrow overload is for the tooltips, which EuroScope takes as C
-    // strings. The table is kept in one place, so the text is widened, looked
-    // up and narrowed again - once per string, then remembered. std::map keeps
-    // its nodes where they are, so the pointer handed out stays good.
     inline const char* Lookup(const char* ru)
     {
         if (!English() || ru == NULL || *ru == '\0')
@@ -312,7 +280,6 @@ namespace Lang
         if (hit != cache.end())
             return hit->second.c_str();
 
-        // The source is compiled with /utf-8, so a narrow literal is UTF-8.
         int wn = MultiByteToWideChar(CP_UTF8, 0, ru, -1, NULL, 0);
         std::wstring wide(wn > 1 ? wn - 1 : 0, L'\0');
         if (wn > 1)
@@ -320,7 +287,7 @@ namespace Lang
 
         const wchar_t* en = Lookup(wide.c_str());
         if (en == wide.c_str())
-            return ru;   // not in the table - leave it exactly as it was written
+            return ru;
 
         int an = WideCharToMultiByte(CP_UTF8, 0, en, -1, NULL, 0, NULL, NULL);
         std::string narrow(an > 1 ? an - 1 : 0, '\0');
@@ -331,7 +298,6 @@ namespace Lang
     }
 }
 
-// What every call site uses. Russian in, the current language out.
 inline const wchar_t* Tr(const wchar_t* ru)      { return Lang::Lookup(ru); }
 inline const char*    Tr(const char* ru)         { return Lang::Lookup(ru); }
 inline std::wstring   Tr(const std::wstring& ru) { return Lang::Lookup(ru.c_str()); }

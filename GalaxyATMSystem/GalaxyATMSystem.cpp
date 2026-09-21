@@ -20,11 +20,8 @@
 #include "Lang.h"
 #include "Geometry.h"
 
-// AlphaBlend, for the see-through backing of the сигмет info window.
 #pragma comment(lib, "msimg32.lib")
 
-// GDI+, for the target vectors: a GDI pen only comes in whole pixels.
-// objidl.h first - WIN32_LEAN_AND_MEAN leaves out the COM types gdiplus.h uses.
 #include <objidl.h>
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
@@ -44,7 +41,6 @@ namespace
     const int kFontSizeSteps[] = { 8, 9, 10, 11, 12, 13, 14, 16 };
     const int kFontSizeStepsCount = sizeof(kFontSizeSteps) / sizeof(kFontSizeSteps[0]);
 
-    // EuroScope hands out ANSI (Windows code page) C strings; widen for GDI.
     std::wstring Widen(const char* s)
     {
         if (s == NULL || *s == '\0')
@@ -56,7 +52,6 @@ namespace
         return w;
     }
 
-    // The other direction, for handing a value back to EuroScope's own popups.
     std::string Narrow(const std::wstring& w)
     {
         if (w.empty())
@@ -73,16 +68,10 @@ namespace
         return v;
     }
 
-    // Per-second refresh: EuroScope only repaints on radar/mouse activity, which
-    // is too coarse for a live clock, so each screen drives its own 1s timer.
     std::map<UINT_PTR, CGalaxyATMSystemRadarScreen*> g_timers;
 
-    // A second, much faster tick used only to sample the side mouse buttons -
-    // see CGalaxyATMSystemRadarScreen::PollRulerButton. Kept apart from the clock
-    // timer above so watching the button does not drag a repaint along with it.
     std::map<UINT_PTR, CGalaxyATMSystemRadarScreen*> g_pollTimers;
 
-    // Hijack / radio failure / general emergency.
     bool IsDistressSquawk(const char* squawk)
     {
         return strcmp(squawk, "7500") == 0
@@ -90,8 +79,6 @@ namespace
             || strcmp(squawk, "7700") == 0;
     }
 
-    // Codes any number of aircraft may carry at once, so a repeat of one is not
-    // a duplicate assignment.
     bool IsConspicuitySquawk(const char* squawk)
     {
         return strcmp(squawk, "0000") == 0
@@ -100,12 +87,6 @@ namespace
             || strcmp(squawk, "7000") == 0;
     }
 
-    // ---- БЛОК 4 unit formatting -------------------------------------------
-    // Shared by the tag items (OnGetTagItem, narrow strings) and the БЛОК 3
-    // extrapolation vector's predicted-level label (wide, via Widen()).
-
-    // A level in feet, in hundreds of feet, and always with "F" - "F247",
-    // "F025" - below the transition level as well: the system writes no "A".
     std::string FormatLevelFeet(int altFt)
     {
         char buf[16];
@@ -113,8 +94,6 @@ namespace
         return buf;
     }
 
-    // A level in metres: prefix "C", value in TENS of metres and four digits
-    // wide - "C0624" is 6240 m. Not the feet convention with metres substituted.
     std::string FormatLevelMetres(int altFt)
     {
         char buf[16];
@@ -136,12 +115,6 @@ namespace
         }
     }
 
-    // Prefixed with the unit and always signed, the way the reference tags
-    // read it: "fm+2800" / "fm-2800" for ft/min, "ms+14.2" for m/s. Level
-    // flight - the same +-100 fpm band the extrapolation-vector trend arrow
-    // uses - reports nothing rather than "fm+0"; a noise-free "0" isn't a real
-    // reading, and the field is simply meant to be blank until it climbs or
-    // descends.
     std::string FormatVerticalSpeedUnit(int fpm, VsUnit unit)
     {
         if (fpm > -100 && fpm < 100)
@@ -155,8 +128,6 @@ namespace
         return buf;
     }
 
-    // Zero-padded to three digits, so a taxiing aircraft reads "Kt007" and the
-    // column keeps its width instead of jumping about as the speed changes.
     std::string FormatGroundSpeedUnit(int kt, GsUnit unit)
     {
         char buf[16];
@@ -177,9 +148,6 @@ namespace
         return buf;
     }
 
-    // Finds a "Q####" (hPa) or "A####" (inHg) group, bounded by spaces/ends so
-    // it can't match digits from an unrelated part of the report. Returns the
-    // pressure in hPa, or -1 when the report carries neither.
     int ParseQnhHpa(const std::string& metar)
     {
         for (size_t i = 0; i + 4 < metar.size(); i++)
@@ -190,9 +158,6 @@ namespace
             if (!isdigit((unsigned char)metar[i + 1]) || !isdigit((unsigned char)metar[i + 2]) ||
                 !isdigit((unsigned char)metar[i + 3]) || !isdigit((unsigned char)metar[i + 4]))
                 continue;
-            // Bounded by non-alphanumerics rather than spaces specifically, so
-            // a group at the very end of a fetched report - where the next
-            // character is a newline - still parses.
             bool boundaryOk = (i == 0) || !isalnum((unsigned char)metar[i - 1]);
             bool endOk = (i + 5 >= metar.size()) || !isdigit((unsigned char)metar[i + 5]);
             if (!boundaryOk || !endOk)
@@ -205,10 +170,6 @@ namespace
         return -1;
     }
 
-    // A rectangle filled at a given opacity. GDI has no alpha of its own, so
-    // this is the standard one-pixel source stretched under AlphaBlend - the
-    // only thing on the panel that needs msimg32, and worth it for a window
-    // the radar has to stay readable through.
     void FillAlpha(HDC hDC, const RECT& r, COLORREF color, BYTE alpha)
     {
         HDC mem = CreateCompatibleDC(hDC);
@@ -236,8 +197,6 @@ namespace
         DeleteDC(mem);
     }
 
-    // Shift held, and held in EuroScope: GetAsyncKeyState is machine-wide, and
-    // a Shift typed into the browser in front must not arm the areas behind it.
     bool ShiftHeldInEuroScope()
     {
         HWND fg = GetForegroundWindow();
@@ -247,11 +206,6 @@ namespace
         return pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     }
 
-    // GDI+ surface for the target vectors, which are Theme::VectorWidth thick -
-    // a fractional width no GDI pen can draw - antialiased so the half pixel
-    // actually shows. The ruler borrows it with its own width. Keep one in a
-    // scope of its own: plain GDI drawing on the same DC should wait until it
-    // is gone.
     struct VectorCanvas
     {
         Gdiplus::Graphics g;
@@ -275,20 +229,19 @@ namespace
             g.DrawEllipse(&pen, (Gdiplus::REAL)(cx - r), (Gdiplus::REAL)(cy - r),
                 (Gdiplus::REAL)(r * 2), (Gdiplus::REAL)(r * 2));
         }
+
+        void Polyline(const std::vector<POINT>& pts)
+        {
+            if (pts.size() < 2)
+                return;
+            std::vector<Gdiplus::PointF> shape;
+            shape.reserve(pts.size());
+            for (const POINT& p : pts)
+                shape.push_back(Gdiplus::PointF((Gdiplus::REAL)p.x, (Gdiplus::REAL)p.y));
+            g.DrawLines(&pen, shape.data(), (INT)shape.size());
+        }
     };
 
-    // The same surface for the areas the overlay draws - сигметы and the
-    // запретные зоны. They are the one thing on the display made of edges at
-    // every angle at once, and a GDI pen leaves every one of those as a
-    // staircase; drawn here they come out smooth, and the wash under an area
-    // gets the same treatment, so the edge of the fill no longer shows its own
-    // steps out from under a hairline outline.
-    //
-    // Everything is trimmed to the radar area before it is handed over. An
-    // area can project hundreds of screens wide - see the notes in Geom - so
-    // the rasteriser never sees a coordinate that far out, and GDI+ is clipped
-    // to the same rectangle on top of that, so nothing reaches the display
-    // around it.
     struct AreaCanvas
     {
         Gdiplus::Graphics g;
@@ -314,14 +267,6 @@ namespace
             pen.SetColor(Gdiplus::Color(GetRValue(color), GetGValue(color), GetBValue(color)));
         }
 
-        // The outline. Built as a path rather than drawn edge by edge so that
-        // the corners are joined once - two antialiased lines meeting at a
-        // point blend over each other and leave a dark bead on every vertex.
-        //
-        // A ring trimmed by the display is several runs, and the figure is
-        // broken wherever one edge was cut short of where the next one starts:
-        // that is the difference between a corner that is really there and the
-        // two ends of a shape that leaves the screen and comes back.
         void Ring(const std::vector<POINT>& pts, bool closed)
         {
             if (pts.size() < 2)
@@ -354,10 +299,6 @@ namespace
             g.DrawPath(&pen, &path);
         }
 
-        // The wash inside the area, blended over whatever is under it. The
-        // ring is trimmed to a rectangle a little wider than the display, so
-        // the only place the fill ends is where the area really ends and not
-        // along a seam at the edge of the radar picture.
         void Wash(const std::vector<POINT>& pts, COLORREF color, BYTE alpha)
         {
             if (alpha == 0)
@@ -381,10 +322,115 @@ namespace
         }
     };
 
-    // Draws a polyline through pts, leaving a small gap centred on every
-    // interior point (but not at the very first/last point) - this is what
-    // makes a minute-vector read as a row of per-minute tick marks instead of
-    // one solid line.
+    bool ClipLeaderToText(POINT from, POINT aim, const std::vector<RECT>& rows, double gapPx,
+        POINT& start, POINT& end)
+    {
+        const double dx = (double)aim.x - from.x, dy = (double)aim.y - from.y;
+
+        double tHit = 2.0;
+        for (const RECT& row : rows)
+        {
+            if (row.right <= row.left || row.bottom <= row.top)
+                continue;
+
+            double tEnter = 0.0, tExit = 1.0;
+            bool hit = true;
+            const double clipP[4] = { -dx, dx, -dy, dy };
+            const double clipQ[4] = { (double)from.x - row.left, (double)row.right - from.x,
+                                      (double)from.y - row.top,  (double)row.bottom - from.y };
+            for (int i = 0; i < 4 && hit; i++)
+            {
+                if (fabs(clipP[i]) < 1e-9)
+                {
+                    if (clipQ[i] < 0.0)
+                        hit = false;
+                    continue;
+                }
+                const double t = clipQ[i] / clipP[i];
+                if (clipP[i] < 0.0) { if (t > tEnter) tEnter = t; }
+                else                { if (t < tExit)  tExit = t; }
+            }
+            if (hit && tEnter <= tExit && tEnter < tHit)
+                tHit = tEnter;
+        }
+
+        const double len = sqrt(dx * dx + dy * dy);
+        const double tGap = (len > 1e-9) ? gapPx / len : 1.0;
+        if (tHit > 1.0 || (tHit - tGap) * len <= 2.0)
+            return false;
+
+        start.x = (LONG)lround(from.x + dx * tGap);
+        start.y = (LONG)lround(from.y + dy * tGap);
+        end.x = (LONG)lround(from.x + dx * tHit);
+        end.y = (LONG)lround(from.y + dy * tHit);
+        return true;
+    }
+
+    double GeoBearingDeg(const EuroScopePlugIn::CPosition& from,
+        const EuroScopePlugIn::CPosition& to)
+    {
+        const double lat1 = from.m_Latitude * M_PI / 180.0;
+        const double lat2 = to.m_Latitude * M_PI / 180.0;
+        const double dLon = (to.m_Longitude - from.m_Longitude) * M_PI / 180.0;
+        const double y = sin(dLon) * cos(lat2);
+        const double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+        const double deg = atan2(y, x) * 180.0 / M_PI;
+        return (deg < 0.0) ? deg + 360.0 : deg;
+    }
+
+    const double kRamThresholdNm = 5.0;
+    const int kRamMinGsKt = 50;
+
+    double CrossTrackNm(const EuroScopePlugIn::CPosition& a,
+        const EuroScopePlugIn::CPosition& b, const EuroScopePlugIn::CPosition& p)
+    {
+        const double R = 3440.065;
+        EuroScopePlugIn::CPosition from = a, to = b, at = p;
+
+        const double legNm = from.DistanceTo(to);
+        const double d13 = from.DistanceTo(at);
+        if (legNm < 0.1)
+            return d13;
+
+        const double turn = fmod(GeoBearingDeg(from, at) - GeoBearingDeg(from, to) + 540.0,
+            360.0) - 180.0;
+        if (fabs(turn) > 90.0)
+            return d13;
+
+        const double across = fabs(asin(sin(d13 / R) * sin(turn * M_PI / 180.0)) * R);
+        double ratio = cos(d13 / R) / cos(across / R);
+        ratio = max(-1.0, min(1.0, ratio));
+        if (acos(ratio) * R > legNm)
+            return to.DistanceTo(at);
+
+        return across;
+    }
+
+    bool RouteAdherenceAlert(EuroScopePlugIn::CFlightPlan fp, EuroScopePlugIn::CRadarTarget rt)
+    {
+        if (!fp.IsValid() || !rt.IsValid())
+            return false;
+        EuroScopePlugIn::CRadarTargetPositionData pos = rt.GetPosition();
+        if (!pos.IsValid() || rt.GetGS() < kRamMinGsKt)
+            return false;
+
+        EuroScopePlugIn::CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+        if (cad.GetAssignedHeading() > 0)
+            return false;
+        const int cfl = cad.GetClearedAltitude();
+        if (cfl == 1 || cfl == 2)
+            return false;
+
+        EuroScopePlugIn::CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
+        const int points = route.GetPointsNumber();
+        const int leg = route.GetPointsCalculatedIndex();
+        if (points < 2 || leg < 0 || leg + 1 >= points)
+            return false;
+
+        return CrossTrackNm(route.GetPointPosition(leg), route.GetPointPosition(leg + 1),
+            pos.GetPosition()) > kRamThresholdNm;
+    }
+
     void DrawGappedPolyline(HDC hDC, const std::vector<POINT>& pts, COLORREF color, double gapPx)
     {
         if (pts.size() < 2)
@@ -398,10 +444,6 @@ namespace
             if (len < 1e-6)
                 continue;
 
-            // Half the gap off each interior end, in fractional pixels - the
-            // canvas takes them as they are, so the gap comes out the same
-            // whichever way the segment runs - and never more than 45% of a
-            // short segment, so none collapses to nothing.
             double cut = min(gapPx / 2.0, len * 0.45) / len;
             double t0 = (i > 0) ? cut : 0.0;
             double t1 = (i + 2 < pts.size()) ? 1.0 - cut : 1.0;
@@ -410,123 +452,79 @@ namespace
     }
 }
 
-// ---- Layout metrics (kept in one place so every block's height is exact) ---
 namespace L
 {
-    // Horizontal geometry is the reference export's own
-    // ("KSA UVD GALAKTIKA.svg", a 212 px wide artboard) to the pixel. The
-    // vertical numbers are that layout with its dead space squeezed out: at the
-    // export's own spacing the panel is 1074 px tall, which overflows a normal
-    // radar area and takes the aerodrome block off the bottom of the screen.
-    // Row heights, caption bands and inter-block gaps are therefore tightened
-    // (and then nudged back up a little to fit the enlarged font - see
-    // Theme::FontSet) while keeping the same order, proportions and alignment.
-    // Everything is expressed relative to the thing it sits in, so a block can
-    // be moved without re-deriving its neighbours.
-    const int CAPTION_H = 17;   // caption band; the text sits centred in it
-    const int CAP_GAP   = 5;    // caption band bottom -> group box top
-    const int BLOCK_GAP = 6;    // group box bottom -> next block's caption band
-    const int BLOCK_GAP_WIDE = 8;   // the reference gives "Ед. изм." and the aerodrome block a little more
-    const int NOCAP_GAP = 16;   // group box bottom -> next group box, no caption between
+    const int CAPTION_H = 17;
+    const int CAP_GAP   = 5;
+    const int BLOCK_GAP = 6;
+    const int BLOCK_GAP_WIDE = 8;
+    const int NOCAP_GAP = 16;
 
-    // Header: clock over date/mode. The clock is the one oversized item on the
-    // panel (Theme::FontSet::Clock) - it is what the header is read for - and
-    // it, the date under it and the Таймер block below are spaced apart rather
-    // than stacked tight, so the three times are never mistaken for each other.
     const int CLOCK_H   = 24;
     const int DATE_H    = 18;
 
-    // The three spaces in the header - above the clock, clock to date, date to
-    // the Таймер caption - are meant to read as one and the same gap, and the
-    // only way they stay that way is to derive all three from it. What shows is
-    // never the gap constant on its own: each row is taller than the text
-    // centred inside it, so half of that leading falls either side of the gap
-    // and has to come back out of it. Retune the spacing here, in one number.
-    const int HDR_SPACE  = 16;                    // the white space actually seen
-    const int CLOCK_LEAD = (CLOCK_H - 20) / 2;    // Clock font is 20 px
-    const int DATE_LEAD  = (DATE_H - 14) / 2;     // Body font is 14 px
-    const int CAP_LEAD   = (CAPTION_H - 14) / 2;  // the caption band under it
+    const int HDR_SPACE  = 16;
+    const int CLOCK_LEAD = (CLOCK_H - 20) / 2;
+    const int DATE_LEAD  = (DATE_H - 14) / 2;
+    const int CAP_LEAD   = (CAPTION_H - 14) / 2;
 
     const int HDR_TOP   = HDR_SPACE - CLOCK_LEAD;
     const int CLOCK_GAP = HDR_SPACE - CLOCK_LEAD - DATE_LEAD;
-    const int HDR_GAP   = HDR_SPACE - DATE_LEAD - CAP_LEAD;   // header bottom -> "Таймер"
-    const int HEADER_H  = HDR_TOP + CLOCK_H + CLOCK_GAP + DATE_H;       // 68
+    const int HDR_GAP   = HDR_SPACE - DATE_LEAD - CAP_LEAD;
+    const int HEADER_H  = HDR_TOP + CLOCK_H + CLOCK_GAP + DATE_H;
 
-    // Таймер - one short row.
     const int T_PAD = 4, T_ROW = 20;
-    const int TIMER_BOX_H = T_PAD + T_ROW + T_PAD;                      // 28
+    const int TIMER_BOX_H = T_PAD + T_ROW + T_PAD;
 
-    // БЛОК 2 - Пользователь: designation/user, then the role line.
     const int U_TOP = 4, U_ROW = 20, U_GAP = 5, U_BOT = 4;
-    const int USER_BOX_H = U_TOP + U_ROW + U_GAP + U_ROW + U_BOT;       // 53
+    const int USER_BOX_H = U_TOP + U_ROW + U_GAP + U_ROW + U_BOT;
 
-    // БЛОК 3 - Векторы: Д/Э row, then two checkbox rows.
     const int V_TOP = 5, V_ROW = 20, V_GAP1 = 8, V_CHK = 16, V_GAP2 = 6, V_BOT = 6;
-    const int VECTORS_BOX_H = V_TOP + V_ROW + V_GAP1 + V_CHK + V_GAP2 + V_CHK + V_BOT;  // 77
+    const int VECTORS_BOX_H = V_TOP + V_ROW + V_GAP1 + V_CHK + V_GAP2 + V_CHK + V_BOT;
 
-    // ОС - a "Р-р шрифта:" row with its size dropdown over a sunken three-row
-    // list. The row is a dropdown's height (V_ROW) so the picker fits in it.
-    // The list runs on well below its three rows, the reference's own 106 -
-    // about half of it is empty black under "3 строчный".
     const int O_TOP = 4, O_LABEL = V_ROW, O_GAP = 4, O_LIST_H = 106, O_BOT = 4;
-    const int OS_ROW = 16, OS_PITCH = 21, OS_ROW0 = 4;  // inside the list
-    const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;    // 138
+    const int OS_ROW = 16, OS_PITCH = 21, OS_ROW0 = 4;
+    const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;
 
-    // БЛОК 4 - Ед. изм.: four rows of pill selectors.
     const int E_TOP = 4, E_ROW = 16, E_PITCH = 20, E_BOT = 6;
-    const int UNITS_BOX_H = E_TOP + 3 * E_PITCH + E_ROW + E_BOT;        // 86
+    const int UNITS_BOX_H = E_TOP + 3 * E_PITCH + E_ROW + E_BOT;
 
-    // Фильтр высоты: Макс / Мин, then the enable checkbox.
     const int F_TOP = 4, F_ROW = 17, F_GAP1 = 5, F_GAP2 = 9, F_BOT = 4;
-    const int ALTFILTER_BOX_H = F_TOP + F_ROW + F_GAP1 + F_ROW + F_GAP2 + F_ROW + F_BOT; // 73
+    const int ALTFILTER_BOX_H = F_TOP + F_ROW + F_GAP1 + F_ROW + F_GAP2 + F_ROW + F_BOT;
 
-    // Code block (no caption): the ВВ1 source row over the two code readouts.
-    // Unlike the blocks above this one is not a stack of rows - the reference
-    // hangs every part of it at its own offset below the box top, so those
-    // offsets are named here rather than left as bare numbers in DrawBlockCodes.
-    const int C_ROW_H    = 15;  // the ВСЕ / БП chips
-    const int C_CAP_H    = 15;  // "Коды бедствия" / "Двойной код"
-    const int C_FIELD_H  = 16;  // the two readouts
-    const int C_VV_TOP     = 2,  C_VV_H    = 17;   // the "ВВ1" label
-    const int C_ALL_TOP    = 2;                    // "ВСЕ"
-    const int C_BP_TOP     = 19;                   // "БП"
-    const int C_FLT_TOP    = 19, C_FLT_H   = 15;   // the inline entry field, on the БП chip's line
-    const int C_EXTRA_TOP  = 20, C_EXTRA_H = 13;   // the unlabelled checkbox
+    const int C_ROW_H    = 15;
+    const int C_CAP_H    = 15;
+    const int C_FIELD_H  = 16;
+    const int C_VV_TOP     = 2,  C_VV_H    = 17;
+    const int C_ALL_TOP    = 2;
+    const int C_BP_TOP     = 19;
+    const int C_FLT_TOP    = 19, C_FLT_H   = 15;
+    const int C_EXTRA_TOP  = 20, C_EXTRA_H = 13;
     const int C_SLIDER_TOP = 32, C_SLIDER_BOT = 105;
     const int C_DISTRESS_CAP = 36, C_DISTRESS_FIELD = 53;
     const int C_DUP_CAP      = 74, C_DUP_FIELD      = 91;
     const int CODES_BOX_H = 113;
 
-    // БЛОК 5 - Аэродром: ДАВЛ row, then Э/П + АТИС row. The rows run edge to
-    // edge of the box in the reference, with only a hairline above them.
     const int A_TOP = 3, A_ROW = 21, A_GAP = 5, A_BOT = 3;
-    const int AERODROME_BOX_H = A_TOP + A_ROW + A_GAP + A_ROW + A_BOT;  // 53
+    const int AERODROME_BOX_H = A_TOP + A_ROW + A_GAP + A_ROW + A_BOT;
 
-    // Авторизация: the Пользователь block's two rows, and under them the
-    // progress bar while the check runs - only then, so the card is the two
-    // rows alone until LOGIN on the menu bar is pressed.
     const int AU_TOP = 4, AU_ROW = 20, AU_GAP = 5, AU_GAP2 = 8, AU_STATUS = 20, AU_BOT = 6;
-    const int AUTH_BOX_H      = AU_TOP + AU_ROW + AU_GAP + AU_ROW + AU_GAP2 + AU_STATUS + AU_BOT;  // 83, checking
-    const int AUTH_BOX_H_IDLE = AU_TOP + AU_ROW + AU_GAP + AU_ROW + AU_BOT;                        // 55
+    const int AUTH_BOX_H      = AU_TOP + AU_ROW + AU_GAP + AU_ROW + AU_GAP2 + AU_STATUS + AU_BOT;
+    const int AUTH_BOX_H_IDLE = AU_TOP + AU_ROW + AU_GAP + AU_ROW + AU_BOT;
 
-    // The menu bar across the top of the radar. Taller than TopSky's own menu,
-    // which it covers - see CGalaxyATMSystemRadarScreen::MenuBarHeight.
     const int MENU_BAR_H = 28;
 
     const int PANEL_BOT_PAD = 8;
-    const int COLLAPSED_BOT_PAD = 6;   // breathing room under the date when collapsed
+    const int COLLAPSED_BOT_PAD = 6;
 
-    // Height of a whole block: caption band + gap + box.
     inline int Block(int boxH) { return CAPTION_H + CAP_GAP + boxH; }
 }
 
-// ---- DLL exports ------------------------------------------------------------
 CGalaxyATMSystemPlugin* g_plugin = NULL;
 ULONG_PTR g_gdiplusToken = 0;
 
 void __declspec(dllexport) EuroScopePlugInInit(EuroScopePlugIn::CPlugIn** ppPlugInInstance)
 {
-    // Here rather than in DllMain, where GDI+ must not be started.
     Gdiplus::GdiplusStartupInput gdiplusInput;
     const Gdiplus::Status gdiplus = Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusInput, NULL);
     if (gdiplus != Gdiplus::Ok)
@@ -548,9 +546,6 @@ void __declspec(dllexport) EuroScopePlugInExit(void)
     }
 }
 
-// ---- Plugin -----------------------------------------------------------------
-// What reading GalaxyATMSystem.json came to, for the log - 'when' is "load" or
-// ".reload".
 static void LogConfigLoad(const Config& config, const char* when)
 {
     const std::string path = Log::Utf8(config.ConfigPath());
@@ -576,14 +571,9 @@ CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     m_config.Load(g_hModule);
     LogConfigLoad(m_config, "load");
 
-    // Config's placeholders until the first real METAR for our airport
-    // arrives (see OnNewMetarReceived).
     m_qnhMmHg = m_config.QnhMmHg();
     m_qnhHpa = m_config.QnhHpa();
 
-    // БЛОК 4's effect on "формуляры сопровождения": four tag items a
-    // controller can drop into their tag layout, each formatted per the
-    // currently selected unit for its category.
     RegisterTagItemType("ULLL Altitude", TAG_ITEM_ALTITUDE);
     RegisterTagItemType("ULLL Vertical Speed", TAG_ITEM_VERTICAL_SPEED);
     RegisterTagItemType("ULLL Ground Speed", TAG_ITEM_GROUND_SPEED);
@@ -591,8 +581,6 @@ CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     RegisterTagItemType("ULLL APW", TAG_ITEM_APW);
     RegisterTagItemType("ULLL Callsign", TAG_ITEM_CALLSIGN);
 
-    // Squawks from the shared server: the column for the Departure list, a
-    // click that takes a code, and a menu with the rest.
     RegisterTagItemType("ULLL Squawk", TAG_ITEM_SQUAWK);
     RegisterTagItemType("ULLL Squawk set", TAG_ITEM_SQUAWK_SET);
     RegisterTagItemFunction("ULLL Squawk assign", TAG_FUNC_SQUAWK_ASSIGN);
@@ -613,8 +601,6 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
 {
     m_squawk.Stop();
 
-    // Joined rather than detached: the DLL can be unloaded right after this,
-    // and the workers still touch this object.
     if (m_metarFetch.joinable())
         m_metarFetch.join();
     if (m_sigmetFetch.joinable())
@@ -630,13 +616,9 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
     if (m_notamFetch.joinable())
         m_notamFetch.join();
 
-    // The tag face was loaded out of this DLL's own resources; hand it back
-    // before the image goes.
     Theme::ReleaseEuroScopeFace();
 }
 
-// The ICAO code the config names, with anything that cannot be part of one
-// stripped out - it goes into a URL, and it is typed by hand.
 std::string CGalaxyATMSystemPlugin::AirportIcao() const
 {
     std::string icao;
@@ -668,23 +650,11 @@ std::shared_ptr<const std::vector<ZoneBooking>> CGalaxyATMSystemPlugin::AupBooki
     return m_aup;
 }
 
-// The plan for the day, which is what turns the restricted areas on and off.
-// A failed fetch leaves the last one standing: the areas it booked do not stop
-// being booked because one poll did not come back, and blanking the list would
-// take every one of them off the screen at once.
-//
-// ".reload" re-reads the file and starts the lot over. The зоны come back
-// with it - they are read out of the config rather than fetched - so a change
-// to TopSkyAreas.txt, to "Items" or to the colours is on the screen without
-// leaving the session. The feeds are restarted too, since the URLs they go to
-// are themselves config.
 void CGalaxyATMSystemPlugin::ReloadConfig()
 {
     m_config.Load(g_hModule);
     LogConfigLoad(m_config, ".reload");
 
-    // The placeholders come back with the file, and the live values overwrite
-    // them again on the first report that arrives.
     m_qnhMmHg = m_config.QnhMmHg();
     m_qnhHpa = m_config.QnhHpa();
     m_gotLiveMetar = false;
@@ -697,10 +667,6 @@ void CGalaxyATMSystemPlugin::ReloadConfig()
     ConfigureSquawk();
 }
 
-// The NOTAMs. Same shape as the plan's fetch, and deliberately so: they
-// answer the same question about the same areas, only for the ones the plan
-// does not carry. A source that cannot be read leaves the last good list
-// standing - a NOTAM does not stop being in force because one poll failed.
 void CGalaxyATMSystemPlugin::StartNotamFetch()
 {
     std::string source = m_config.NotamSource();
@@ -735,7 +701,7 @@ void CGalaxyATMSystemPlugin::StartAupFetch()
         return;
 
     if (m_aupFetch.joinable())
-        m_aupFetch.join();   // the previous fetch is long finished - its stages are all timed out
+        m_aupFetch.join();
 
     m_aupFetch = std::thread([this, url]()
         {
@@ -749,9 +715,6 @@ void CGalaxyATMSystemPlugin::StartAupFetch()
         });
 }
 
-// A failed fetch, or an aerodrome with no ATIS station on the air, leaves the
-// last good report standing rather than blanking the letter - the broadcast
-// does not stop being what it was because one poll did not come back.
 void CGalaxyATMSystemPlugin::StartAtisFetch()
 {
     if (!m_config.AtisLive())
@@ -761,12 +724,10 @@ void CGalaxyATMSystemPlugin::StartAtisFetch()
     if (icao.empty())
         return;
 
-    // Polled every few seconds, so the last read may still be coming in: it
-    // is left to finish rather than waited for here, on EuroScope's thread.
     if (m_atisBusy)
         return;
     if (m_atisFetch.joinable())
-        m_atisFetch.join();   // finished - it cleared m_atisBusy last
+        m_atisFetch.join();
 
     m_atisBusy = true;
     m_atisFetch = std::thread([this, icao]()
@@ -784,10 +745,8 @@ void CGalaxyATMSystemPlugin::StartAtisFetch()
 void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
 {
     if (m_identityFetch.joinable())
-        m_identityFetch.join();   // the previous fetch is long finished - its stages are all timed out
+        m_identityFetch.join();
 
-    // What is already known about this callsign is kept: a retry because the
-    // squawk server did not answer has no reason to read the whole feed again.
     VatsimIdentity known;
     {
         std::lock_guard<std::mutex> lock(m_identityMutex);
@@ -804,9 +763,6 @@ void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
             if (found.Empty() && !FetchVatsimIdentity(callsign, found))
                 return;
 
-            // The name entered on the server, once the network has given us a
-            // CID for it to be found by - and asked for again every time, since
-            // it can be entered or put right there at any moment.
             std::wstring name = found.registeredName;
             bool table = found.registeredTable;
             const bool answered = url.empty() || FetchRegisteredName(url, key, callsign, name, table);
@@ -814,8 +770,6 @@ void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
             std::lock_guard<std::mutex> lock(m_identityMutex);
             if (answered)
             {
-                // Taken out of the base: the last answer for this CID had a
-                // name in it, and this one has none.
                 if (table && name.empty() && !m_identity.registeredName.empty() && m_identity.cid == found.cid)
                 {
                     if (!m_accessSuspended)
@@ -832,8 +786,6 @@ void CGalaxyATMSystemPlugin::StartIdentityFetch(const std::string& callsign)
             }
             else if (_stricmp(m_identity.callsign.c_str(), callsign.c_str()) == 0)
             {
-                // No answer: the last one stands - including a name a LOGIN
-                // has brought back while this was out.
                 found.registeredName = m_identity.registeredName;
                 found.registeredTable = m_identity.registeredTable;
             }
@@ -849,14 +801,8 @@ std::wstring CGalaxyATMSystemPlugin::MyUserName() const
         id = m_identity;
     }
 
-    // Only while it is still us: after a change of position the old entry
-    // stands until the feed has been asked about the new callsign.
     if (!id.Empty() && _stricmp(id.callsign.c_str(), MyPosition().c_str()) == 0)
     {
-        // The config's name goes through the same shortening, so it can be
-        // written out in full - which is the only way to give a patronymic.
-        // The server's table after it: what was entered there for everyone,
-        // the config's for one controller's own machine.
         for (const std::wstring& chosen : { m_config.UserName(id.cid), id.registeredName })
         {
             if (chosen.empty())
@@ -880,7 +826,6 @@ std::wstring CGalaxyATMSystemPlugin::MyUserName() const
 
 bool CGalaxyATMSystemPlugin::LiveConnection() const
 {
-    // The same test OnTimer asks the feed by: only a live connection has a CID.
     const int ct = GetConnectionType();
     return (ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !MyPosition().empty();
 }
@@ -902,14 +847,12 @@ bool CGalaxyATMSystemPlugin::TrainingSession() const
 
 namespace
 {
-    // The Вход window's line for a LOGIN the server did not let in - and
-    // whether it was the service that failed rather than what was typed, which
-    // is what opens Bypass.
-    std::wstring LoginMessage(const std::string& error, bool& serverFault)
+    std::wstring LoginMessage(const std::string& error)
     {
-        serverFault = false;
+        if (error == "wrong_cid")
+            return Tr(L"CID не тот, под которым вы в сети VATSIM");
         if (error == "wrong_credentials")
-            return Tr(L"Неверные фамилия, имя, отчество или пароль");
+            return Tr(L"Фамилия, имя или отчество не те, что при регистрации");
         if (error == "not_registered")
             return Tr(L"Вы не зарегистрированы в системе КСА");
         if (error == "rate_limited")
@@ -917,7 +860,6 @@ namespace
         if (error == "bad_request" || error == "bad_json")
             return Tr(L"Сервер не принял запрос - проверьте введённое");
 
-        serverFault = true;
         if (error == "network")
             return Tr(L"Нет связи с сервером");
         if (error == "not_online")
@@ -926,15 +868,14 @@ namespace
             return Tr(L"Сервер не получает данные VATSIM - повторите позже");
         if (error == "no_server")
             return Tr(L"База пользователей недоступна");
-        // A server from before registration, with no login.php.
         if (error == "http_404" || error == "method_not_allowed")
-            return Tr(L"Сервер ещё не поддерживает вход по паролю");
+            return Tr(L"Сервер ещё не поддерживает вход");
         return Tr(L"Ошибка сервера (") + Widen(error.c_str()) + L")";
     }
 }
 
-void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& surname, const std::wstring& firstName,
-    const std::wstring& patronymic, const std::wstring& password)
+void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& cid, const std::wstring& surname,
+    const std::wstring& firstName, const std::wstring& patronymic)
 {
     const std::string position = MyPosition();
     {
@@ -943,28 +884,21 @@ void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& surname, const std::
             return;
         m_loginState = LoginState::Sending;
         m_loginMessage.clear();
-        m_loginServerFault = false;
     }
     if (m_login.joinable())
-        m_login.join();   // the previous attempt is finished - it set its state last
+        m_login.join();
 
     std::string url = m_config.SquawkServerUrl();
     std::string key = m_config.SquawkApiKey();
-    // The password as a copy of its own, not const, so it can be wiped once sent.
-    m_login = std::thread([this, surname, firstName, patronymic, password = std::wstring(password),
-        position, url, key]() mutable
+    m_login = std::thread([this, cid, surname, firstName, patronymic, position, url, key]()
         {
             std::wstring name;
             std::string error;
-            const bool ok = SubmitLogin(url, key, position, surname, firstName, patronymic, password, name, error);
-            if (!password.empty())
-                SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
+            const bool ok = SubmitLogin(url, key, position, cid, surname, firstName, patronymic, name, error);
 
             std::lock_guard<std::mutex> lock(m_identityMutex);
             if (ok)
             {
-                // Straight onto the Пользователь block, without waiting for the
-                // next minute's question to the server.
                 if (!name.empty() && _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0)
                     m_identity.registeredName = name;
                 m_accessSuspended = false;
@@ -974,20 +908,119 @@ void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& surname, const std::
             else
             {
                 m_loginState = LoginState::Failed;
-                m_loginMessage = LoginMessage(error, m_loginServerFault);
+                m_loginMessage = LoginMessage(error);
                 Log::Error("auth", "LOGIN " + position + " refused: " + error);
             }
         });
 }
 
-CGalaxyATMSystemPlugin::LoginState CGalaxyATMSystemPlugin::MyLogin(std::wstring* message, bool* serverFault) const
+CGalaxyATMSystemPlugin::LoginState CGalaxyATMSystemPlugin::MyLogin(std::wstring* message) const
 {
     std::lock_guard<std::mutex> lock(m_identityMutex);
     if (message != NULL)
         *message = m_loginMessage;
-    if (serverFault != NULL)
-        *serverFault = m_loginServerFault;
     return m_loginState;
+}
+
+namespace
+{
+    const char* const kLoginSetting = "GalaxyLogin";
+
+    std::string SettingUtf8(const std::wstring& text)
+    {
+        if (text.empty())
+            return std::string();
+        const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), (int)text.size(),
+            NULL, 0, NULL, NULL);
+        std::string out(n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text.data(), (int)text.size(), &out[0], n, NULL, NULL);
+        return out;
+    }
+
+    std::wstring SettingWide(const std::string& utf8)
+    {
+        if (utf8.empty())
+            return std::wstring();
+        const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), NULL, 0);
+        std::wstring out(n, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), &out[0], n);
+        return out;
+    }
+
+    std::string EncodeSetting(const std::wstring& text)
+    {
+        static const char kHex[] = "0123456789ABCDEF";
+        std::string out;
+        for (char c : SettingUtf8(text))
+        {
+            const unsigned char u = (unsigned char)c;
+            if (u <= 0x20 || u >= 0x7F || c == '%' || c == '|' || c == ':')
+            {
+                out += '%';
+                out += kHex[u >> 4];
+                out += kHex[u & 0xF];
+            }
+            else
+                out += c;
+        }
+        return out;
+    }
+
+    std::wstring DecodeSetting(const std::string& text)
+    {
+        std::string utf8;
+        for (size_t i = 0; i < text.size(); i++)
+        {
+            if (text[i] == '%' && i + 2 < text.size())
+            {
+                const std::string hex = text.substr(i + 1, 2);
+                utf8 += (char)strtoul(hex.c_str(), NULL, 16);
+                i += 2;
+            }
+            else
+                utf8 += text[i];
+        }
+        return SettingWide(utf8);
+    }
+}
+
+const CGalaxyATMSystemPlugin::SavedLogin& CGalaxyATMSystemPlugin::SavedIdentity()
+{
+    if (!m_savedLoginRead)
+    {
+        m_savedLoginRead = true;
+        const char* stored = GetDataFromSettings(kLoginSetting);
+        if (stored != NULL && *stored != '\0')
+        {
+            std::vector<std::string> parts(1);
+            for (const char* p = stored; *p != '\0'; p++)
+            {
+                if (*p == '|')
+                    parts.push_back(std::string());
+                else
+                    parts.back() += *p;
+            }
+            parts.resize(4);
+            m_savedLogin.cid = DecodeSetting(parts[0]);
+            m_savedLogin.surname = DecodeSetting(parts[1]);
+            m_savedLogin.firstName = DecodeSetting(parts[2]);
+            m_savedLogin.patronymic = DecodeSetting(parts[3]);
+            Log::Info("auth", "saved login read from the settings: CID " + Log::Utf8(m_savedLogin.cid)
+                + ", \"" + Log::Utf8(m_savedLogin.surname + L" " + m_savedLogin.firstName
+                    + L" " + m_savedLogin.patronymic) + "\"");
+        }
+    }
+    return m_savedLogin;
+}
+
+void CGalaxyATMSystemPlugin::SaveIdentity(const SavedLogin& id)
+{
+    m_savedLoginRead = true;
+    m_savedLogin = id;
+    SaveDataToSettings(kLoginSetting, "вход в КСА: CID и ФИО, введённые один раз",
+        (EncodeSetting(id.cid) + "|" + EncodeSetting(id.surname) + "|"
+            + EncodeSetting(id.firstName) + "|" + EncodeSetting(id.patronymic)).c_str());
+    Log::Info("auth", "login saved to the settings - it will not be asked for again");
 }
 
 void CGalaxyATMSystemPlugin::ResetLogin()
@@ -997,7 +1030,6 @@ void CGalaxyATMSystemPlugin::ResetLogin()
     {
         m_loginState = LoginState::Idle;
         m_loginMessage.clear();
-        m_loginServerFault = false;
     }
 }
 
@@ -1009,7 +1041,7 @@ std::string CGalaxyATMSystemPlugin::RegisterPageUrl() const
     if (url.empty())
         return url;
 
-    const size_t api = 4;   // "/api"
+    const size_t api = 4;
     if (url.size() > api && _stricmp(url.c_str() + url.size() - api, "/api") == 0)
         url.resize(url.size() - api);
     return url + "/register/";
@@ -1021,18 +1053,13 @@ std::shared_ptr<const std::vector<Sigmet>> CGalaxyATMSystemPlugin::Sigmets() con
     return m_sigmets;
 }
 
-// The whole list is replaced at once, under the lock, by a worker thread. A
-// radar screen that is drawing holds its own reference to the old list for as
-// long as that frame lasts, so nothing is ever pulled out from under it - and
-// a failed fetch leaves the last good list on the screen rather than blanking
-// the overlay until the next attempt succeeds.
 void CGalaxyATMSystemPlugin::StartSigmetFetch()
 {
     if (!m_config.SigmetsEnabled())
         return;
 
     if (m_sigmetFetch.joinable())
-        m_sigmetFetch.join();   // the previous fetch is long finished - its stages are all timed out
+        m_sigmetFetch.join();
 
     std::vector<std::wstring> firs = m_config.SigmetFirs();
     m_sigmetFetch = std::thread([this, firs]()
@@ -1059,8 +1086,6 @@ void CGalaxyATMSystemPlugin::OnNewMetarReceived(const char* sStation, const char
     if (sStation == NULL || sFullMetar == NULL)
         return;
 
-    // Only our own airport matters here; ICAO codes are plain ASCII so a
-    // narrow comparison against the configured (wide) airport is fine.
     char cfgAirport[16] = { 0 };
     WideCharToMultiByte(CP_ACP, 0, m_config.Airport().c_str(), -1, cfgAirport, sizeof(cfgAirport) - 1, NULL, NULL);
     if (_stricmp(sStation, cfgAirport) != 0)
@@ -1070,9 +1095,6 @@ void CGalaxyATMSystemPlugin::OnNewMetarReceived(const char* sStation, const char
     if (hpa <= 0)
         return;
 
-    // EuroScope's own report is authoritative - from here on the fetched one
-    // is ignored, so a sweatbox/simulator session can't be overwritten by live
-    // weather off the internet.
     m_gotLiveMetar = true;
     ApplyQnhHpa(hpa);
 }
@@ -1096,12 +1118,11 @@ void CGalaxyATMSystemPlugin::StartMetarFetch()
         return;
 
     if (m_metarFetch.joinable())
-        m_metarFetch.join();   // the previous fetch is long finished - its stages are all timed out
+        m_metarFetch.join();
 
     m_metarFetch = std::thread([this, station]()
         {
             std::string body;
-            // A METAR is a single short line; anything bigger isn't one.
             if (!Net::HttpGet("https://metar.vatsim.net/metar.php?id=" + station, body, 4096))
                 return;
             int hpa = ParseQnhHpa(body);
@@ -1114,9 +1135,6 @@ void CGalaxyATMSystemPlugin::StartMetarFetch()
 
 void CGalaxyATMSystemPlugin::OnTimer(int Counter)
 {
-    // "Список РЦ" is set in Inter, which Windows does not come with. Said on
-    // the first tick rather than in the constructor, so the message window is
-    // there to take it.
     if (!m_fontChecked)
     {
         m_fontChecked = true;
@@ -1131,18 +1149,8 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
         }
     }
 
-    // The position the squawk server knows us by - it has no key to go on, only
-    // whether this callsign is really controlling on the network right now, so
-    // the worker thread has to be told when we log in or change position.
-    // Off the network, or connected as an observer, it gets no position at
-    // all - and with none it asks the server nothing.
     m_squawk.SetPosition(SquawkReady(false) ? MyPosition() : "");
 
-    // Our CID and name live only in the datafeed, and only while we are really
-    // on the network. A new callsign is asked about straight away, and then
-    // again every minute: the feed until it lists us, and the squawk server's
-    // name table for as long as we are on - so a name entered or put right
-    // there is on the Пользователь block within a minute, not after a reconnect.
     int ct = GetConnectionType();
     std::string position = MyPosition();
     if ((ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !position.empty())
@@ -1151,31 +1159,20 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
             StartIdentityFetch(position);
     }
 
-    // Then, and every tick: a code the server has just handed out is what a
-    // controller is waiting to read out to the pilot.
     ApplySquawkAnswers();
 
-    // SIGMETs are re-fetched whatever the METAR is doing: they come and go on
-    // their own schedule, and a report that has been cancelled has to leave
-    // the screen as surely as a new one has to arrive on it.
     int sigmetPeriod = max(60, m_config.SigmetRefreshMinutes() * 60);
     if (Counter > 0 && Counter % sigmetPeriod == 0)
         StartSigmetFetch();
 
-    // The ATIS letter changes with every new report, and a stale one on the
-    // strip is worse than none - it is polled on its own, shorter clock.
     int atisPeriod = max(15, m_config.AtisRefreshSeconds());
     if (Counter > 0 && Counter % atisPeriod == 0)
         StartAtisFetch();
 
-    // The plan is republished during the day, and a booking added an hour ago
-    // has to reach the screen well before it starts.
     int aupPeriod = max(60, m_config.AupRefreshMinutes() * 60);
     if (Counter > 0 && Counter % aupPeriod == 0)
         StartAupFetch();
 
-    // Slower than the plan by default: a NOTAM is published hours before it
-    // starts, where a booking can be added to the plan for the same hour.
     int notamPeriod = max(60, m_config.NotamRefreshMinutes() * 60);
     if (Counter > 0 && Counter % notamPeriod == 0)
         StartNotamFetch();
@@ -1187,9 +1184,6 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
     if (hpa > 0)
         ApplyQnhHpa(hpa);
 
-    // Re-fetch every minute for as long as EuroScope hasn't delivered a METAR
-    // of its own, so the readout follows a new report as soon as it is out
-    // rather than sitting at its startup value.
     if (Counter > 0 && Counter % 60 == 0)
         StartMetarFetch();
 }
@@ -1218,12 +1212,6 @@ int CGalaxyATMSystemPlugin::TransitionLevelFL() const
     return (hpa < 960) ? 70 : (hpa < 996) ? 60 : 50;
 }
 
-// ---- APW ------------------------------------------------------------------
-// Which areas are up, and the band each of them takes, worked out on the clock
-// - not per tag. It is the same question UpdateZoneActivity answers for the
-// overlay and it is answered the same way, so what warns is exactly what is
-// drawn: the plan's bookings, the NOTAMs when a source is configured, and the
-// permanent areas always.
 void CGalaxyATMSystemPlugin::RefreshApwZones()
 {
     const ULONGLONG now = GetTickCount64();
@@ -1291,23 +1279,13 @@ const ApwResult& CGalaxyATMSystemPlugin::ApwFor(CRadarTarget& target)
 
     ApwTrack track;
     track.pos = pos.GetPosition();
-    // The track over the ground rather than a reported heading: it is what the
-    // вектор экстраполяции is drawn along, and the warning must agree with the
-    // line the controller is looking at.
     track.trackDeg = target.GetTrackHeading();
     track.gsKt = target.GetGS();
     track.vsFpm = target.GetVerticalSpeed();
 
-    // The areas are published the way the AIP writes them - a floor on the
-    // ground or on QNH, a ceiling as a flight level - so the level handed over
-    // is the one the tags themselves show: QNH below the transition level and
-    // the standard-pressure level above it.
     const bool belowTL = pos.GetFlightLevel() / 100 < TransitionLevelFL();
     track.altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
 
-    // Where it is going, for the areas that are published not to apply to the
-    // traffic of an aerodrome inside them. An uncorrelated track has no plan
-    // to read and is warned about like anyone else.
     CFlightPlan fp = target.GetCorrelatedFlightPlan();
     if (fp.IsValid())
     {
@@ -1318,9 +1296,6 @@ const ApwResult& CGalaxyATMSystemPlugin::ApwFor(CRadarTarget& target)
     entry.result = ApwCheck(m_config.Zones(), m_apwZones, track, cfg);
     entry.tick = now;
 
-    // The cache is per callsign and a session sees a great many of them, so
-    // whatever has not been asked about for a minute is dropped. Done here
-    // rather than on a timer: this is the only thing that fills it.
     if (m_apwCache.size() > 256)
     {
         for (auto it = m_apwCache.begin(); it != m_apwCache.end(); )
@@ -1343,22 +1318,10 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
     *pColorCode = EuroScopePlugIn::TAG_COLOR_DEFAULT;
     sItemString[0] = '\0';
 
-    // ФС "Р-р шрифта". EuroScope hands in the size it would draw the item at
-    // and takes back whatever is left there, so the choice is applied as a
-    // scale of that: 12 leaves it as EuroScope set it, 16 is a third larger.
-    // The squawk columns are the Departure list's, not a формуляр's.
     if (pFontSize != NULL && *pFontSize > 0.0
         && ItemCode != TAG_ITEM_SQUAWK && ItemCode != TAG_ITEM_SQUAWK_SET)
         *pFontSize *= m_tagFontSize / 12.0;
 
-    // Фильтр высоты applies to every item this plugin contributes: outside the
-    // От/До band the tag item simply stays blank.
-    //
-    // Except the APW. It is a safety net, and a safety net that a display
-    // filter can switch off is not one: an aircraft the controller has filtered
-    // out of their own band still infringes the airspace it flies into. And
-    // except the squawk, which lives in the Departure list, on aircraft still
-    // on the ground and well below any band.
     if (ItemCode != TAG_ITEM_APW && ItemCode != TAG_ITEM_SQUAWK && RadarTarget.IsValid())
     {
         CRadarTargetPositionData filterPos = RadarTarget.GetPosition();
@@ -1370,8 +1333,6 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
     {
     case TAG_ITEM_CALLSIGN:
     {
-        // The flight plan's callsign where there is one; an uncorrelated
-        // target still has the one its transponder reports.
         const char* callsign = FlightPlan.IsValid() ? FlightPlan.GetCallsign()
             : RadarTarget.IsValid() ? RadarTarget.GetCallsign() : NULL;
         if (callsign == NULL)
@@ -1386,9 +1347,6 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
         CRadarTargetPositionData pos = RadarTarget.GetPosition();
         if (!pos.IsValid())
             return;
-        // GetFlightLevel() is the standard-pressure level that decides which
-        // side of the TL we are on; GetPressureAltitude() is the QNH altitude
-        // reported once we are below it - with "F" all the same.
         bool belowTL = pos.GetFlightLevel() / 100 < TransitionLevelFL();
         int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
         strcpy_s(sItemString, 16, FormatAltitudeUnit(altFt, m_unitAlt).c_str());
@@ -1422,19 +1380,13 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
 
         const ApwResult& apw = ApwFor(RadarTarget);
         if (apw.level == ApwLevel::None)
-            return;   // blank, which is what an item that is not warning must be
+            return;
 
-        // The word first and always in the same place, so that a row of tags
-        // is read down the same column; the designator only when the config
-        // asks for it, and only as much of it as the item can carry.
         std::wstring text = L"APW";
         if (m_config.Apw().showZone && !apw.zoneId.empty())
             text += L" " + apw.zoneId;
         strcpy_s(sItemString, 16, Narrow(text.substr(0, 15)).c_str());
 
-        // Severity by colour, which is how every system of this kind says it:
-        // red for airspace it is already in, amber for airspace it is about to
-        // be in and still has time to be turned away from.
         *pColorCode = EuroScopePlugIn::TAG_COLOR_RGB_DEFINED;
         *pRGB = (apw.level == ApwLevel::Inside) ? Theme::ApwInside : Theme::ApwPredicted;
         break;
@@ -1446,9 +1398,6 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
 
         std::string callsign = FlightPlan.GetCallsign();
 
-        // While the server is being asked, and when it has said no, the column
-        // says so in words rather than with a code: every colour a code can
-        // take has a meaning of its own, and neither of these is one of them.
         if (m_squawk.Enabled() && m_squawk.IsPending(callsign))
         {
             strcpy_s(sItemString, 16, "....");
@@ -1472,9 +1421,6 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
     }
     case TAG_ITEM_SQUAWK_SET:
     {
-        // The formular's half of the column's yellow: what the transponder is
-        // showing, when it is not what was assigned. A matching code, or no
-        // code assigned at all, needs no second look and leaves it blank.
         if (!FlightPlan.IsValid() || !RadarTarget.IsValid())
             return;
 
@@ -1493,15 +1439,8 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
     }
 }
 
-// ---- Squawks ----------------------------------------------------------------
-// The column ("ULLL Squawk") goes into the Departure list with one of the two
-// functions on its click: "ULLL Squawk assign" takes a code straight away,
-// "ULLL Squawk menu" opens the menu with the rest.
 void CGalaxyATMSystemPlugin::ConfigureSquawk()
 {
-    // With Squawk.Debug on, everything the client does is appended to
-    // squawk-debug.log beside the plug-in - the worker thread has nowhere else
-    // to say what the server answered.
     std::wstring log;
     if (m_config.SquawkDebug())
     {
@@ -1517,10 +1456,6 @@ void CGalaxyATMSystemPlugin::ConfigureSquawk()
         m_config.SquawkPollSeconds(), log);
 }
 
-// Everything that goes into EuroScope's own windows - popup lists, popup edits
-// and the message channel - is written in ASCII: EuroScope draws them with a
-// western charset, and Cyrillic handed to it comes out as "Âûäàòü êîä". The
-// plugin's own panel draws its text itself and stays in Russian.
 void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::string& text)
 {
     if (!m_config.SquawkDebug())
@@ -1536,10 +1471,6 @@ void CGalaxyATMSystemPlugin::SquawkMessage(const std::string& text)
     Log::Warn("squawk", text);
 }
 
-// Codes are a controller's to hand out. An observer is connected to the same
-// network and sees every flight plan change, but has no position to give a
-// code from - the servers say so (IsController, facility 0), and "_OBS" is
-// checked too, since some clients log observers on with a facility set.
 static bool OnControllerPosition(const CController& me)
 {
     if (!me.IsValid() || !me.IsController() || me.GetFacility() < 1)
@@ -1560,8 +1491,6 @@ bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
     }
     else
     {
-        // A sweatbox spends the same pool the live network does, so it is let
-        // in only on purpose - Squawk.AllowSweatbox, for trying the thing out.
         int connection = GetConnectionType();
         bool live = (connection == CONNECTION_TYPE_DIRECT || connection == CONNECTION_TYPE_VIA_PROXY);
         bool sim = TrainingSession();
@@ -1604,10 +1533,6 @@ std::string CGalaxyATMSystemPlugin::AssignedSquawk(const CFlightPlan& fp) const
     return assigned != NULL ? assigned : "";
 }
 
-// The order is the order of what is wrong: nothing assigned; the wrong code
-// set - whatever mode the transponder is in; the right code, but no mode C.
-// An aircraft with no radar target shows no code at all, which is not the
-// code assigned either.
 COLORREF CGalaxyATMSystemPlugin::SquawkColor(const CFlightPlan& fp, CRadarTarget rt,
     const std::string& assigned) const
 {
@@ -1643,8 +1568,6 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
                 + (answer.byUser ? "" : " (automatic)") + " failed - " + answer.error
                 + (answer.holder.empty() ? "" : ", held by " + answer.holder));
 
-            // A report made on the controller's behalf fails quietly: the
-            // column turns red, and nobody asked for a message.
             if (!answer.byUser)
                 continue;
 
@@ -1688,9 +1611,6 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
             continue;
         }
 
-        // EuroScope refuses an amendment it does not consider ours to make -
-        // most often because the aircraft is not assumed. Saying so beats a
-        // code that silently never appears in the column.
         m_squawkSetByUs[answer.callsign] = answer.code;
         if (!fp.GetControllerAssignedData().SetSquawk(answer.code.c_str()))
         {
@@ -1703,9 +1623,6 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
     }
 }
 
-// One request for a code, with the two things that would otherwise drop it
-// without a word said: nothing to ask on behalf of, and a client that quietly
-// discards a request with no position on it.
 void CGalaxyATMSystemPlugin::RequestSquawk(const std::string& callsign, bool fresh)
 {
     if (!SquawkReady(true))
@@ -1723,8 +1640,6 @@ void CGalaxyATMSystemPlugin::RequestSquawk(const std::string& callsign, bool fre
     m_squawk.Assign(callsign, position, fresh, true);
 }
 
-// The column's clicks and the menu they open. Reached from both OnFunctionCall
-// overrides - see the note on CGalaxyATMSystemPlugin::OnFunctionCall.
 void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sItemString,
     RECT Area, const char* source)
 {
@@ -1734,7 +1649,6 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
     if (!mine)
         return;
 
-    // One click can arrive down both routes; act on it once.
     ULONGLONG now = GetTickCount64();
     if (FunctionId == m_lastSquawkFn && now - m_lastSquawkTick < 300)
         return;
@@ -1753,8 +1667,6 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
     case TAG_FUNC_SQUAWK_ASSIGN:
     case TAG_FUNC_SQUAWK_MENU:
     {
-        // A click in a list row or on a tag makes that aircraft the selected
-        // one before the function is called.
         CFlightPlan fp = FlightPlanSelectASEL();
         if (!fp.IsValid())
         {
@@ -1816,8 +1728,6 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
         if (!fp.IsValid())
             return;
 
-        // Set on the plan whatever the controller chose, and reported, so a
-        // clash with another aircraft is said out loud.
         m_squawkSetByUs[fp.GetCallsign()] = code;
         fp.GetControllerAssignedData().SetSquawk(code.c_str());
         if (SquawkReady(false))
@@ -1835,10 +1745,6 @@ void CGalaxyATMSystemPlugin::OnFunctionCall(int FunctionId, const char* sItemStr
     HandleSquawkFunction(FunctionId, sItemString, Area, "plugin");
 }
 
-// A code set on a flight plan by anything but this plugin's own answer: typed
-// in by hand, or given by a controller who has no plugin. Every position that
-// sees the change reports it, which the server takes as often as it comes -
-// the same code for the same aircraft is simply "ok".
 void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPlan FlightPlan, int DataType)
 {
     if (DataType != CTR_DATA_TYPE_SQUAWK || !FlightPlan.IsValid())
@@ -1867,7 +1773,6 @@ void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPla
     m_squawk.Report(callsign, code, MyPosition(), false);
 }
 
-// ---- Radar screen -----------------------------------------------------------
 CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 {
     m_panelArea = { 0, 0, 0, 0 };
@@ -1887,8 +1792,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 
     m_authState = AuthState::LoggedOut;
     m_authStartTick = 0;
-    m_authFailed = false;
-    m_authBypassed = false;
+    m_autoLoginTried = false;
 
     m_timerRunning = false;
     m_timerStartTick = 0;
@@ -1897,7 +1801,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_vecDistEnabled = false;
     m_vecDistKm = 10;
     m_vecTimeEnabled = true;
-    m_vecTimeMin = 3;
+    m_vecTimeMin = 2;
     m_vecByPlan = false;
     m_vecShowLevel = false;
 
@@ -1909,7 +1813,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rulerFont = NULL;
     m_rulerFontSource = NULL;
 
-    // The sector's own "Galaxy CTR" tag: three lines, with the speed on the last.
     m_osLines = 3;
     m_osSpeed = true;
     m_osFontFieldRect = { 0, 0, 0, 0 };
@@ -1933,8 +1836,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_vvDragging = false;
     m_vvSliderRect = { 0, 0, 0, 0 };
 
-    // БЛОК 4 units live on the plugin (see GalaxyATMSystem.h) - defaulted there.
-
     m_atisLetterOpen = true;
     m_atisLetterArea = { 0, 0, 0, 0 };
 
@@ -1944,9 +1845,9 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rcScroll = 0;
     m_rcScrollMine = 0;
     m_rcPageRows[0] = m_rcPageRows[1] = 6;
-    m_rcSortKey = 1;   // Рейс
+    m_rcSortKey = 1;
     m_rcSortAsc = true;
-    m_rcScale = 40;   // two fifths of "rc.svg"
+    m_rcScale = 40;
     m_rcResizing = false;
     m_rcResizeGrab = 0;
     m_rcFont = NULL;
@@ -1977,9 +1878,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_sigmetInfoHeld = false;
     m_sigmetInfoWait = 0;
 
-    // The config says whether the zones start up shown; ".zones" and the ASR
-    // take it from there. Read off the plugin rather than through Plugin(),
-    // which is GetPlugIn() and is not wired up until after this constructor.
     m_zonesVisible = (g_plugin != NULL) ? g_plugin->GetConfig().ZonesEnabled() : true;
     m_zoneInfoIndex = -1;
     m_zoneInfoAt = { 0, 0 };
@@ -1987,7 +1885,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_zoneInfoWait = 0;
     m_areaShiftDown = false;
 
-    m_rulerButton = VK_XBUTTON2;   // the forward thumb button by default
+    m_rulerButton = VK_XBUTTON2;
     m_rulerButtonDown = false;
     m_rulerPressPending = false;
     m_rulerArmed = false;
@@ -2005,9 +1903,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     g_timers[id] = this;
     m_timerId = id;
 
-    // 40 ms is fast enough that a thumb-button click is never missed and cheap
-    // enough to be free - the sample is a GetAsyncKeyState and nothing else,
-    // and a repaint is only asked for on an actual toggle.
     UINT_PTR pollId = SetTimer(NULL, 0, 40, [](HWND, UINT, UINT_PTR idEvent, DWORD)
         {
             auto it = g_pollTimers.find(idEvent);
@@ -2024,7 +1919,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 
 CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
 {
-    // First, so nothing the list's own window does can call back in here.
     m_rcEntry.Close();
     m_rcFloat.Destroy();
     if (m_timerId != 0)
@@ -2047,15 +1941,12 @@ CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
             DeleteObject(f);
 }
 
-// ---- Derived data -----------------------------------------------------------
 WorkMode CGalaxyATMSystemRadarScreen::GetWorkMode(std::wstring& labelOut, COLORREF& colorOut)
 {
     int ct = GetPlugIn()->GetConnectionType();
     CController me = GetPlugIn()->ControllerMyself();
     int rating = me.IsValid() ? me.GetRating() : 0;
 
-    // Supervisor / administrator rating maps to the РП (SUP) mode regardless of
-    // how the connection was established.
     if (rating >= 11)
     {
         labelOut = L"SUP";
@@ -2099,36 +1990,25 @@ void CGalaxyATMSystemRadarScreen::GetUserInfo(std::wstring& designation,
     }
     else if (OnControllerPosition(me) && !posId.empty())
     {
-        // No config entry yet: show the position id EuroScope knows, so the
-        // panel is never blank.
         designation = Widen(posId.c_str());
     }
 
-    // Whatever neither the config nor EuroScope names is a dash. An observer
-    // holds no position, so "V_OBS" is a callsign, not an ID - the plate stays
-    // a dash for them.
     if (designation.empty())
         designation = L"—";
     if (role.empty())
         role = L"—";
 
-    // In the trainer nobody logs in, and the block says so plainly.
     if (Plugin()->TrainingSession())
     {
         user = L"user";
         return;
     }
 
-    // Nobody is anybody until LOGIN has been pressed: the Авторизация card
-    // says so rather than naming whoever EuroScope is connected as.
     user =(m_authState == AuthState::LoggedOut) ? std::wstring() : Plugin()->MyUserName();
     if (user.empty())
         user = L"user ?";
 }
 
-// Callsigns currently squawking a distress code. Both the mode-A code the
-// aircraft is actually transmitting and the one assigned to it are checked, so
-// a crew that has just selected 7700 shows up before the strip catches up.
 std::wstring CGalaxyATMSystemRadarScreen::GetDistressCodes()
 {
     std::wstring out;
@@ -2145,8 +2025,6 @@ std::wstring CGalaxyATMSystemRadarScreen::GetDistressCodes()
     return out;
 }
 
-// Mode-A codes that more than one aircraft is transmitting at the same time.
-// The conspicuity codes every aircraft may legitimately share are skipped.
 std::wstring CGalaxyATMSystemRadarScreen::GetDuplicateCodes()
 {
     std::map<std::string, int> seen;
@@ -2171,20 +2049,13 @@ std::wstring CGalaxyATMSystemRadarScreen::GetDuplicateCodes()
     return out;
 }
 
-// ---- Small reusable widgets --------------------------------------------------
 void CGalaxyATMSystemRadarScreen::DrawCheckbox(HDC hDC, RECT box, bool checked,
     int objType, const char* objId, const char* tooltip)
 {
-    // Ticked state is a plain grey square - the reference draws no tick mark.
-    // Square checkboxes are the one control outlined in white rather than grey.
     Theme::OutlineBox(hDC, box, checked ? Theme::Active : Theme::ControlFill, Theme::BorderCheck);
     AddScreenObject(objType, objId, box, false, tooltip);
 }
 
-// A checkbox with its label to the right. The box is smaller than the row it
-// sits on - the same square the code block's own checkbox is - so it is
-// centred in the row rather than filling it, and the label keeps the full row
-// height to be vertically centred in.
 void CGalaxyATMSystemRadarScreen::DrawCheckRow(HDC hDC, int top, int x, const std::wstring& label,
     bool checked, int objType, const char* objId, const char* tooltip)
 {
@@ -2196,8 +2067,6 @@ void CGalaxyATMSystemRadarScreen::DrawCheckRow(HDC hDC, int top, int x, const st
     Theme::DrawLine(hDC, lbl, label, m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
 }
 
-// "Ед. изм." uses pills instead of squares, and packs its labels tight against
-// them so two columns fit across 212 px - hence the explicit label right edge.
 void CGalaxyATMSystemRadarScreen::DrawRadioRow(HDC hDC, int top, int x, int labelRight,
     const std::wstring& label, bool selected, int objType, const char* objId, const char* tooltip)
 {
@@ -2215,10 +2084,6 @@ void CGalaxyATMSystemRadarScreen::DrawOutlinedField(HDC hDC, RECT box, const std
     Theme::DrawControl(hDC, box, text, font);
 }
 
-// For plates carrying values whose length isn't ours to control - a callsign,
-// a position id, a controller's full name. An observer's "V_OBS" already
-// overflows the narrow designation plate at the normal size, so pick the
-// largest size that fits and only then fall back to clipping.
 void CGalaxyATMSystemRadarScreen::DrawFittedField(HDC hDC, RECT box, const std::wstring& text)
 {
     const int avail = (box.right - box.left) - 6;
@@ -2251,13 +2116,9 @@ void CGalaxyATMSystemRadarScreen::DrawToggleChip(HDC hDC, RECT box, const std::w
     AddScreenObject(objType, objId, box, false, tooltip);
 }
 
-// The reference's dropdowns are one plate split by a hairline: the value sits
-// left-aligned in the wide part, and a small marker in the narrow part on the
-// right opens the list. Only that part is clickable - the value area is inert.
 void CGalaxyATMSystemRadarScreen::DrawDropdownField(HDC hDC, RECT box, const std::wstring& text,
     int objType, const char* objId, const char* tooltip)
 {
-    // The same grey plate as the БП button, not the near-black of a text field.
     Theme::OutlineBox(hDC, box, Theme::ButtonMid, Theme::BorderStrong);
 
     RECT chevron = { box.right - 19, box.top, box.right, box.bottom };
@@ -2274,7 +2135,7 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownField(HDC hDC, RECT box, const std
     HBRUSH oldBr = (HBRUSH)SelectObject(hDC, br);
     HPEN dotPen = CreatePen(PS_SOLID, 1, Theme::Text);
     oldPen = (HPEN)SelectObject(hDC, dotPen);
-    Ellipse(hDC, mx - 2, my - 2, mx + 2, my + 2);   // 4 px across - a marker, not a bullet
+    Ellipse(hDC, mx - 2, my - 2, mx + 2, my + 2);
     SelectObject(hDC, oldPen);
     DeleteObject(dotPen);
     SelectObject(hDC, oldBr);
@@ -2286,9 +2147,6 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownField(HDC hDC, RECT box, const std
     AddScreenObject(objType, objId, chevron, false, tooltip);
 }
 
-// The open dropdown, drawn last so it sits over whatever is beneath it. Rows
-// are the panel's own plates: near-black on an outlined list, with the current
-// value carrying the same grey fill that marks any other selected control.
 void CGalaxyATMSystemRadarScreen::DrawDropdownList(HDC hDC)
 {
     const int* values = NULL;
@@ -2315,13 +2173,12 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownList(HDC hDC)
         return;
     }
 
-    const int rowH = 17;   // the panel's own row height, so the list matches it
+    const int rowH = 17;
     const int listW = max(anchor.right - anchor.left, 44);
     const int listH = count * rowH + 2;
 
     RECT list = { anchor.left, anchor.bottom + 2, anchor.left + listW, anchor.bottom + 2 + listH };
 
-    // Drop upwards instead if there isn't room below, and never off the side.
     RECT ra = GetRadarArea();
     if (list.bottom > ra.bottom)
         OffsetRect(&list, 0, -(listH + (anchor.bottom - anchor.top) + 4));
@@ -2355,8 +2212,6 @@ void CGalaxyATMSystemRadarScreen::DrawDropdownList(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// A block's caption sits centred above its group box - not cut into the
-// border line - and the box itself is a plain square-cornered outline.
 RECT CGalaxyATMSystemRadarScreen::DrawBlockFrame(HDC hDC, int top, const std::wstring& caption, int boxHeight)
 {
     RECT captionRect = { m_panelArea.left, top, m_panelArea.right, top + L::CAPTION_H };
@@ -2368,7 +2223,6 @@ RECT CGalaxyATMSystemRadarScreen::DrawBlockFrame(HDC hDC, int top, const std::ws
     return box;
 }
 
-// The code block is the only one the reference leaves unlabelled.
 RECT CGalaxyATMSystemRadarScreen::DrawBoxOnly(HDC hDC, int top, int boxHeight)
 {
     RECT box = { GroupLeft(), top, GroupRight(), top + boxHeight };
@@ -2376,7 +2230,6 @@ RECT CGalaxyATMSystemRadarScreen::DrawBoxOnly(HDC hDC, int top, int boxHeight)
     return box;
 }
 
-// ---- Drawing ------------------------------------------------------------------
 void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 {
     if (Phase != REFRESH_PHASE_BEFORE_TAGS &&
@@ -2385,7 +2238,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         return;
     if (!m_visible)
     {
-        // Nor is the list left standing outside EuroScope.
         m_rcEntry.Close();
         m_rcFloat.Hide();
         return;
@@ -2393,20 +2245,12 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
     m_fonts.EnsureCreated();
 
-    // Logged in or out on another display, or on one this ASR replaced.
     SyncAuth();
 
-    // Which зоны are up at this moment, before anything draws or registers a
-    // hit-box off them.
     UpdateZoneActivity();
 
-    // The list is taken once per frame and held for the whole of it, so the
-    // overlay, its hit-boxes and an open info window can never disagree about
-    // which report is which because a fetch landed halfway through.
     m_sigmets = Plugin()->Sigmets();
 
-    // Зоны and сигметы sit under the tags: they are a background the traffic
-    // is read against, not something to be read over a label.
     if (Phase == REFRESH_PHASE_BEFORE_TAGS)
     {
         DrawZones(hDC);
@@ -2414,13 +2258,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         return;
     }
 
-    // Whatever font EuroScope had selected when it handed us the DC is the one
-    // it draws its own tags with, and it is the only way to get at it - the SDK
-    // exposes no font query. Grabbed before anything of ours touches the DC so
-    // the predicted-level label on a vector can match the tag beside it. If all
-    // that is on the DC is a stock font then EuroScope has not put its own
-    // there, and the label falls back to the monospace that matches how it
-    // renders tags rather than to GDI's default.
     HFONT dcFont = (HFONT)GetCurrentObject(hDC, OBJ_FONT);
     m_esFont = (dcFont != NULL
                 && dcFont != (HFONT)GetStockObject(SYSTEM_FONT)
@@ -2428,56 +2265,29 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
                 && dcFont != (HFONT)GetStockObject(DEFAULT_GUI_FONT))
         ? dcFont : m_fonts.Mono;
 
-
-    // Radar overlays belong with the traffic they annotate, so they go in the
-    // tag phase. The panel and its windows go in the very last phase instead,
-    // which puts them over EuroScope's lists as well as over the tags.
     if (Phase == REFRESH_PHASE_AFTER_TAGS)
     {
-        // Зоны answer the mouse only while Shift is held. A hit-box of ours
-        // takes the press whatever lies over it - a label included, in
-        // whichever phase it is registered - and a зона's boxes cover its whole
-        // inside, so with them always up no label inside an area could be
-        // dragged. Kept up while a зона's window is open as well, so the
-        // release still comes back to us when Shift is let go first. Сигметы
-        // are boxed along their outline only and stay up all the time.
-        //
-        // First of ours in this pass, so everything registered after it -
-        // the ruler's own boxes, then the whole panel - wins the click.
         m_areaShiftDown = ShiftHeldInEuroScope();
         if (m_areaShiftDown || m_zoneInfoIndex >= 0)
             RegisterZoneObjects();
         RegisterSigmetObjects();
 
-        // Not logged in yet: the ruler and the vectors belong to the panel and
-        // wait for it. The wake arcs are not a setting of anything, so stay.
         if (!Authorized())
         {
             m_rulerPressPending = false;
             m_rulerArmed = false;
             m_rulerPlacing = false;
             DrawWakeArcs(hDC);
-            // The метки and the формуляр neither: they are the traffic, not a
-            // panel setting.
             DrawTargetSymbols(hDC);
             DrawFormulars(hDC, true);
             return;
         }
 
-        // A press of the side button arrives on the poll timer, outside any
-        // refresh; it is only latched there and acted on here. The press does
-        // not place anything by itself - it arms the ruler, and the two points
-        // are then picked with ordinary left clicks on the radar (see
-        // OnClickScreenObject). While a line is being placed its free end is
-        // re-read from the cursor every frame, which is what makes it follow
-        // the cursor without anything being held down.
         if (m_rulerPressPending)
         {
             m_rulerPressPending = false;
             if (m_rulerPlacing)
             {
-                // Part-way through a line, the button abandons it rather than
-                // arming a second one on top of it.
                 m_rulerPlacing = false;
                 m_rulerArmed = false;
             }
@@ -2493,25 +2303,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
                 UpdateRulerEnd(cursor);
         }
 
-        // A small, non-draggable hit-box hugging each line, so a right-click
-        // or a left double-click can delete a measurement - Moveable=false
-        // means a drag started here still reaches EuroScope's own panning
-        // untouched, so the radar can always be panned no matter how many
-        // lines are on it; only a plain click or double-click on this exact
-        // spot is ours.
-        //
-        // One rect per line would have to be its two endpoints' bounding box,
-        // which for anything but a horizontal or vertical line is far bigger
-        // than the line itself - a long diagonal easily covers most of the
-        // radar, and a click anywhere inside it would then offer to delete a
-        // line that is nowhere near the cursor. A chain of small boxes sampled
-        // along the actual path stays tight to the line regardless of angle.
-        //
-        // The chain stops short of both endpoints rather than running the
-        // whole 0..1 range: an endpoint snapped to a target sits right on that
-        // target's own symbol, and a delete box there would sit over the tag
-        // and the target the line is measuring from. Deletion still works from
-        // anywhere along the line's middle stretch.
         for (size_t i = 0; i < m_rulers.size(); i++)
         {
             RulerLine& r = m_rulers[i];
@@ -2521,9 +2312,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
             double lineLen = sqrt((double)(b.x - a.x) * (b.x - a.x) + (double)(b.y - a.y) * (b.y - a.y));
             const int kPad = 15;
             const double kStepPx = 20.0;
-            // Kept clear at each end so the near edge of the first box still
-            // sits outside FindNearbyTarget's own 20 px snap radius around
-            // whatever the endpoint is anchored to.
             const double kEndClearPx = kPad + 20.0;
 
             char id[16];
@@ -2531,9 +2319,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
             if (lineLen <= 2.0 * kEndClearPx)
             {
-                // Too short to leave anything in the middle once both ends are
-                // cleared - a single box at the midpoint is the best that fits,
-                // and still keeps clear of either endpoint.
                 int px = (a.x + b.x) / 2, py = (a.y + b.y) / 2;
                 RECT box = { px - kPad, py - kPad, px + kPad, py + kPad };
                 AddScreenObject(SO_RULER_LINE, id, box, false, Tr("ПКМ/2ЛКМ - удалить линейку"));
@@ -2552,12 +2337,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
             }
         }
 
-        // While the ruler is armed - and for as long as a line is half-placed -
-        // the whole radar answers a click. Registered last of this phase's
-        // objects so it wins over the сигмет areas and the line-delete boxes
-        // beneath it, and non-moveable, so a drag started on it still reaches
-        // EuroScope's own panning untouched. Nothing covers the radar at any
-        // other time.
         if (m_rulerArmed || m_rulerPlacing)
         {
             AddScreenObject(SO_RULER_CANVAS, "RULER_CANVAS", GetRadarArea(), false,
@@ -2565,15 +2344,11 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
                                : Tr("ЛКМ - начало линейки, ПКМ - отмена"));
         }
 
-        // Always up - the wake category is not a setting of БЛОК 3's.
         DrawWakeArcs(hDC);
 
         if (m_vecDistEnabled || m_vecTimeEnabled || m_vecByPlan)
             DrawTargetVectors(hDC);
 
-        // The метки over the vectors that start at them, and the формуляр
-        // over both, under the rulers. Its hit-boxes come after the ruler
-        // canvas, so they are left out while the canvas is up.
         DrawTargetSymbols(hDC);
         DrawFormulars(hDC, !(m_rulerArmed || m_rulerPlacing));
 
@@ -2587,16 +2362,10 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         return;
     }
 
-    // Access goes with the base - except in the trainer, which asks nobody. A
-    // controller the server has taken out of the base is shut out with
-    // "Доступ приостановлен", Bypass or not. A server that cannot be asked for
-    // a while throws nobody out.
     if (m_authState != AuthState::LoggedOut && !Plugin()->TrainingSession() && Plugin()->AccessSuspended())
     {
         Plugin()->SetSessionAuthorized(false);
         m_authState = AuthState::LoggedOut;
-        m_authBypassed = false;
-        m_authFailed = false;
         m_openDropdown = DropdownKind::None;
         m_rulerArmed = false;
         m_rulerPlacing = false;
@@ -2608,37 +2377,33 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
     DrawPanel(hDC);
 
-    // Before the windows, which open over it. The panel's "-" puts the bar
-    // away along with it.
     if (!m_collapsed)
         DrawMenuBar(hDC);
 
-    // Вход, over the bar whose LOGIN opened it. Once the server has let the
-    // controller in it closes by itself and the check goes on.
     if (m_loginWindowOpen && !Authorized())
     {
-        bool serverFault = false;
-        const CGalaxyATMSystemPlugin::LoginState login = Plugin()->MyLogin(NULL, &serverFault);
-        if (login == CGalaxyATMSystemPlugin::LoginState::Done)
+        if (Plugin()->MyLogin() == CGalaxyATMSystemPlugin::LoginState::Done)
         {
+            CGalaxyATMSystemPlugin::SavedLogin id;
+            id.cid = m_loginValues[LF_CID];
+            id.surname = m_loginValues[LF_SURNAME];
+            id.firstName = m_loginValues[LF_FIRST_NAME];
+            id.patronymic = m_loginValues[LF_PATRONYMIC];
+            Plugin()->SaveIdentity(id);
+
             CloseLoginWindow();
             StartAuthCheck();
         }
         else
         {
-            // Only a failure of the service's opens Bypass - never a wrong
-            // name or password.
-            if (login == CGalaxyATMSystemPlugin::LoginState::Failed)
-                m_authFailed = serverFault;
             DrawLoginWindow(hDC);
         }
     }
     else if (m_loginWindowOpen)
     {
-        CloseLoginWindow();   // the panel is open under it - the trainer needs no login
+        CloseLoginWindow();
     }
 
-    // The panel's windows open only once it has been logged into.
     if (Authorized())
     {
         if (m_atisLetterOpen)
@@ -2650,59 +2415,25 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         else if (m_rcOpen)
             DrawSectorListWindow(hDC);
 
-        // Last, so it paints over everything and its rows win the click.
         if (m_openDropdown != DropdownKind::None)
             DrawDropdownList(hDC);
     }
 
-    // The list's own window goes with it: closed, put back on the radar, or
-    // the panel logged out of.
     if (!(m_rcOpen && m_rcFloating && Authorized()))
     {
         m_rcEntry.Close();
         m_rcFloat.Hide();
     }
 
-    // A notice goes over every window, whether the panel is open or not.
     if (!m_noticeText.empty())
         DrawNoticeWindow(hDC);
 
-    // The сигмет and зона windows are only up while the button is held, so they
-    // go over even the dropdown - nothing else can be interacted with meanwhile.
     if (m_zoneInfoIndex >= 0)
         DrawZoneInfo(hDC);
     if (m_sigmetInfoIndex >= 0)
         DrawSigmetInfo(hDC);
 }
 
-// ---- Формуляр сопровождения ----------------------------------------------------
-// The track label, drawn by the plugin itself rather than by EuroScope's tag.
-// EuroScope sets a tag's lines a fixed distance apart - whatever its own
-// symbology size says - and a plug-in can only make the letters of an item
-// bigger, never the gap, so ФС "Р-р шрифта" above 12 ran each line into the
-// next. Drawn here, the line pitch comes from the font actually in use.
-//
-// It is the ULLL wiki's "Формуляр РДЦ (Контроль)". Collapsed: the warnings
-// ("W", "D", "Axxxx", "t"/"r", RAM, APW, EM, the remark), then callsign,
-// sector indicator and "V", then actual level, climb/descent arrow, cleared
-// level and ground speed, and under that whichever of heading, speed and rate
-// is assigned. The one under the cursor expands: the transponder
-// code after the sector indicator, then XFL COPX, AHDG ASP ARC and the FIR
-// exit point, a blank line, ATYP/WTC ADES RFL, and calculated IAS and Mach.
-// An item with nothing assigned shows its mnemonic, as the picture does.
-//
-// The sector's own tag ("Galaxy CTR" in Tags.txt) is built out of TopSky and
-// ULLLPlugin items this plugin cannot read, so the values come from EuroScope.
-// What a click does is copied from that tag, though, function for function -
-// StartTagFunction reaches another plug-in's functions by its name - so the
-// TopSky, VCH and ULLLPlugin menus come up just as they did off it.
-//
-// ФС picks three lines like that or two, with the warnings on the callsign's
-// line, and whether the speed is shown. A warnings line with nothing to say is
-// left out. The label is dragged by any part of it.
-//
-// So that this is the only label on the screen, the display's tag family is
-// the empty "Galaxy Plugin" one; ".formular" turns this one off.
 namespace
 {
     struct FormularRun
@@ -2712,9 +2443,6 @@ namespace
         const FormularFn* fn;
     };
 
-    // Copied from the "Galaxy CTR" detailed tag in the sector's Tags.txt: the
-    // item, then the left and the right click's function, each with the
-    // plug-in that provides it.
     const char* const kTopSky = "TopSky plugin";
     const char* const kUlll   = "ULLLPlugin";
     const char* const kVch    = "VCH";
@@ -2730,22 +2458,13 @@ namespace
     const FormularFn kFnGs            = { kTopSky, 40,  kUlll,   507, NULL,    0    };
     const FormularFn kFnXfl           = { kTopSky, 53,  NULL,    26,  NULL,    0    };
     const FormularFn kFnCopx          = { kTopSky, 44,  NULL,    22,  kTopSky, 45   };
-    // AHDG is pulled with the left button for a heading, and the right one
-    // opens TopSky's heading menu - on every label, whatever the tags had.
     const FormularFn kFnAhdg          = { NULL,    25,  NULL,    0,   kTopSky, 14   };
-    // ASP: TopSky's speed menu on the left button, EuroScope's speed popup on
-    // the right - on every label, in a simulator session too.
     const FormularFn kFnAsp           = { kTopSky, 47,  kTopSky, 15,  NULL,    TAG_ITEM_FUNCTION_ASSIGNED_SPEED_POPUP };
     const FormularFn kFnArc           = { kTopSky, 56,  kTopSky, 16,  kTopSky, 134  };
     const FormularFn kFnAtyp          = { kTopSky, 70,  kVch,    650, kTopSky, 2    };
     const FormularFn kFnAdes          = { kTopSky, 79,  NULL,    7,   kTopSky, 1001 };
     const FormularFn kFnRfl           = { kTopSky, 120, kTopSky, 59,  NULL,    0    };
 
-    // The approach label's, off "Galaxy Approach": the same but for AFL's and
-    // CFL's right buttons (TopSky's 143 and 157, where the РДЦ tag has 99 and
-    // PEL), the squawk warning and the remark on both buttons, ATYP without
-    // its wake category, ARWY, and AHDG's left button - EuroScope's heading
-    // popup there.
     const FormularFn kFnAppSquawkWarning = { kTopSky, 138,   kTopSky, 62,  kTopSky, 62   };
     const FormularFn kFnAppRemark        = { kTopSky, 212,   kTopSky, 2,   kTopSky, 2    };
     const FormularFn kFnAppAfl           = { kUlll,   509,   NULL,    1,   kTopSky, 143  };
@@ -2754,41 +2473,18 @@ namespace
     const FormularFn kFnArwy             = { kTopSky, 261,   NULL,    19,  NULL,    0    };
     const FormularFn kFnAppAhdg          = { NULL,    25,    NULL,    0,   kTopSky, 14   };
 
-    // The tower label's, off "Galaxy Tower Peterburg", where they differ from
-    // the approach one: the sector indicator is TopSky's item 10014, GS takes
-    // no click, and AHDG is TopSky's on both buttons, as on the РДЦ tag.
     const FormularFn kFnTwrSector        = { kTopSky, 10014, NULL,    20,  kTopSky, 100  };
     const FormularFn kFnTwrGs            = { kTopSky, 40,    NULL,    0,   NULL,    0    };
 
-    // AHDG and CFL are known by what they are, whichever label's table they
-    // came out of: the heading pull hangs off the one, and the right click
-    // that clears an approach clearance off the other.
     bool IsAhdgFn(const FormularFn* fn) { return fn == &kFnAhdg || fn == &kFnAppAhdg; }
     bool IsCflFn(const FormularFn* fn)  { return fn == &kFnCfl || fn == &kFnAppCfl; }
-    // GS carries the защитный объём on its left button - see FormularClick. The
-    // sector tag had ULLLPlugin's own function there, which is not ours to call.
     bool IsGsFn(const FormularFn* fn)   { return fn == &kFnGs || fn == &kFnTwrGs; }
 
-    // The защитный объём's radius, on the ground.
     const double kProtectionZoneKm = 10.0;
 
-    // Simulator sessions. EuroScope's simulated aircraft fly only for their
-    // pseudo pilot, who takes one on with "Get simulation" in the Simulation
-    // popup behind the tag's "{}" (item 90, function 41, as the sector tags
-    // had it) - so in a simulator session every label carries that "{}". And
-    // what EuroScope says drives the pseudo pilot's aircraft is its own
-    // popups, so there CFL's right button and ARC's left one open those
-    // instead of TopSky's menus (see SimulatorFn) - ASP has EuroScope's on
-    // its right button everywhere. A
-    // heading cannot be given that way: a plug-in has no call that sets the
-    // simulator's heading, and EuroScope's AHDG drag only starts off its own
-    // tag - asked for through StartTagFunction it opens the popup instead.
     const FormularFn kFnSimulation = { NULL, TAG_ITEM_TYPE_SIMULATION_INDICATOR,
         NULL, TAG_ITEM_FUNCTION_SIMULATION_POPUP, NULL, TAG_ITEM_FUNCTION_SIMULATION_POPUP };
 
-    // Anything but the live network. A simulator session started in EuroScope
-    // itself did not report itself as SIMULATOR_SERVER or _CLIENT, and an
-    // offline EuroScope has no traffic for a "{}" to appear on.
     bool InSimulatorSession(CPlugIn* plugin)
     {
         const int connection = plugin->GetConnectionType();
@@ -2796,10 +2492,6 @@ namespace
             && connection != CONNECTION_TYPE_VIA_PROXY;
     }
 
-    // fn for a click with the given button in a simulator session: on CFL
-    // the right button, and on ARC the left one, moved onto
-    // EuroScope's own popup. CFL's left button stays TopSky's CFL menu, which
-    // is what sets the level the way the sector tag did.
     FormularFn SimulatorFn(const FormularFn& fn, bool right)
     {
         int item = 0, function = 0;
@@ -2834,24 +2526,16 @@ namespace
         return sim;
     }
 
-    // ".formular <name>" and the ASR's "FormularKind", in FormularKindSetting order.
     const char* const kFormularKindNames[] = { "auto", "ctr", "app", "twr" };
 
-    // ---- Метки ----------------------------------------------------------------
-    // TopSky's track symbols, in TopSkySymbols.txt's own language: MOVETO,
-    // LINETO and SETPIXEL in pixels off the position, and ARC. FILLARC and
-    // POLYGON are not read - no track symbol of the sector's uses them.
     struct SymbolStep
     {
         enum Kind { Move, Line, Pixel, Arc } kind;
-        int v[6];   // x, y - and for an arc the two radii and the two angles
+        int v[6];
     };
     typedef std::vector<SymbolStep> TrackSymbol;
     typedef std::map<std::string, TrackSymbol> TrackSymbolSet;
 
-    // The sector's own track symbols - Plugins\TopSky Peterburg and
-    // Plugins\TopSky Tower Ground carry the same ones - for when there is no
-    // TopSky loaded to read them off.
 #define GALAXY_SSR_SYMBOL \
     "MOVETO:-1:0\nLINETO:0:1\nLINETO:1:0\nLINETO:0:-1\nLINETO:-1:0\n" \
     "MOVETO:-2:0\nLINETO:0:2\nLINETO:2:0\nLINETO:0:-2\nLINETO:-2:0\n" \
@@ -2870,13 +2554,14 @@ namespace
         "SYMBOL:ADSB_DIV\n" GALAXY_ADSB_SYMBOL
         "SYMBOL:UNCONTROLLED\nMOVETO:0:-5\nLINETO:0:5\nMOVETO:-5:0\nLINETO:5:0\n"
         "MOVETO:-5:-5\nLINETO:5:-5\nLINETO:5:5\nLINETO:-5:5\nLINETO:-5:-5\n"
-        // Tower Ground's history dot, a two pixel square - Peterburg has none.
-        "SYMBOL:HISTORY\nMOVETO:-1:-1\nLINETO:-1:0\nLINETO:0:0\nLINETO:0:-1\nLINETO:-1:-1\n";
+        "SYMBOL:HISTORY\nMOVETO:-1:-1\nLINETO:-1:0\nLINETO:0:0\nLINETO:0:-1\nLINETO:-1:-1\n"
+        "SYMBOL:ASSUMED\nMOVETO:0:-3\nLINETO:0:4\nMOVETO:-3:0\nLINETO:4:0\n"
+        "MOVETO:-2:-2\nLINETO:3:3\nMOVETO:-2:2\nLINETO:3:-3\n";
 #undef GALAXY_SSR_SYMBOL
 #undef GALAXY_ADSB_SYMBOL
 
-    // Adds what text defines to out; a symbol defined again replaces the one
-    // there, so a file read over the defaults wins wherever it says anything.
+    const double kAssumedHoleRadius = 4.0;
+
     void ParseTrackSymbols(const std::string& text, TrackSymbolSet& out)
     {
         TrackSymbol* current = NULL;
@@ -2893,7 +2578,6 @@ namespace
             if (comment != std::string::npos)
                 line.erase(comment);
 
-            // Fields between the colons, spaces dropped, the keyword in capitals.
             std::vector<std::string> fields(1);
             for (char c : line)
             {
@@ -2939,14 +2623,12 @@ namespace
             }
             else if (fields[0] == "ARC" && n.size() == 5)
             {
-                // X:Y:Radius:StartAngle:EndAngle - a circular arc
                 step.kind = SymbolStep::Arc;
                 const int v[6] = { n[0], n[1], n[2], n[2], n[3], n[4] };
                 memcpy(step.v, v, sizeof(v));
             }
             else if (fields[0] == "ARC" && n.size() >= 6)
             {
-                // X:Y:RadiusX:RadiusY:StartAngle:EndAngle
                 step.kind = SymbolStep::Arc;
                 for (int i = 0; i < 6; i++)
                     step.v[i] = n[i];
@@ -2959,10 +2641,6 @@ namespace
         }
     }
 
-    // Whether a symbol puts anything on the screen at all. A sector that leaves
-    // the targets to EuroScope's own symbology blanks TopSky's out - nothing
-    // but MOVETO:0:0 and LINETO:0:0 - and such a symbol must not take the
-    // place of the default, or the формуляр is left with no метка under it.
     bool DrawsSomething(const TrackSymbol& symbol)
     {
         int x = 0, y = 0;
@@ -2979,7 +2657,6 @@ namespace
             case SymbolStep::Line:
                 if (s.v[0] != x || s.v[1] != y)
                     return true;
-                // fall through
             case SymbolStep::Move:
                 x = s.v[0];
                 y = s.v[1];
@@ -2991,8 +2668,6 @@ namespace
 
     bool g_trackSymbolsLoaded = false;
     TrackSymbolSet g_trackSymbols;
-    // For ".symbols": where the file was looked for and what came of it, and
-    // which symbols were taken from it rather than from the defaults.
     std::string g_trackSymbolsSource;
     std::set<std::string> g_trackSymbolsFromFile;
 
@@ -3004,10 +2679,6 @@ namespace
         g_trackSymbolsFromFile.clear();
     }
 
-    // Read once: the defaults, and over them the TopSkySymbols.txt beside
-    // whichever TopSky.dll this EuroScope has loaded - the profile's own, so
-    // Peterburg's on the area and approach profile and Tower Ground's on the
-    // tower one.
     const TrackSymbolSet& TrackSymbols()
     {
         if (g_trackSymbolsLoaded)
@@ -3051,36 +2722,82 @@ namespace
         return g_trackSymbols;
     }
 
-    // With a plain one pixel GDI pen, as EuroScope's symbology draws a symbol:
-    // LINETO leaves its last pixel off, which the closed shapes rely on.
-    void DrawTrackSymbol(HDC hDC, const TrackSymbol& symbol, POINT at, COLORREF color)
+    void DrawSymbolLineOutsideHole(HDC hDC, POINT at, POINT from, POINT to, double holeR)
+    {
+        const double dx = (double)to.x - from.x, dy = (double)to.y - from.y;
+        const double a = dx * dx + dy * dy;
+
+        double t0 = 0.0, t1 = 0.0;
+        if (a < 1e-9)
+        {
+            if ((double)from.x * from.x + (double)from.y * from.y < holeR * holeR)
+                return;
+        }
+        else
+        {
+            const double b = 2.0 * (from.x * dx + from.y * dy);
+            const double c = (double)from.x * from.x + (double)from.y * from.y - holeR * holeR;
+            const double disc = b * b - 4.0 * a * c;
+            if (disc > 0.0)
+            {
+                const double root = sqrt(disc);
+                t0 = max(0.0, (-b - root) / (2.0 * a));
+                t1 = min(1.0, (-b + root) / (2.0 * a));
+            }
+        }
+
+        if (t0 > 0.0)
+        {
+            MoveToEx(hDC, at.x + from.x, at.y + from.y, NULL);
+            LineTo(hDC, at.x + from.x + (int)lround(dx * t0), at.y + from.y + (int)lround(dy * t0));
+        }
+        if (t1 < 1.0)
+        {
+            MoveToEx(hDC, at.x + from.x + (int)lround(dx * t1), at.y + from.y + (int)lround(dy * t1), NULL);
+            LineTo(hDC, at.x + to.x, at.y + to.y);
+        }
+        MoveToEx(hDC, at.x + to.x, at.y + to.y, NULL);
+    }
+
+    void DrawTrackSymbol(HDC hDC, const TrackSymbol& symbol, POINT at, COLORREF color,
+        double holeRadius = 0.0)
     {
         HPEN pen = CreatePen(PS_SOLID, 1, color);
         HGDIOBJ oldPen = SelectObject(hDC, pen);
         HGDIOBJ oldBrush = SelectObject(hDC, GetStockObject(NULL_BRUSH));
         MoveToEx(hDC, at.x, at.y, NULL);
 
+        POINT cur = { 0, 0 };
         for (const SymbolStep& s : symbol)
         {
-            const int x = at.x + s.v[0], y = at.y + s.v[1];
+            const POINT here = { s.v[0], s.v[1] };
+            const int x = at.x + here.x, y = at.y + here.y;
             switch (s.kind)
             {
             case SymbolStep::Move:
                 MoveToEx(hDC, x, y, NULL);
+                cur = here;
                 break;
             case SymbolStep::Line:
-                LineTo(hDC, x, y);
+                if (holeRadius > 0.0)
+                    DrawSymbolLineOutsideHole(hDC, at, cur, here, holeRadius);
+                else
+                    LineTo(hDC, x, y);
+                cur = here;
                 break;
             case SymbolStep::Pixel:
-                SetPixel(hDC, x, y, color);
+                if (holeRadius <= 0.0
+                    || (double)here.x * here.x + (double)here.y * here.y >= holeRadius * holeRadius)
+                    SetPixel(hDC, x, y, color);
                 break;
             case SymbolStep::Arc:
             {
                 const int rx = s.v[2], ry = s.v[3];
                 if (rx <= 0 || ry <= 0)
                     break;
-                // Degrees from the positive X axis, counterclockwise - on a
-                // screen whose Y runs down.
+                if (holeRadius > 0.0
+                    && sqrt((double)here.x * here.x + (double)here.y * here.y) + max(rx, ry) <= holeRadius)
+                    break;
                 const double a0 = s.v[4] * M_PI / 180.0, a1 = s.v[5] * M_PI / 180.0;
                 const int oldDir = SetArcDirection(hDC, AD_COUNTERCLOCKWISE);
                 ::Arc(hDC, x - rx, y - ry, x + rx + 1, y + ry + 1,
@@ -3097,10 +2814,6 @@ namespace
         DeleteObject(pen);
     }
 
-    // TopSky keeps what it adds to an aircraft's assigned data in flight strip
-    // annotation 7, as "/"-separated fields - "A0011/s+/" for a speed
-    // assigned "or more". The "s" field's sign is the "+" / "-" TopSky puts on
-    // the assigned speed; 0 when there is none.
     char TopSkySpeedModifier(const CFlightPlanControllerAssignedData& assigned)
     {
         const char* annotation = assigned.GetFlightStripAnnotation(7);
@@ -3122,16 +2835,13 @@ namespace
         return 0;
     }
 
-    // IAS and Mach off the ground speed, as if there were no wind, in the
-    // standard atmosphere. The sector tag's are calculated figures too, and a
-    // plug-in is given no wind to do any better with.
     bool CalculatedIasMach(int gsKt, int pressureAltFt, int& iasKt, int& machX100)
     {
         if (gsKt < 40)
             return false;
 
         const double h = (double)max(0, pressureAltFt);
-        double T, delta;   // temperature, K, and pressure ratio
+        double T, delta;
         if (h <= 36089.0)
         {
             T = 288.15 - 0.0019812 * h;
@@ -3161,24 +2871,19 @@ HFONT CGalaxyATMSystemRadarScreen::GetFormularFont()
     if (m_formularFont != NULL)
         DeleteObject(m_formularFont);
 
-    // The EuroScope face itself - the one the real tags are set in. It rides
-    // inside the DLL (see Theme::EuroScopeFace), so the label looks the same
-    // whether or not this controller ever installed the .ttf. Failing that,
-    // whatever face EuroScope handed the DC, and Consolas when all that
-    // carried was a stock font.
     LOGFONTW lf = {};
     const wchar_t* face = Theme::EuroScopeFace();
     if (face != NULL)
         wcscpy_s(lf.lfFaceName, face);
     else if (m_esFont == NULL || GetObjectW(m_esFont, sizeof(lf), &lf) == 0)
         wcscpy_s(lf.lfFaceName, L"Consolas");
-    lf.lfHeight = -MulDiv(size, 7, 6);   // 12 -> 14 px
+    lf.lfHeight = -MulDiv(size, 7, 6);
     lf.lfWidth = 0;
     lf.lfEscapement = lf.lfOrientation = 0;
     lf.lfWeight = FW_NORMAL;
     lf.lfItalic = lf.lfUnderline = lf.lfStrikeOut = FALSE;
     lf.lfCharSet = DEFAULT_CHARSET;
-    lf.lfOutPrecision = OUT_TT_PRECIS;   // the TrueType face, not a raster stand-in
+    lf.lfOutPrecision = OUT_TT_PRECIS;
     lf.lfQuality = CLEARTYPE_QUALITY;
 
     m_formularFont = CreateFontIndirectW(&lf);
@@ -3188,9 +2893,6 @@ HFONT CGalaxyATMSystemRadarScreen::GetFormularFont()
 
 void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 {
-    // Items are rebuilt every frame. A label not drawn this frame - filtered
-    // out, or off the screen - keeps where it was dragged to, but nothing on
-    // it can be clicked.
     for (auto& entry : m_formulars)
         entry.second.items.clear();
 
@@ -3207,10 +2909,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
     TEXTMETRICW tm;
     GetTextMetricsW(hDC, &tm);
-    // The font's own line height, set solid: the rows of a label sit a touch
-    // closer than the extra pixel a label used to carry, and tmHeight's own
-    // internal leading still keeps them off each other at every size the
-    // Р-р шрифта picker offers.
     const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
     SIZE space = { 0, 0 };
     GetTextExtentPoint32W(hDC, L" ", 1, &space);
@@ -3218,14 +2916,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     const int tl = plugin->TransitionLevelFL();
     const AltUnit altUnit = plugin->UnitAlt();
 
-    // The РДЦ label, or the approach or the tower one - see CurrentFormularKind.
     const FormularKind kind = CurrentFormularKind();
     const bool ctrLabel = (kind == FormularKind::Ctr);
     const bool simulator = InSimulatorSession(plugin);
     const FormularFn* const remarkFn = (kind == FormularKind::App) ? &kFnAppRemark : &kFnRemark;
 
-    // Codes more than one aircraft is squawking - "D" on each of them. The
-    // conspicuity and VFR codes are shared by design and left out.
     std::map<std::string, int> codeCount;
     for (CRadarTarget t = plugin->RadarTargetSelectFirst(); t.IsValid();
          t = plugin->RadarTargetSelectNext(t))
@@ -3249,9 +2944,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (!PtInRect(&ra, tp))
             continue;
 
-        // Фильтр высоты hides the label, whatever it would have said - an APW
-        // included: a filter that left warning aircraft on the screen left
-        // every one on the ground inside the aerodrome's зоны there with it.
         if (!plugin->AltFilterPasses(pos.GetPressureAltitude()))
             continue;
         const ApwResult& apw = plugin->ApwForTarget(rt);
@@ -3265,20 +2957,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         const char* sq = pos.GetSquawk();
 
         const bool correlated = fp.IsValid();
-        // Expanded only while the cursor is on it - selecting or assuming the
-        // aircraft leaves it collapsed, as the sector's detailed tag did.
         const bool expanded = !m_formularHover.empty() && m_formularHover == callsign;
 
-        // ---- Warnings, above the callsign, with the wiki's letters: W no RVSM,
-        // D a code another aircraft squawks too, Axxxx a code that is not the
-        // one assigned, t / r text only / receive only, RAM, CLAM, APW, the
-        // emergency codes, and the remark ----
         std::vector<FormularRun> warnings;
-        // In a simulator session, first on the line: "{}", which opens
-        // EuroScope's Simulation popup - "Get simulation" takes the aircraft -
-        // and "{*}" once it is mine, as EuroScope's own item writes it. The
-        // plug-in API has no pseudo pilot; GetSimulated, "ES simulates its
-        // movements", is the nearest thing it offers.
         if (simulator && correlated)
             warnings.push_back({ fp.GetSimulated() ? L"{*}" : L"{}", base, &kFnSimulation });
         if (correlated && !fp.GetFlightPlanData().IsRvsm())
@@ -3304,7 +2985,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             com = (char)tolower((unsigned char)com);
             if (com == 't' || com == 'r')
                 warnings.push_back({ std::wstring(1, (wchar_t)com), base, &kFnCommunication });
-            if (fp.GetRAMFlag())
+            if (fp.GetRAMFlag() || RouteAdherenceAlert(fp, rt))
                 warnings.push_back({ L"RAM", Theme::DuplicateText, NULL });
             if (fp.GetCLAMFlag())
                 warnings.push_back({ L"CLAM", Theme::DuplicateText, NULL });
@@ -3328,9 +3009,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             const char* remark = fp.GetControllerAssignedData().GetScratchPadString();
             if (remark != NULL && *remark != '\0')
             {
-                // TopSky's missed approach, set from its Callsign menu, lands in
-                // the scratch pad as "MISAP" - with whatever else is there around
-                // it - and the wiki's label calls it MAPP. Any case, anywhere.
                 std::wstring text = Widen(remark);
                 std::wstring upper = text;
                 CharUpperBuffW(&upper[0], (DWORD)upper.size());
@@ -3344,8 +3022,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 }
                 if (missedApproach)
                 {
-                    // MAPP on its own, in orange; the underscores TopSky pads
-                    // the flag with go, and any remark left beside it stays.
                     std::wstring rest;
                     for (wchar_t c : text)
                         if (c != L'_')
@@ -3362,14 +3038,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
         const char* planType = correlated ? fp.GetFlightPlanData().GetPlanType() : NULL;
         const bool vfr = planType != NULL && (planType[0] == 'V' || planType[0] == 'v');
-        // The tower label carries V at the end of the warnings, in orange.
         if (kind == FormularKind::Twr && vfr)
             warnings.push_back({ L"V", Theme::FormularVfr, NULL });
 
-        // ---- Callsign; on the approach and tower labels a heavy's or a
-        // super's wake category; the sector indicator (the position tracking
-        // it, then the one it is coordinated to next); V for a VFR flight; and
-        // on the expanded РДЦ label the transponder code ----
         std::vector<FormularRun> ident;
         auto highlight = m_formulars.find(callsign);
         const bool highlighted = highlight != m_formulars.end() && highlight->second.highlighted;
@@ -3397,14 +3068,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 if (nextId != NULL && si != nextId)
                     si += nextId;
             }
-            // Blue on the РДЦ and approach labels, in the label's own colour
-            // on the tower one - as the wiki's pictures have them.
             if (!si.empty())
                 ident.push_back({ Widen(si.c_str()),
                     kind == FormularKind::Twr ? base : Theme::FormularSector,
                     kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
 
-            // The approach label shows V only expanded, in orange.
             if (vfr && ctrLabel)
                 ident.push_back({ L"V", base, NULL });
             else if (vfr && kind == FormularKind::App && expanded)
@@ -3413,61 +3081,63 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (ctrLabel && expanded && sq != NULL && *sq != '\0')
             ident.push_back({ Widen(sq), base, correlated ? &kFnTssr : NULL });
 
-        // ---- Actual level, climb/descent arrow, cleared level, speed ----
         std::vector<FormularRun> levels;
         const bool belowTL = pos.GetFlightLevel() / 100 < tl;
         const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit).c_str()),
             base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL });
-        // The same +-100 fpm band the vertical speed item counts as level. The
-        // approach and tower labels put a "|" between the two levels while
-        // the aircraft is level - "F103 | F050".
         const int vs = rt.GetVerticalSpeed();
-        if (vs >= 100)
-            levels.push_back({ L"\x2191", base, NULL });
-        else if (vs <= -100)
-            levels.push_back({ L"\x2193", base, NULL });
-        else if (!ctrLabel)
-            levels.push_back({ L"|", base, NULL });
+        std::wstring cflText;
+        COLORREF cflColor = base;
+        int clearedFt = 0;
+        bool clearedApproach = false;
         if (correlated)
         {
-            // 1 and 2 are EuroScope's cleared-for-approach values - the wiki's
-            // CA (instrument) and VA (visual).
             int cfl = fp.GetControllerAssignedData().GetClearedAltitude();
-            std::wstring cflText;
-            COLORREF cflColor = base;
             if (cfl == 1)
+            {
                 cflText = L"CA";
+                clearedApproach = true;
+            }
             else if (cfl == 2)
+            {
                 cflText = L"VA";
+                clearedApproach = true;
+            }
             else if (cfl > 2)
             {
                 cflText = Widen(FormatAltitudeUnit(cfl, altUnit).c_str());
-                // Yellow when the aircraft is not doing what it was cleared to:
-                // level more than 200 ft off it, or still going past it.
+                clearedFt = cfl;
                 const bool level = vs > -100 && vs < 100;
                 if ((level && abs(altFt - cfl) > 200)
                     || (vs >= 100 && altFt > cfl + 200) || (vs <= -100 && altFt < cfl - 200))
                     cflColor = Theme::DuplicateText;
             }
-            // Always there, even with nothing cleared - it is what a level is
-            // cleared from. With nothing cleared it shows the RFL out of the
-            // flight plan, and the level the aircraft is at only when the
-            // plan has no RFL either.
             if (cflText.empty())
             {
                 const int rfl = fp.GetFlightPlanData().GetFinalAltitude();
                 cflText = Widen(FormatAltitudeUnit(rfl > 0 ? rfl : altFt, altUnit).c_str());
             }
-            levels.push_back({ cflText, cflColor, ctrLabel ? &kFnCfl : &kFnAppCfl });
         }
-        // The approach and tower labels have GS on the line below.
+
+        const int kClearedBandFt = 200;
+        const wchar_t* trend = NULL;
+        if (clearedApproach)
+            trend = L"\x2193";
+        else if (clearedFt > 0)
+            trend = (clearedFt > altFt + kClearedBandFt) ? L"\x2191"
+                  : (clearedFt < altFt - kClearedBandFt) ? L"\x2193" : NULL;
+        else
+            trend = (vs >= 100) ? L"\x2191" : (vs <= -100) ? L"\x2193" : NULL;
+        if (trend != NULL)
+            levels.push_back({ trend, base, NULL });
+
+        if (correlated)
+            levels.push_back({ cflText, cflColor, ctrLabel ? &kFnCfl : &kFnAppCfl });
         if (m_osSpeed && ctrLabel)
             levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
                 base, correlated ? &kFnGs : NULL });
 
-        // ---- Assigned heading, speed and rate as the label writes them -
-        // empty for one that is not assigned ----
         std::wstring ahdgText, aspText, arcText;
         if (correlated)
         {
@@ -3480,23 +3150,20 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
             else
             {
-                // A direct route is written where the heading would be, as
-                // TopSky's AHDG field does: the point it was cleared direct to.
                 const char* direct = assigned.GetDirectToPointName();
                 if (direct != NULL && *direct != '\0')
                     ahdgText = Widen(direct);
             }
             if (assigned.GetAssignedMach() > 0)
             {
-                swprintf_s(t, L"M%03d", assigned.GetAssignedMach());   // hundredths: M088
+                swprintf_s(t, L"M%03d", assigned.GetAssignedMach());
                 aspText = t;
             }
             else if (assigned.GetAssignedSpeed() > 0)
             {
-                swprintf_s(t, L"N%03d", assigned.GetAssignedSpeed());   // knots, as the wiki's label writes it
+                swprintf_s(t, L"N%03d", assigned.GetAssignedSpeed());
                 aspText = t;
             }
-            // "or more" / "or less", as TopSky set it: N250+, M078-.
             if (!aspText.empty())
             {
                 char modifier = TopSkySpeedModifier(assigned);
@@ -3510,7 +3177,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
         }
 
-        // ---- The expanded label's own lines ----
         std::vector<std::vector<FormularRun>> extra;
         if (expanded && correlated && ctrLabel)
         {
@@ -3536,7 +3202,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 assignedLine.push_back({ Widen(firExit), base, NULL });
             extra.push_back(assignedLine);
 
-            // The picture leaves a blank line before the flight plan data.
             extra.push_back(std::vector<FormularRun>());
 
             std::vector<FormularRun> planLine;
@@ -3570,8 +3235,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         }
         else if (correlated && ctrLabel)
         {
-            // Collapsed, the sector tag still shows whichever of them is
-            // assigned, on a line of their own - and none of it when nothing is.
             std::vector<FormularRun> assignedLine;
             if (!ahdgText.empty())
                 assignedLine.push_back({ ahdgText, base, &kFnAhdg });
@@ -3584,20 +3247,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         }
         else if (correlated)
         {
-            // ---- The approach and tower labels below the levels, as the
-            // wiki's "Формуляр ДПК/ДПП" and "Формуляр КДП" draw them.
-            // Collapsed: GS, the assigned speed and the type; the assigned
-            // heading on a line of its own when there is one; CTL. Expanded:
-            // GS and ASP; on the approach label XFL, COPX and the calculated
-            // IAS; ATYP, ADES and ARWY; AHDG; CTL ----
             CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
             CFlightPlanData fpd = fp.GetFlightPlanData();
             const bool app = (kind == FormularKind::App);
             wchar_t buf[32];
 
-            // The assigned speed as TopSky writes it with its Label_ASP_Digits:
-            // two on approach (TopSkySettings.txt's [_APP]) - "25+" for 250 kt
-            // or more - and TopSky's own three at the tower. Mach in hundredths.
             std::wstring speed;
             if (cad.GetAssignedMach() > 0)
             {
@@ -3681,9 +3335,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     FormularRun{ ahdgText.empty() ? std::wstring(L"AHDG") : ahdgText, base, ahdgFn }));
             }
 
-            // VCH's "CTL flag only when active": VCH keeps the landing
-            // clearance in strip annotation 3 as "CTL", and its tag item shows
-            // it to the controller tracking the flight.
             const char* ctl = cad.GetFlightStripAnnotation(3);
             if (ctl != NULL && strcmp(ctl, "CTL") == 0 && fp.GetTrackingControllerIsMe())
                 extra.push_back(std::vector<FormularRun>(1, FormularRun{ L"CTL", Theme::FormularGreen, NULL }));
@@ -3704,9 +3355,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         lines.push_back(levels);
         lines.insert(lines.end(), extra.begin(), extra.end());
 
-        // ---- Size, and where it stands ----
         int width = 0;
         std::vector<std::vector<int>> runWidths(lines.size());
+        std::vector<int> lineWidths(lines.size(), 0);
         for (size_t l = 0; l < lines.size(); l++)
         {
             int w = 0;
@@ -3717,21 +3368,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 runWidths[l].push_back(sz.cx);
                 w += sz.cx + (r > 0 ? space.cx : 0);
             }
+            lineWidths[l] = w;
             width = max(width, w);
         }
         const int height = (int)lines.size() * lineH;
 
-        // The label hangs off its callsign, as EuroScope's own tag does: the
-        // offset places the callsign line, the warnings stack up above it and
-        // the expanded lines run on below, so the callsign - and the leader
-        // that reaches it - stays put whatever comes and goes around it.
         const size_t identLine = (m_osLines == 3 && !warnings.empty()) ? 1 : 0;
 
         FormularState& state = m_formulars[callsign];
         if (!state.placed)
         {
-            // Up and to the right of the target, the "Galaxy CTR" tag's own
-            // leader of about 18 px.
             state.offset = { 16, -14 };
             state.placed = true;
         }
@@ -3746,36 +3392,23 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         area.bottom = area.top + height;
         state.area = area;
 
-        // ---- Leader, from just off the target to the callsign: to the near end
-        // of the callsign's line, mid-height - its left end for a label out to
-        // the right of the target, its right end for one out to the left ----
-        int identWidth = 0;
-        for (size_t r = 0; r < runWidths[identLine].size(); r++)
-            identWidth += runWidths[identLine][r] + (r > 0 ? space.cx : 0);
-        const bool labelRight = callsignAt.x + runWidths[identLine][0] / 2 >= tp.x;
-        POINT edge = { labelRight ? callsignAt.x - 2 : callsignAt.x + identWidth + 2, callsignAt.y };
-        // A label standing straight over its target is reached at the middle
-        // of its bottom edge, and one straight under it at the middle of its
-        // top edge, rather than by a line slanting in to the callsign's end.
-        if (tp.x >= area.left && tp.x <= area.right)
+        std::vector<RECT> rows;
+        for (size_t l = 0; l < lines.size(); l++)
         {
-            if (tp.y > area.bottom)
-                edge = { (area.left + area.right) / 2, area.bottom + 1 };
-            else if (tp.y < area.top)
-                edge = { (area.left + area.right) / 2, area.top - 1 };
-        }
-        double dx = edge.x - tp.x, dy = edge.y - tp.y;
-        double len = sqrt(dx * dx + dy * dy);
-        const double kGapPx = 6.0;
-        if (len > kGapPx + 2.0)
-        {
-            // Through GDI+, antialiased, like the vectors and the ruler - a
-            // plain GDI pen leaves a slanted leader visibly stepped.
-            VectorCanvas canvas(hDC, base, 1.0f);
-            canvas.Line(tp.x + dx * kGapPx / len, tp.y + dy * kGapPx / len, edge.x, edge.y);
+            RECT row = { area.left, area.top + (int)l * lineH,
+                         area.left + lineWidths[l], area.top + (int)(l + 1) * lineH };
+            InflateRect(&row, 3, 1);
+            rows.push_back(row);
         }
 
-        // ---- The text ----
+        const POINT aim = { area.left + lineWidths[identLine] / 2, callsignAt.y };
+        POINT leaderFrom, leaderTo;
+        if (ClipLeaderToText(tp, aim, rows, 6.0, leaderFrom, leaderTo))
+        {
+            VectorCanvas canvas(hDC, base, 1.0f);
+            canvas.Line(leaderFrom.x, leaderFrom.y, leaderTo.x, leaderTo.y);
+        }
+
         RECT ahdgRect = { 0, 0, 0, 0 };
         bool haveAhdg = false;
         for (size_t l = 0; l < lines.size(); l++)
@@ -3803,50 +3436,49 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
         }
 
-        // One moveable object for the whole label: a drag anywhere on it moves
-        // it, and a click is sorted out by item in FormularClick.
         if (registerObjects)
         {
             RECT hit = area;
             InflateRect(&hit, 2, 1);
             AddScreenObject(SO_FORMULAR, callsign.c_str(), hit, true, "");
 
-            // AHDG on top of it, so a pull there lays a heading instead of
-            // moving the label.
             if (haveAhdg)
                 AddScreenObject(SO_FORMULAR_AHDG, callsign.c_str(), ahdgRect, true,
                     Tr("Тянуть ЛКМ - курс, ПКМ - меню курса TopSky"));
         }
     }
 
-    // ---- A heading being pulled off AHDG, as TopSky draws it: a dashed line
-    // straight from the aircraft to the cursor, and over its far end
-    // "distance/heading" ----
     if (m_hdgDragging && m_hdgDragMoved)
     {
         POINT from = { 0, 0 };
-        double distNm = 0.0;
-        int hdg = DragHeading(m_hdgDragCallsign.c_str(), m_hdgDragPt, &from, &distNm);
+        double distNm = 0.0, drawnHdg = 0.0;
+        int hdg = DragHeading(m_hdgDragCallsign.c_str(), m_hdgDragPt, &from, &distNm, &drawnHdg);
         if (hdg > 0)
         {
+            std::vector<POINT> path;
+            HeadingTurnPath(plugin->RadarTargetSelect(m_hdgDragCallsign.c_str()),
+                drawnHdg, distNm, path);
             {
                 VectorCanvas canvas(hDC, Theme::HeadingDragLine);
-                // Long dashes, as TopSky's: 14 px on, 6 px off. GDI+ counts a
-                // dash pattern in pen widths, so the pixels are divided by it.
                 const Gdiplus::REAL w = max((Gdiplus::REAL)0.5f, canvas.pen.GetWidth());
                 const Gdiplus::REAL dashes[] = { 14.0f / w, 6.0f / w };
                 canvas.pen.SetDashPattern(dashes, 2);
-                canvas.Line(from.x, from.y, m_hdgDragPt.x, m_hdgDragPt.y);
+                if (path.size() >= 2)
+                    canvas.Polyline(path);
+                else
+                    canvas.Line(from.x, from.y, m_hdgDragPt.x, m_hdgDragPt.y);
             }
 
             const double dist = (plugin->UnitDist() == DistUnit::Km) ? distNm * 1.852 : distNm;
             wchar_t text[32];
             swprintf_s(text, L"%.1f/%03d", dist, hdg);
 
+            const POINT tip = path.size() >= 2 ? path.back() : m_hdgDragPt;
+
             SIZE sz = { 0, 0 };
             GetTextExtentPoint32W(hDC, text, (int)wcslen(text), &sz);
             SetTextColor(hDC, Theme::HeadingDragText);
-            TextOutW(hDC, m_hdgDragPt.x - 2, m_hdgDragPt.y - sz.cy - 2, text, (int)wcslen(text));
+            TextOutW(hDC, tip.x - 2, tip.y - sz.cy - 2, text, (int)wcslen(text));
         }
     }
 
@@ -3863,30 +3495,65 @@ CGalaxyATMSystemRadarScreen::FormularKind CGalaxyATMSystemRadarScreen::CurrentFo
     default: break;
     }
 
-    // An observer has no position, and gets the РДЦ label.
     CController me = GetPlugIn()->ControllerMyself();
     if (me.IsValid() && me.IsController())
     {
         const int facility = me.GetFacility();
-        if (facility == 5)                     // APP, DEP
+        if (facility == 5)
             return FormularKind::App;
-        if (facility >= 2 && facility <= 4)    // DEL, GND, TWR
+        if (facility >= 2 && facility <= 4)
             return FormularKind::Twr;
     }
     return FormularKind::Ctr;
 }
 
-// ---- Метки ----------------------------------------------------------------------
-// The position symbol of every aircraft whose формуляр could be drawn - the same
-// ones, the same Фильтр высоты - picked as TopSky picks it (TopSky General,
-// 5.1.2, and TopSkySymbols.txt's list): UNCONTROLLED for a VFR flight nobody has
-// assumed; otherwise DAPS for a mode S track, NODAPS for a mode C one and
-// PRIMARY for a primary-only one, as the _SPI variant while the transponder
-// idents and as the _DIV variant while RAM or CLAM is up, whichever of those the
-// file defines, and COASTED when nothing has been heard for 30 seconds. Always
-// in the формуляр's own colour: selecting an aircraft - which a right click on
-// its формуляр does, to open a menu - must not repaint its метка, so a track
-// that is not mine stays grey and one coming to me stays blue.
+void CGalaxyATMSystemRadarScreen::HeadingTurnPath(CRadarTarget rt, double headingDeg,
+    double totalNm, std::vector<POINT>& out)
+{
+    out.clear();
+    if (!rt.IsValid() || !rt.GetPosition().IsValid())
+        return;
+
+    const CPosition start = rt.GetPosition().GetPosition();
+    out.push_back(ConvertCoordFromPositionToPixel(start));
+
+    if (rt.GetGS() < 30)
+    {
+        out.push_back(ConvertCoordFromPositionToPixel(
+            CalculateDestinationPoint(start, headingDeg, max(0.1, totalNm))));
+        return;
+    }
+
+    const double kRoundPx = 15.0;
+    const POINT atStart = out.front();
+    const POINT aMileOff = ConvertCoordFromPositionToPixel(
+        CalculateDestinationPoint(start, 90.0, 1.0));
+    const double dxPx = (double)aMileOff.x - atStart.x, dyPx = (double)aMileOff.y - atStart.y;
+    const double pxPerNm = sqrt(dxPx * dxPx + dyPx * dyPx);
+    const double radiusNm = max(0.02, min(pxPerNm > 0.01 ? kRoundPx / pxPerNm : 0.5,
+        totalNm / 4.0));
+    const double track = rt.GetTrackHeading();
+    const double delta = fmod(headingDeg - track + 540.0, 360.0) - 180.0;
+    const double dir = (delta >= 0.0) ? 1.0 : -1.0;
+    const double turn = fabs(delta);
+
+    const CPosition centre = CalculateDestinationPoint(start, track + dir * 90.0, radiusNm);
+    const double fromCentre = track - dir * 90.0;
+
+    const double kStepDeg = 5.0;
+    for (double a = kStepDeg; a < turn; a += kStepDeg)
+        out.push_back(ConvertCoordFromPositionToPixel(
+            CalculateDestinationPoint(centre, fromCentre + dir * a, radiusNm)));
+
+    const CPosition rollOut = CalculateDestinationPoint(centre, fromCentre + dir * turn, radiusNm);
+    out.push_back(ConvertCoordFromPositionToPixel(rollOut));
+
+    const double straightNm = totalNm - radiusNm * turn * M_PI / 180.0;
+    if (straightNm > 0.05)
+        out.push_back(ConvertCoordFromPositionToPixel(
+            CalculateDestinationPoint(rollOut, headingDeg, straightNm)));
+}
+
 void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 {
     const TrackSymbolSet& symbols = TrackSymbols();
@@ -3938,7 +3605,8 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
             else
                 name = "NODAPS";
 
-            const bool diverging = fp.IsValid() && (fp.GetRAMFlag() || fp.GetCLAMFlag());
+            const bool diverging = fp.IsValid()
+                && (fp.GetRAMFlag() || fp.GetCLAMFlag() || RouteAdherenceAlert(fp, rt));
             if (pos.GetTransponderI() && symbols.count(name + "_SPI"))
                 name += "_SPI";
             else if (diverging && symbols.count(name + "_DIV"))
@@ -3956,17 +3624,11 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 
         const COLORREF color = GetTagColorForFlightPlan(fp);
 
-        // Защитный объём, under everything else so the метка and its trail stay
-        // readable inside it: only for a target whose формуляр has one up.
         const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
         auto state = (cs != NULL) ? m_formulars.find(cs) : m_formulars.end();
         if (state != m_formulars.end() && state->second.zone)
             DrawProtectionZone(hDC, pos.GetPosition(), tp, color);
 
-        // Traffic history: the target's last Theme::TrackHistoryDots positions
-        // behind it, in the HISTORY symbol and its own colour, under its метка.
-        // EuroScope keeps the earlier returns; each is asked for off the one
-        // after it, and one off the radar is skipped rather than ending the trail.
         auto history = symbols.find("HISTORY");
         if (history != symbols.end())
         {
@@ -3982,17 +3644,18 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
             }
         }
 
-        DrawTrackSymbol(hDC, symbol->second, tp, color);
+        auto star = (fp.IsValid() && fp.GetState() == FLIGHT_PLAN_STATE_ASSUMED)
+            ? symbols.find("ASSUMED") : symbols.end();
+        const bool assumed = star != symbols.end();
+
+        DrawTrackSymbol(hDC, symbol->second, tp, color, assumed ? kAssumedHoleRadius : 0.0);
+        if (assumed)
+            DrawTrackSymbol(hDC, star->second, tp, color);
         m_symbolStats.drawn++;
     }
     RestoreDC(hDC, saved);
 }
 
-// ---- Защитный объём ---------------------------------------------------------
-// The circle a left click on the формуляр's GS puts round a метка: kProtection-
-// ZoneKm on the ground, in the target's own colour. The radius is measured in
-// the world rather than in pixels - a point that far off the target is put
-// through the same projection - so the ring stays 10 km at every zoom.
 void CGalaxyATMSystemRadarScreen::DrawProtectionZone(HDC hDC, CPosition center, POINT tp,
     COLORREF color)
 {
@@ -4001,14 +3664,14 @@ void CGalaxyATMSystemRadarScreen::DrawProtectionZone(HDC hDC, CPosition center, 
     const double dx = edge.x - tp.x, dy = edge.y - tp.y;
     const double r = sqrt(dx * dx + dy * dy);
     if (r < 2.0)
-        return;   // zoomed so far out that the ring is the метка itself
+        return;
 
     VectorCanvas canvas(hDC, color);
     canvas.Circle(tp.x, tp.y, r);
 }
 
 int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor,
-    POINT* from, double* distNm)
+    POINT* from, double* distNm, double* drawnHdg)
 {
     CRadarTarget rt = GetPlugIn()->RadarTargetSelect(sCallsign);
     if (!rt.IsValid() || !rt.GetPosition().IsValid())
@@ -4020,11 +3683,8 @@ int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor
         return 0;
     const CPosition target = ConvertCoordFromPixelToPosition(cursor);
 
-    // DirectionTo is already magnetic, by the sector file's own variation -
-    // which is what an assigned heading is.
-    // Only headings in fives - 285, 290 - are given, so it snaps to the
-    // nearest one; north is 360, never 000.
-    int hdg = (int)lround(start.DirectionTo(target) / 5.0) * 5 % 360;
+    const double raw = start.DirectionTo(target);
+    int hdg = (int)lround(raw / 5.0) * 5 % 360;
     if (hdg <= 0)
         hdg += 360;
 
@@ -4032,15 +3692,13 @@ int CGalaxyATMSystemRadarScreen::DragHeading(const char* sCallsign, POINT cursor
         *from = tp;
     if (distNm != NULL)
         *distNm = start.DistanceTo(target);
+    if (drawnHdg != NULL)
+        *drawnHdg = GeoBearingDeg(start, target) + (hdg - raw);
     return hdg;
 }
 
-
-// A click on a формуляр selects the aircraft, then starts on that item what the
-// sector's own tag starts there - see the kFn table above DrawFormulars.
 void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt, int button)
 {
-    // The release of a heading pull can come back as a click as well.
     if (GetTickCount64() - m_hdgDragEndTick < 500)
         return;
 
@@ -4048,9 +3706,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     if (it == m_formulars.end())
         return;
 
-    // The middle button lights the callsign up in orange, and a second one
-    // puts it out. TopSky's own Highlight cannot be followed: it keeps that
-    // flag to itself and writes it nowhere a plug-in can read.
     if (button == BUTTON_MIDDLE)
     {
         it->second.highlighted = !it->second.highlighted;
@@ -4058,7 +3713,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
-    // Most tag functions act on the ASEL aircraft, so it is selected first.
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
     if (fp.IsValid())
         GetPlugIn()->SetASELAircraft(fp);
@@ -4073,9 +3727,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         }
     }
 
-    // Защитный объём: the left button on GS draws the 10 km circle round the
-    // метка, and the next one takes it down. It is the метка's, not the label's,
-    // so it stays up while the формуляр is dragged about or collapsed.
     if (hit != NULL && IsGsFn(hit->fn) && button == BUTTON_LEFT)
     {
         it->second.zone = !it->second.zone;
@@ -4083,10 +3734,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
-    // A right click on an approach clearance (CA / VA) clears it off, as the
-    // wiki has it. Otherwise CFL is the sector tag's: TopSky's CFL menu on
-    // the left button, and PEL or TopSky's 157 on the right - which in a
-    // simulator session is EuroScope's level popup instead (SimulatorFn).
     if (hit != NULL && fp.IsValid() && IsCflFn(hit->fn) && button == BUTTON_RIGHT)
     {
         int cfl = fp.GetControllerAssignedData().GetClearedAltitude();
@@ -4101,8 +3748,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     if (hit != NULL && hit->fn != NULL && fp.IsValid())
     {
         const bool right = (button == BUTTON_RIGHT);
-        // A simulator session's pseudo pilot follows EuroScope's own popups -
-        // see SimulatorFn.
         const FormularFn f = InSimulatorSession(GetPlugIn()) ? SimulatorFn(*hit->fn, right) : *hit->fn;
         const int id = right ? f.rightFn : f.leftFn;
         if (id != 0)
@@ -4112,13 +3757,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     RequestRefresh();
 }
 
-// ---- Сигметы ----------------------------------------------------------
-// One ring of one report, in this frame's pixels. Returns false when there is
-// nothing worth drawing: too few points, or the whole ring off the screen.
-//
-// The whole ring is culled here on its bounding box; the edges that survive
-// are clipped one by one where they are used. This is only the cheap first
-// pass - it decides whether the ring is worth looking at at all.
 bool CGalaxyATMSystemRadarScreen::SigmetOutline(
     const std::vector<EuroScopePlugIn::CPosition>& ring, std::vector<POINT>& out)
 {
@@ -4138,9 +3776,6 @@ bool CGalaxyATMSystemRadarScreen::SigmetOutline(
         bbox.bottom = max(bbox.bottom, px.y);
     }
 
-    // Inflated by a pixel first: a ring whose points happen to be collinear
-    // has a bounding box of no height, and an empty rectangle intersects
-    // nothing as far as IntersectRect is concerned.
     InflateRect(&bbox, 1, 1);
 
     RECT ra = GetRadarArea();
@@ -4160,10 +3795,6 @@ void CGalaxyATMSystemRadarScreen::DrawSigmets(HDC hDC)
 
     int saved = SaveDC(hDC);
 
-    // No fill: the area is an outline and nothing else, so the map and the
-    // traffic inside it are as readable as they are anywhere else. Drawn on
-    // the antialiased surface - a сигмет is all long diagonals, which is what
-    // a GDI pen is worst at.
     {
         AreaCanvas canvas(hDC, GetRadarArea(), Theme::SigmetLine,
             (float)Theme::SigmetWidth);
@@ -4181,29 +3812,15 @@ void CGalaxyATMSystemRadarScreen::DrawSigmets(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// The hit-boxes are registered a phase later than the areas are drawn. Drawing
-// belongs under the tags; registering belongs in the same pass as everything
-// else of ours, first in it, so a сигмет never takes a click away from a
-// ruler line or from the panel on top of it.
-//
-// Boxes are sampled along the outline rather than being one box per area: an
-// area's bounding box is most of the radar at a normal zoom and would swallow
-// every click inside it. The area carries no fill, so its outline is what
-// there is to aim at anyway.
 void CGalaxyATMSystemRadarScreen::RegisterSigmetObjects()
 {
     if (!m_sigmetsVisible || !m_sigmets || m_sigmets->empty())
         return;
 
     RECT ra = GetRadarArea();
-    // Boxes 24 px across every 24 px: they meet without overlapping, and the
-    // half-width matches the tolerance FindSigmetAt applies afterwards.
     const int kPad = 12;
     const double kStepPx = 24.0;
 
-    // A ceiling on the whole overlay. Nothing normal comes close - it is there
-    // so that a jagged area at a very close zoom cannot quietly hand EuroScope
-    // tens of thousands of objects to hit-test on every mouse move.
     const int kMaxBoxes = 3000;
     int boxes = 0;
 
@@ -4224,9 +3841,6 @@ void CGalaxyATMSystemRadarScreen::RegisterSigmetObjects()
             size_t segments = sig.closed ? pts.size() : pts.size() - 1;
             for (size_t seg = 0; seg < segments && boxes < kMaxBoxes; seg++)
             {
-                // Clipped first, then sampled: sampling the whole edge and
-                // throwing away what falls off the screen would put every
-                // sample off it once the edge is much wider than the display.
                 POINT a = pts[seg], b = pts[(seg + 1) % pts.size()];
                 if (!Geom::ClipSegment(ra, a, b))
                     continue;
@@ -4249,17 +3863,13 @@ void CGalaxyATMSystemRadarScreen::RegisterSigmetObjects()
     }
 }
 
-// Which report is under the cursor. The press is routed to us by whichever
-// hit-box it landed on, but overlapping areas share their boxes, so the
-// decision is made here on the real geometry: an area the cursor is inside
-// wins, otherwise the one whose outline runs nearest to it.
 int CGalaxyATMSystemRadarScreen::FindSigmetAt(POINT pt)
 {
     if (!m_sigmets)
         return -1;
 
     int best = -1;
-    double bestDist = 12.0;   // pixels; a miss by more than this is a miss
+    double bestDist = 12.0;
     std::vector<POINT> pts;
 
     for (size_t i = 0; i < m_sigmets->size(); i++)
@@ -4288,24 +3898,11 @@ int CGalaxyATMSystemRadarScreen::FindSigmetAt(POINT pt)
     return best;
 }
 
-// ---- Зоны запретов и ограничений -------------------------------------------
-// Static areas off the config file, drawn in the same phase and the same way as
-// the сигметы: an outline with no fill so the traffic inside stays readable,
-// and the designator on the area itself so it can be named without opening it.
-// The colours themselves come off the config file - Theme only holds what they
-// fall back to - so a position can retune the three kinds in the JSON and
-// reload, without a build.
-
 bool CGalaxyATMSystemRadarScreen::ZoneOutline(const Zone& zone, std::vector<POINT>& out)
 {
     return SigmetOutline(zone.ring, out);
 }
 
-// An area that is not up at this moment is not drawn at all, so this is what
-// decides what the whole overlay consists of. Worked out once per frame rather
-// than per lookup: the answer changes with the clock, and an outline drawn from
-// one answer with hit-boxes built from another would let a click land on a zone
-// that is not on the screen.
 void CGalaxyATMSystemRadarScreen::UpdateZoneActivity()
 {
     const Config& cfg = Plugin()->GetConfig();
@@ -4323,12 +3920,10 @@ void CGalaxyATMSystemRadarScreen::UpdateZoneActivity()
 
     ZoneActivation what;
     what.aup = m_aup ? m_aup.get() : &kNoBookings;
-    // Left null while nothing has been read: that is what tells an area
-    // hanging on a NOTAM that nobody can answer for it.
     what.notams = m_notams ? m_notams.get() : NULL;
     what.showNotamWhenUnknown = cfg.ShowNotamAreas();
 
-    const time_t now = time(NULL);   // UTC, like everything else on the panel
+    const time_t now = time(NULL);
 
     for (size_t i = 0; i < zones.size(); i++)
     {
@@ -4355,11 +3950,6 @@ void CGalaxyATMSystemRadarScreen::DrawZones(HDC hDC)
     const ZoneStyle& styleR = cfg.ZoneStyleFor(ZoneKind::Restricted);
     const ZoneStyle& styleD = cfg.ZoneStyleFor(ZoneKind::Danger);
 
-    // One antialiased surface for the whole overlay, its pen retuned per area
-    // rather than a pen made per area: a package carries a few hundred of them
-    // and a hundred and sixty can be up at once. The wash goes on through the
-    // same surface, so the edge of an area is one smooth line whether it is
-    // the outline or the side of the fill under it.
     {
         AreaCanvas canvas(hDC, GetRadarArea(), styleR.line, (float)Theme::ZoneWidth);
         std::vector<POINT> pts;
@@ -4379,48 +3969,12 @@ void CGalaxyATMSystemRadarScreen::DrawZones(HDC hDC)
             canvas.Wash(pts, style.fill, style.alpha);
             canvas.SetColor(style.line);
             canvas.Ring(pts, true);
-
-            // No designator drawn on the area itself: at a normal zoom several
-            // of them overlap, and their names sat on top of the traffic they
-            // are there to keep clear of. The name is on the hover tooltip and
-            // in the window a click opens.
         }
     }
 
     RestoreDC(hDC, saved);
 }
 
-// Hit-boxes, registered in the same pass as the сигмет ones - see the note on
-// RegisterSigmetObjects - but only while Shift is held (see OnRefresh).
-//
-// The screen is ruled into squares and every square an outline runs through
-// becomes one box. It is done that way because the two obvious ways are both
-// wrong on the picture this position actually works with - a few hundred areas
-// off the TopSky package, a hundred and sixty of them up at once:
-//
-//   - a box per point spends everything it has on the first areas in the file.
-//     A circle arrives as seventy-two points, the package writes every
-//     запретная зона before the first ограничительная one, and the R areas were
-//     left without a single box: drawn, named on hover, and dead to the button.
-//
-//   - a share of the boxes per area keeps them all alive but spaces them by
-//     what each area can afford, so on a wide picture the boxes stop touching
-//     and the outline between two of them answers to nothing. That is the
-//     "sometimes it opens, sometimes it doesn't" of a zoomed-out screen.
-//
-// Squares have neither failure: they tile, so a press anywhere on an area
-// lands on a box; areas sharing a square share its box, so what the whole
-// overlay costs is bounded by the screen rather than by the package; and the
-// square knows which area it answers with, which is the one it names and the
-// one a press on it opens.
-//
-// Both the outline and the inside of an area are covered. The outline on its
-// own was too fine an aim for an area the size of Кронштадт: what a controller
-// points at is the piece of airspace, not the line round it. The squares an
-// outline runs through still win over the squares that only fall inside one,
-// so a shared edge answers with the area whose line was pressed; where two
-// areas overlap inside, the smaller one wins, since the bigger one can always
-// be pressed somewhere the smaller is not.
 void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
 {
     if (!m_zonesVisible)
@@ -4434,18 +3988,15 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
     if (ra.right <= ra.left || ra.bottom <= ra.top)
         return;
 
-    const int kCellPx = 24;      // a square, and so the aim it asks for
+    const int kCellPx = 24;
     const int kMaxCellPx = 96;
     const int kMaxBoxes = 3000;
 
-    // The areas with something on the screen, with the outline kept as it
-    // comes out: projecting a few hundred rings is the expensive part of this
-    // and must not be done again for every square.
     struct Outline
     {
         size_t index;
         std::vector<POINT> pts;
-        double area;        // in pixels, and only used to rank two overlapping insides
+        double area;
     };
     std::vector<Outline> visible;
 
@@ -4457,9 +4008,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
         if (!ZoneOutline(zones[i], pts))
             continue;
 
-        // On screen if any edge crosses it, and also if the display sits
-        // wholly inside the area - zoomed in far enough that no edge is left
-        // on the picture, the airspace underneath still has to answer.
         bool onScreen = false;
         for (size_t seg = 0; seg < pts.size() && !onScreen; seg++)
         {
@@ -4478,7 +4026,7 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
         o.index = i;
         o.pts = pts;
 
-        double twice = 0.0;   // the shoelace, kept as twice the area and unsigned
+        double twice = 0.0;
         for (size_t seg = 0; seg < pts.size(); seg++)
         {
             const POINT& a = pts[seg];
@@ -4493,22 +4041,13 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
     if (visible.empty())
         return;
 
-    // One square and the area it answers with. 'rank' is 0 for a square an
-    // outline runs through and 1 for one that only falls inside an area, and
-    // it is compared before anything else: the line wins the square it is on.
-    // 'score' ranks two of the same kind - the outline nearest the square's
-    // middle, or the smaller of two areas the square is inside.
     struct Square
     {
-        int    index;    // -1 while the square is unclaimed
+        int    index;
         int    rank;
         double score;
     };
 
-    // A flat grid rather than a map: an area covering the whole display claims
-    // every square on it, and with a hundred and sixty of them up that is a
-    // few hundred thousand claims a frame - each one has to be an index and a
-    // compare, not a tree walk.
     std::vector<Square> grid;
 
     int cell = kCellPx;
@@ -4526,8 +4065,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
         grid.assign((size_t)cols * rows, unclaimed);
         claimed = 0;
 
-        // Everything below claims through this, so the two passes cannot
-        // disagree about what beats what.
         auto claim = [&](int cx, int cy, int index, int rank, double score)
             {
                 cx -= baseCX;
@@ -4548,15 +4085,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
                 sq.score = score;
             };
 
-        // The insides first, so that the outlines below take back the squares
-        // the two share.
-        //
-        // Scanned a row of squares at a time: one horizontal line through the
-        // middle of the row, crossed with every edge, and the spans between
-        // its crossings are inside the area. That is the whole of the inside
-        // for the cost of the ring's own points, however wide the area is -
-        // testing every square against the polygon instead would be the same
-        // work multiplied by the number of squares.
         std::vector<double> xs;
         for (const Outline& o : visible)
         {
@@ -4582,8 +4110,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
                 {
                     const POINT& a = o.pts[seg];
                     const POINT& b = o.pts[(seg + 1) % o.pts.size()];
-                    // Half-open in y, so a vertex sitting exactly on the line
-                    // is counted once rather than twice or not at all.
                     if ((a.y <= y) == (b.y <= y))
                         continue;
                     const double t = (y - a.y) / (double)(b.y - a.y);
@@ -4608,7 +4134,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
             }
         }
 
-        // Half a square between samples, so a diagonal cannot step over one.
         const double step = cell / 2.0;
 
         for (const Outline& o : visible)
@@ -4644,8 +4169,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
         cell *= 2;
     }
 
-    // The tooltip is built once per area rather than once per square: a
-    // hundred and sixty areas can hold several thousand squares between them.
     std::map<size_t, std::string> tips;
     for (const Outline& o : visible)
         tips[o.index] = Narrow(zones[o.index].Title().substr(0, 120));
@@ -4669,8 +4192,6 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
     }
 }
 
-// The area a hit-box was registered for. Used when the press landed on a box
-// but on no outline - see OnButtonDownScreenObject.
 int CGalaxyATMSystemRadarScreen::ZoneFromObjectId(const char* sObjectId)
 {
     if (sObjectId == NULL || *sObjectId == '\0')
@@ -4689,24 +4210,13 @@ int CGalaxyATMSystemRadarScreen::ZoneFromObjectId(const char* sObjectId)
     return (int)idx;
 }
 
-// Which zone was clicked. The press arrives through whichever hit-box it landed
-// on, but neighbouring areas share their boxes, so the decision is made here on
-// the real geometry: an area the click is inside wins, otherwise the one whose
-// outline runs nearest to it.
 int CGalaxyATMSystemRadarScreen::FindZoneAt(POINT pt)
 {
     const std::vector<Zone>& zones = Plugin()->GetConfig().Zones();
 
     int best = -1;
-    // Pixels; a miss by more than this is a miss. Kept in step with the squares
-    // the hit-boxes are laid on, so that a press anywhere in one still reaches
-    // the outline that square was laid for.
     double bestDist = 18.0;
 
-    // The smallest area the press is inside, which beats any outline it merely
-    // passed near. Smallest rather than first: зоны nest, and a press inside a
-    // small опасная зона that sits within a great ограничительная one is a
-    // press on the small one - the big one can be pressed anywhere else.
     int bestInside = -1;
     double bestInsideArea = 0.0;
     std::vector<POINT> pts;
@@ -4749,8 +4259,6 @@ int CGalaxyATMSystemRadarScreen::FindZoneAt(POINT pt)
     return (bestInside >= 0) ? bestInside : best;
 }
 
-// The details of the area under the cursor, in the same half-transparent shade
-// the сигмет window uses and up for exactly as long: while the button is held.
 void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
 {
     const std::vector<Zone>& zones = Plugin()->GetConfig().Zones();
@@ -4760,17 +4268,12 @@ void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
         return;
     }
 
-    // An area whose booking has run out while its window was open goes off the
-    // screen with the outline it belonged to.
     if ((size_t)m_zoneInfoIndex >= m_zoneActive.size() || !m_zoneActive[m_zoneInfoIndex])
     {
         m_zoneInfoIndex = -1;
         return;
     }
 
-    // Four lines at one size, the way the real system writes them: the
-    // designator, the two ends of the booking, and the band of levels. A
-    // permanent area has no booking and so has neither of the middle lines.
     const Zone& zone = zones[m_zoneInfoIndex];
 
     std::wstring text = zone.id.empty() ? zone.name : zone.id;
@@ -4780,7 +4283,6 @@ void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
 
     if (booking != NULL)
     {
-        // "11:00 01-01-2026", in UTC like every other time on the panel.
         auto stamp = [](time_t t) -> std::wstring
         {
             tm utc = {};
@@ -4795,8 +4297,6 @@ void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
         text += L"\n" + stamp(booking->end);
     }
 
-    // The booked band when there is one - a booking can take less of the area
-    // than the area itself publishes - and the published limits otherwise.
     std::wstring levels = (booking != NULL)
         ? ZoneLevelText(booking->minFL) + L"-" + ZoneLevelText(booking->maxFL)
         : zone.LevelBand();
@@ -4806,8 +4306,6 @@ void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
     if (!zone.note.empty())
         text += L"\n" + zone.note;
 
-    // Sized to the text: four short lines make a small plate, and only a long
-    // note stretches it. The window is the readout, not a panel to fill.
     const int kPadX = 10, kPadY = 8;
     const int kMaxW = 360, kMinW = 130;
 
@@ -4837,8 +4335,6 @@ void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
 
     FillAlpha(hDC, box, Theme::SigmetInfoBg, Theme::SigmetInfoAlpha);
 
-    // A hairline round the shade, the same as the сигмет window's, so the
-    // plate has an edge to be read against the wash of the area it lands on.
     {
         HPEN pen = CreatePen(PS_INSIDEFRAME, 1, Theme::SigmetInfoEdge);
         HPEN oldPen = (HPEN)SelectObject(hDC, pen);
@@ -4858,18 +4354,6 @@ void CGalaxyATMSystemRadarScreen::DrawZoneInfo(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// The window is open only while the button is held. EuroScope reports the
-// release through OnButtonUpScreenObject, but only when the cursor is still on
-// one of our objects - let go after dragging off the outline and no event ever
-// arrives - so the button state is watched on the poll timer as well, and that
-// is what actually guarantees the window closes.
-//
-// The button is not assumed to be down the moment the window opens: if the
-// press reaches us late enough that it has already been released, the poll
-// would close the window on its first tick and the report would never be
-// readable. So the release only counts once the poll has seen the button
-// actually held - with a short grace period, so a press that is never
-// confirmed cannot leave the window up for good either.
 void CGalaxyATMSystemRadarScreen::CloseSigmetInfoIfButtonReleased()
 {
     if (m_sigmetInfoIndex < 0 && m_zoneInfoIndex < 0)
@@ -4877,7 +4361,6 @@ void CGalaxyATMSystemRadarScreen::CloseSigmetInfoIfButtonReleased()
 
     const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 
-    // ~0.5 s at the poll timer's 40 ms.
     const int kGraceTicks = 12;
 
     if (m_sigmetInfoIndex >= 0)
@@ -4907,18 +4390,6 @@ void CGalaxyATMSystemRadarScreen::CloseSigmetInfoIfButtonReleased()
     }
 }
 
-// The report itself, in white on black at half opacity, hung off the point the
-// button went down at and pushed back inside the radar area if it would hang
-// off the edge.
-//
-// Nothing else: no border, no rules, and no decoded summary above it. The
-// message already says the hazard, the levels, the validity and the movement,
-// in the words a controller reads them in everywhere else - repeating them in
-// a second form above it only made the window taller.
-//
-// The width is measured from the message rather than fixed, so a report's own
-// line breaks are what shows on the screen and nothing is re-wrapped that the
-// issuing office did not wrap itself.
 void CGalaxyATMSystemRadarScreen::DrawSigmetInfo(HDC hDC)
 {
     if (!m_sigmets || m_sigmetInfoIndex < 0 || (size_t)m_sigmetInfoIndex >= m_sigmets->size())
@@ -4930,15 +4401,8 @@ void CGalaxyATMSystemRadarScreen::DrawSigmetInfo(HDC hDC)
     const Sigmet& sig = (*m_sigmets)[m_sigmetInfoIndex];
 
     const int kPadX = 10, kPadY = 8;
-    // A narrow column rather than one wide enough for a SIGMET's own ~69
-    // character lines: the report wraps into more, shorter lines, which reads
-    // better beside the area it belongs to and keeps the window from lying
-    // across half the radar. Measured over the live feed, this puts a typical
-    // report at about 400 x 140 and the longest at 400 x 304.
     const int kMaxW = 400, kMinW = 260;
 
-    // Every report in the feed carries its own text, but a window with nothing
-    // in it would be worse than the one-line identity if one ever did not.
     const std::wstring& text = sig.raw.empty() ? sig.Title() : sig.raw;
 
     int saved = SaveDC(hDC);
@@ -4967,8 +4431,6 @@ void CGalaxyATMSystemRadarScreen::DrawSigmetInfo(HDC hDC)
 
     FillAlpha(hDC, box, Theme::SigmetInfoBg, Theme::SigmetInfoAlpha);
 
-    // A hairline round the shade in the same white as the report itself, so
-    // the window has an edge to be read against whatever it lands on.
     {
         HPEN pen = CreatePen(PS_INSIDEFRAME, 1, Theme::SigmetInfoEdge);
         HPEN oldPen = (HPEN)SelectObject(hDC, pen);
@@ -4988,19 +4450,11 @@ void CGalaxyATMSystemRadarScreen::DrawSigmetInfo(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// Where the panel's top edge sits, and with it everything docked to the panel.
-// Anchored to the toolbar rather than to the radar area: EuroScope shrinks the
-// radar area whenever it docks a list or the chat pane along the top, and a
-// header tied to that edge slides down the screen and back as those come and
-// go. The toolbar's own bottom edge stays where it is, so the clock does too.
 int CGalaxyATMSystemRadarScreen::PanelTop()
 {
     RECT ra = GetRadarArea();
     RECT tb = GetToolbarArea();
 
-    // Only when the toolbar is the strip along the top, which is where it
-    // normally lives: anchoring to one parked anywhere else would drop the
-    // panel somewhere far worse than the edge it was tied to before.
     if (tb.bottom > 0 && tb.top <= ra.top && tb.bottom <= ra.top)
         return tb.bottom;
     return ra.top;
@@ -5008,10 +4462,6 @@ int CGalaxyATMSystemRadarScreen::PanelTop()
 
 void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
 {
-    // Collapsed, nothing is left but a small clock/date window in the corner:
-    // not the sidebar with its blocks hidden, but a narrower card the height of
-    // the header alone, so the radar underneath is handed back. Clicking its
-    // "+" opens the panel again, without needing the ".ulll" command.
     int width = m_collapsed ? kCollapsedWidth : kPanelWidth;
     int height = m_collapsed
         ? L::HEADER_H + L::COLLAPSED_BOT_PAD
@@ -5030,34 +4480,15 @@ void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
         + L::BLOCK_GAP_WIDE + L::Block(L::AERODROME_BOX_H)
         + L::PANEL_BOT_PAD;
 
-    // The panel is docked rather than placed: it always sits flush in the top
-    // right corner of the radar area and there is no way to move it - no drag
-    // handle, and no saved position to restore. A window resize therefore
-    // cannot leave it half off the screen either.
     RECT ra = GetRadarArea();
     m_panelArea.right = ra.right;
     m_panelArea.left = ra.right - width;
-    // Under the menu bar, which runs the full width of the radar over it.
-    // Collapsed there is no bar (see OnRefresh), and the little clock window
-    // goes back up to the toolbar.
     m_panelArea.top = m_collapsed ? PanelTop() : PanelTop() + MenuBarHeight();
     m_panelArea.bottom = m_panelArea.top + height;
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    // The panel carries no outline in any state - only the boxes inside it do
-    // - since it hangs off the menu bar and an edge would cut it off from it.
-    // Expanded, its background is stretched past the content to the bottom of
-    // the radar area, so the card reads as a full-height sidebar rather than
-    // stopping dead under the last block; m_panelArea itself (used for hit
-    // testing) stays sized to the actual content. Collapsed, and on the
-    // Авторизация card, there is no sidebar to continue and it is drawn to its
-    // own size.
-    //
-    // Square-cornered, not one of the rounded plates: a rounded top left
-    // corner leaves a pixel of whatever is underneath - TopSky's menu - showing
-    // at the joint with the bar.
     RECT bgArea = m_panelArea;
     if (!m_collapsed && Authorized() && bgArea.bottom < ra.bottom)
         bgArea.bottom = ra.bottom;
@@ -5085,11 +4516,6 @@ void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
 
 int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
 {
-    // The header is not a drag handle: the panel is docked to the right edge
-    // of the radar area and does not move, so the only thing registered here
-    // is the collapse toggle.
-
-    // "-" in the top-right corner, "+" once collapsed.
     RECT toggle = { m_panelArea.right - 16, y + 2, m_panelArea.right - 2, y + 16 };
     int tx = (toggle.left + toggle.right) / 2, ty = (toggle.top + toggle.bottom) / 2;
     HPEN pen = CreatePen(PS_SOLID, 1, Theme::Text);
@@ -5107,7 +4533,7 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
         m_collapsed ? Tr("Развернуть панель") : Tr("Свернуть панель"));
 
     SYSTEMTIME st;
-    GetSystemTime(&st); // already UTC
+    GetSystemTime(&st);
 
     wchar_t clock[16];
     swprintf_s(clock, L"%02d:%02d:%02d", st.wHour, st.wMinute, st.wSecond);
@@ -5128,11 +4554,6 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
     return y + L::HEADER_H;
 }
 
-// ---- Авторизация ---------------------------------------------------------------
-// The staged "проверка" after "Вход": when each stage ends, in ms after the
-// press, and the line it prints. Nothing is actually checked. The bar fills
-// over every stage but the last, which holds the full bar and the lime line
-// for a moment before the panel opens.
 namespace
 {
     struct AuthStage { ULONGLONG endMs; const wchar_t* text; };
@@ -5147,8 +4568,41 @@ namespace
     const ULONGLONG kAuthTotalMs    = kAuthStages[kAuthStageCount - 1].endMs;
 }
 
+void CGalaxyATMSystemRadarScreen::AutoLogin()
+{
+    if (m_authState != AuthState::LoggedOut || m_loginWindowOpen || Plugin()->TrainingSession())
+        return;
+
+    const CGalaxyATMSystemPlugin::LoginState state = Plugin()->MyLogin();
+    if (m_autoLoginTried)
+    {
+        if (state == CGalaxyATMSystemPlugin::LoginState::Done)
+            StartAuthCheck();
+        else if (state == CGalaxyATMSystemPlugin::LoginState::Failed && m_authMessage.empty())
+        {
+            Plugin()->MyLogin(&m_authMessage);
+            RequestRefresh();
+        }
+        return;
+    }
+
+    if (state != CGalaxyATMSystemPlugin::LoginState::Idle
+        || Plugin()->AccessSuspended() || !Plugin()->LiveConnection()
+        || Plugin()->GetConfig().SquawkServerUrl().empty())
+        return;
+
+    const CGalaxyATMSystemPlugin::SavedLogin& saved = Plugin()->SavedIdentity();
+    if (!saved.Complete())
+        return;
+
+    m_autoLoginTried = true;
+    Log::Info("auth", "LOGIN sent with the saved CID and name, without asking");
+    Plugin()->StartLogin(saved.cid, saved.surname, saved.firstName, saved.patronymic);
+}
+
 void CGalaxyATMSystemRadarScreen::TickAuth()
 {
+    AutoLogin();
     if (m_authState != AuthState::Checking)
         return;
     if (GetTickCount64() - m_authStartTick >= kAuthTotalMs)
@@ -5156,14 +4610,9 @@ void CGalaxyATMSystemRadarScreen::TickAuth()
         m_authState = AuthState::LoggedIn;
         Plugin()->SetSessionAuthorized(true);
     }
-    RequestRefresh();   // the bar moves on the fast tick, not the 1 s one
+    RequestRefresh();
 }
 
-// The session's login is the plugin's, so every display follows it: one that
-// is out while the session is in lets itself in straight away, with no check
-// run over again, and one that is in while the session was logged out -
-// ".logout" or a suspension seen on another display - goes back to the
-// Авторизация block.
 void CGalaxyATMSystemRadarScreen::SyncAuth()
 {
     const bool session = Plugin()->SessionAuthorized();
@@ -5171,15 +4620,12 @@ void CGalaxyATMSystemRadarScreen::SyncAuth()
     {
         m_authState = AuthState::LoggedIn;
         m_authMessage.clear();
-        m_authFailed = false;
         CloseLoginWindow();
     }
     else if (!session && m_authState == AuthState::LoggedIn)
     {
         m_authState = AuthState::LoggedOut;
         m_authMessage.clear();
-        m_authFailed = false;
-        m_authBypassed = false;
         m_openDropdown = DropdownKind::None;
         m_rulerArmed = false;
         m_rulerPlacing = false;
@@ -5196,12 +4642,6 @@ void CGalaxyATMSystemRadarScreen::StartAuthCheck()
     RequestRefresh();
 }
 
-bool CGalaxyATMSystemRadarScreen::BypassAvailable()
-{
-    return m_authState == AuthState::LoggedOut && m_authFailed
-        && !Plugin()->AccessSuspended() && !Plugin()->TrainingSession();
-}
-
 void CGalaxyATMSystemRadarScreen::ShowNotice(const std::wstring& text)
 {
     m_noticeText = text;
@@ -5210,8 +4650,6 @@ void CGalaxyATMSystemRadarScreen::ShowNotice(const std::wstring& text)
 
 namespace
 {
-    // The "x" at the end of a dark title bar - the Вход window's and the
-    // notice's, drawn as the sector list's is.
     void DrawCloseCross(HDC hDC, const RECT& close, COLORREF ink)
     {
         const int cx = (close.left + close.right) / 2, cy = (close.top + close.bottom) / 2;
@@ -5227,10 +4665,6 @@ namespace
     }
 }
 
-// ---- Уведомление ---------------------------------------------------------------
-// The Вход window's card with nothing in it but the text, wrapped to
-// the width and as tall as it comes out, and "OK" under it. Over the middle of
-// the radar, and not moved: it is read and closed.
 void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
 {
     const int kTitleH = 24, kPad = 14, kBtnW = 96, kBtnH = 22, kGap = 12;
@@ -5288,12 +4722,6 @@ void CGalaxyATMSystemRadarScreen::DrawNoticeWindow(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// ---- Вход в систему КСА --------------------------------------------------------
-// In the menu bar's colours - its dark card from edge to edge, title included,
-// and buttons framed like LOGIN - with the АТИС window's light rounded edge,
-// over the middle of the radar, since the panel does not open until it closes.
-// A label and a field a row for Фамилия, Имя, Отчество and Пароль, a line for
-// how it is going, the registration page's address, and "Войти".
 void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
 {
     const int kTitleH = 24, kPad = 12, kLine = 18, kRowH = 24, kRowGap = 6, kLabelW = 84;
@@ -5301,8 +4729,6 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     const int W = 420;
     const int H = kTitleH + kPad + kLine + kRowGap + LF_COUNT * (kRowH + kRowGap) + 2 * kLine + kGap + kBtnH + kPad;
 
-    // In the middle of the radar the first time, then wherever its title bar
-    // was dragged to - kept inside the radar area, so a resize cannot lose it.
     RECT ra = GetRadarArea();
     if (!m_loginPositioned)
     {
@@ -5325,21 +4751,15 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     RECT title = { win.left, win.top, win.right, win.top + kTitleH };
     Theme::DrawLine(hDC, title, Tr(L"Вход в систему КСА"), m_fonts.WinTitle, Theme::MenuText,
         DT_CENTER | DT_VCENTER);
-    // Everything under the title on a sunken dark plate in a light frame, the
-    // way the ФС block's list sits in its box.
     RECT body = { win.left + 5, title.bottom, win.right - 5, win.bottom - 5 };
     Theme::OutlineBox(hDC, body, Theme::InsetFill, Theme::Border);
     SelectClipRgn(hDC, NULL);
     DeleteObject(rgn);
     Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
 
-    // The "x" at the end of the title bar, drawn as the sector list's is. It
-    // only closes the window: the panel stays shut until LOGIN opens it again.
     RECT close = { win.right - 26, title.top + 4, win.right - 8, title.bottom - 4 };
     DrawCloseCross(hDC, close, Theme::MenuText);
 
-    // The card first, so everything registered after it wins the click and a
-    // click anywhere else on it goes nowhere; the "x" after the bar it is on.
     AddScreenObject(SO_LOGIN_WINDOW, "LOGIN_WINDOW", win, false, "");
     AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", title, true, Tr("Перетащите окно"));
     AddScreenObject(SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, false, Tr("Закрыть"));
@@ -5351,12 +4771,12 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     const int left = win.left + kPad, right = win.right - kPad;
     int y = title.bottom + kPad;
     RECT intro = { left, y, right, y + kLine };
-    Theme::DrawLine(hDC, intro, Tr(L"Введите данные, указанные при регистрации:"), m_fonts.Body, Theme::Text,
-        DT_LEFT | DT_VCENTER);
+    Theme::DrawLine(hDC, intro, Tr(L"Введите данные, указанные при регистрации - один раз:"),
+        m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     y += kLine + kRowGap;
 
-    static const wchar_t* const kLabels[LF_COUNT] = { L"Фамилия", L"Имя", L"Отчество", L"Пароль" };
-    static const wchar_t* const kHints[LF_COUNT]  = { L"Иванов", L"Иван", L"если есть", L"" };
+    static const wchar_t* const kLabels[LF_COUNT] = { L"CID", L"Фамилия", L"Имя", L"Отчество" };
+    static const wchar_t* const kHints[LF_COUNT]  = { L"1234567", L"Иванов", L"Иван", L"если есть" };
     for (int i = 0; i < LF_COUNT; i++)
     {
         RECT label = { left, y, left + kLabelW, y + kRowH };
@@ -5366,7 +4786,6 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
         m_loginFields[i] = field;
         Theme::OutlineBox(hDC, field, Theme::ControlFill, m_entryField == i ? Theme::Text : Theme::BorderStrong);
 
-        // The edit box covers the field while it is typed in.
         RECT text = { field.left + 6, field.top, field.right - 6, field.bottom };
         const std::wstring& value = m_loginValues[i];
         if (m_entryField != i)
@@ -5374,17 +4793,15 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
             if (value.empty())
                 Theme::DrawLine(hDC, text, Tr(kHints[i]), m_fonts.Body, Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
             else
-                Theme::DrawLine(hDC, text, i == LF_PASSWORD ? std::wstring(value.size(), L'\x2022') : value,
-                    m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+                Theme::DrawLine(hDC, text, value, m_fonts.Body, Theme::Text,
+                    DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
         }
         if (!sending)
             AddScreenObject(SO_LOGIN_FIELD, std::to_string(i).c_str(), field, false,
-                i == LF_PASSWORD ? Tr("Нажмите, чтобы ввести пароль") : Tr("Нажмите, чтобы ввести"));
+                Tr("Нажмите, чтобы ввести"));
         y += kRowH + kRowGap;
     }
 
-    // Under the fields, whichever matters most: the check under way, why it
-    // did not go, or how to move between the fields.
     std::wstring status = Tr(L"Enter - следующее поле, Esc - отмена");
     COLORREF statusColor = Theme::TextDim;
     if (sending)
@@ -5406,7 +4823,6 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     Theme::DrawLine(hDC, statusR, status, m_fonts.Small, statusColor, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
     y += kLine;
 
-    // Where to register, for whoever has not - a click opens it in the browser.
     const std::string registerUrl = Plugin()->RegisterPageUrl();
     if (!registerUrl.empty())
     {
@@ -5421,8 +4837,6 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     }
     y += kLine + kGap;
 
-    // Framed as LOGIN is on the menu bar; grey, frame and all, while the check
-    // is under way.
     RECT send = { right - kBtnW, y, right, y + kBtnH };
     const COLORREF ink = sending ? Theme::MenuTextDisabled : Theme::MenuText;
     Theme::OutlineBox(hDC, send, Theme::MenuBarFill, ink);
@@ -5432,7 +4846,6 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
 
     RestoreDC(hDC, saved);
 
-    // A box being typed in stays over its field when the window is dragged.
     if (m_entryField >= 0)
         m_entry.Move(m_loginFields[m_entryField]);
     m_loginDrawnTick = GetTickCount64();
@@ -5440,14 +4853,6 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
 
 namespace
 {
-    // A password in memory is overwritten, not just let go.
-    void Wipe(std::wstring& s)
-    {
-        if (!s.empty())
-            SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
-        s.clear();
-    }
-
     std::wstring TrimSpaces(const std::wstring& s)
     {
         const size_t from = s.find_first_not_of(L" \t");
@@ -5463,8 +4868,6 @@ void CGalaxyATMSystemRadarScreen::EditLoginField(int field)
     if (field < 0 || field >= LF_COUNT)
         return;
 
-    // Found from a click, which has the cursor over the view; Enter moving on
-    // to the next field keeps the view the last click found.
     POINT cursor;
     HWND view = NULL;
     if (CursorRadarPoint(cursor, &view))
@@ -5477,13 +4880,9 @@ void CGalaxyATMSystemRadarScreen::EditLoginField(int field)
 
 void CGalaxyATMSystemRadarScreen::TickEntry()
 {
-    // A box whose window is no longer on screen - closed, or the panel hidden
-    // with .ulll - is not left floating over EuroScope.
     if (m_entry.IsOpen() && (!m_loginWindowOpen || GetTickCount64() - m_loginDrawnTick > 2500))
         CommitEntry();
 
-    // Opened only over a frame drawn since it was asked for, so the field is
-    // where it is now - on LOGIN, the window has not been drawn at all yet.
     if (m_entryPending < 0 || !m_loginWindowOpen || m_loginDrawnTick < m_entryPendingTick)
         return;
     const int field = m_entryPending;
@@ -5491,10 +4890,8 @@ void CGalaxyATMSystemRadarScreen::TickEntry()
     if (Plugin()->MyLogin() == CGalaxyATMSystemPlugin::LoginState::Sending)
         return;
 
-    // Enter on a name goes on to the next field and on the password logs in;
-    // Tab goes round the fields; Esc leaves the field as it was.
     const bool opened = m_entryView != NULL && m_entry.Open(m_entryView, m_loginFields[field], m_fonts.Body,
-        m_loginValues[field], field == LF_PASSWORD, field == LF_PASSWORD ? 128 : 40,
+        m_loginValues[field], false, field == LF_CID ? 10 : 40,
         [this, field](TextEntry::End end)
         {
             if (end == TextEntry::End::Cancel)
@@ -5503,7 +4900,7 @@ void CGalaxyATMSystemRadarScreen::TickEntry()
                 m_entryField = -1;
                 RequestRefresh();
             }
-            else if (end == TextEntry::End::Submit && field == LF_PASSWORD)
+            else if (end == TextEntry::End::Submit && field == LF_COUNT - 1)
             {
                 SendLogin();
             }
@@ -5519,8 +4916,6 @@ void CGalaxyATMSystemRadarScreen::TickEntry()
     }
     else
     {
-        // No window of EuroScope's to lay a box over: its own edit box, which
-        // shows a password as it is typed, is still better than no way in.
         Log::Warn("entry", "no edit box of our own over login field " + std::to_string(field)
             + " - EuroScope's popup edit used instead");
         GetPlugIn()->OpenPopupEdit(m_loginFields[field], FN_LOGIN_FIELD + field, Narrow(m_loginValues[field]).c_str());
@@ -5533,20 +4928,14 @@ void CGalaxyATMSystemRadarScreen::CommitEntry()
     m_entryPending = -1;
     if (m_entry.IsOpen() && m_entryField >= 0 && m_entryField < LF_COUNT)
     {
-        std::wstring text = m_entry.Text();
-        if (m_entryField != LF_PASSWORD)
-            text = TrimSpaces(text);
-
+        const std::wstring text = TrimSpaces(m_entry.Text());
         std::wstring& value = m_loginValues[m_entryField];
         if (text != value)
         {
-            // What was said about the last attempt no longer holds for this one.
-            Wipe(value);
             value = text;
             m_loginProblem.clear();
             Plugin()->ResetLogin();
         }
-        Wipe(text);
     }
     m_entry.Close();
     m_entryField = -1;
@@ -5559,21 +4948,26 @@ void CGalaxyATMSystemRadarScreen::SendLogin()
     if (Plugin()->MyLogin() == CGalaxyATMSystemPlugin::LoginState::Sending)
         return;
 
-    if (m_loginValues[LF_SURNAME].empty() || m_loginValues[LF_FIRST_NAME].empty())
+    const std::wstring& cid = m_loginValues[LF_CID];
+    const bool digits = !cid.empty()
+        && cid.find_first_not_of(L"0123456789") == std::wstring::npos;
+    if (cid.empty())
+    {
+        m_loginProblem = Tr(L"Введите свой CID");
+    }
+    else if (!digits)
+    {
+        m_loginProblem = Tr(L"CID - это только цифры");
+    }
+    else if (m_loginValues[LF_SURNAME].empty() || m_loginValues[LF_FIRST_NAME].empty())
     {
         m_loginProblem = Tr(L"Введите фамилию и имя");
-    }
-    else if (m_loginValues[LF_PASSWORD].empty())
-    {
-        m_loginProblem = Tr(L"Введите пароль");
     }
     else
     {
         m_loginProblem.clear();
-        Plugin()->StartLogin(m_loginValues[LF_SURNAME], m_loginValues[LF_FIRST_NAME],
-            m_loginValues[LF_PATRONYMIC], m_loginValues[LF_PASSWORD]);
-        // Typed again for another attempt, as a password is everywhere.
-        Wipe(m_loginValues[LF_PASSWORD]);
+        Plugin()->StartLogin(cid, m_loginValues[LF_SURNAME], m_loginValues[LF_FIRST_NAME],
+            m_loginValues[LF_PATRONYMIC]);
     }
     RequestRefresh();
 }
@@ -5583,7 +4977,6 @@ void CGalaxyATMSystemRadarScreen::CloseLoginWindow()
     m_entryPending = -1;
     m_entry.Close();
     m_entryField = -1;
-    Wipe(m_loginValues[LF_PASSWORD]);
     m_loginProblem.clear();
     m_loginWindowOpen = false;
     RequestRefresh();
@@ -5596,9 +4989,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
     RECT box = DrawBlockFrame(hDC, y, Tr(L"Авторизация"),
         (checking || refused) ? L::AUTH_BOX_H : L::AUTH_BOX_H_IDLE);
 
-    // Who is logging in is whoever EuroScope is connected as - the same three
-    // plates the Пользователь block shows once the panel is open, laid out the
-    // same way: designation and name, then the role under them.
     std::wstring designation, role, user;
     GetUserInfo(designation, role, user);
 
@@ -5613,9 +5003,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
     DrawFittedField(hDC, roleR, role);
     cy += L::AU_ROW + L::AU_GAP2;
 
-    // Nothing to press and nothing to say here until LOGIN on the menu bar
-    // starts the check - or has been turned away, and then the line under the
-    // two rows says why.
     if (!checking)
     {
         if (refused)
@@ -5627,8 +5014,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAuth(HDC hDC, int y)
         return box.bottom;
     }
 
-    // While it runs the progress bar stands under the two rows, with the
-    // stage it has reached printed on it.
     RECT statusR = { ContentLeft(), cy, ContentRight(), cy + L::AU_STATUS };
     ULONGLONG elapsed = GetTickCount64() - m_authStartTick;
     const wchar_t* status = kAuthStages[kAuthStageCount - 1].text;
@@ -5690,8 +5075,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockUser(HDC hDC, int y)
     std::wstring designation, role, user;
     GetUserInfo(designation, role, user);
 
-    // The real system's order: the designation with the controller's name
-    // beside it, and the role the position is worked in on the line under them.
     int cy = box.top + L::U_TOP;
     RECT designR = { ContentLeft(), cy, ContentLeft() + 47, cy + L::U_ROW };
     RECT userR = { designR.right + 6, cy, ContentRight(), cy + L::U_ROW };
@@ -5710,7 +5093,7 @@ int CGalaxyATMSystemRadarScreen::DrawBlockVectors(HDC hDC, int y)
     RECT box = DrawBlockFrame(hDC, y, Tr(L"Векторы"), L::VECTORS_BOX_H);
 
     int cy = box.top + L::V_TOP;
-    int x = box.left + 9;   // this row is indented further than the checkboxes below it
+    int x = box.left + 9;
 
     RECT distBtn = { x, cy, x + 25, cy + L::V_ROW };
     RECT distField = { distBtn.right + 6, cy, distBtn.right + 6 + 63, cy + L::V_ROW };
@@ -5743,14 +5126,10 @@ int CGalaxyATMSystemRadarScreen::DrawBlockVectors(HDC hDC, int y)
     return box.bottom;
 }
 
-// ФС - "Р-р шрифта:" over a sunken list of the track-label layout options:
-// a two- or three-line label (one or the other) plus an independent speed line.
 int CGalaxyATMSystemRadarScreen::DrawBlockOs(HDC hDC, int y)
 {
     RECT box = DrawBlockFrame(hDC, y, Tr(L"ФС"), L::OS_BOX_H);
 
-    // The size picker sits on the label's own row, flush with the list's right
-    // edge - the same plate, width and height as the Векторы dropdowns.
     RECT fontField = { box.right - 4 - 63, box.top + L::O_TOP, box.right - 4, box.top + L::O_TOP + L::O_LABEL };
     m_osFontFieldRect = fontField;
 
@@ -5787,8 +5166,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAltFilter(HDC hDC, int y)
     swprintf_s(fromText, L"FL%03d", Plugin()->AltFilterFromFL());
     swprintf_s(toText, L"FL%03d", Plugin()->AltFilterToFL());
 
-    // "Макс:"/"Мин :" sit hard left; their values are a pair of ordinary
-    // outlined plates lined up towards the right-hand side of the box.
     const int valLeft = box.left + 106, valRight = valLeft + 60;
 
     int cy = box.top + L::F_TOP;
@@ -5812,20 +5189,11 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAltFilter(HDC hDC, int y)
     return box.bottom;
 }
 
-// The captionless block under Фильтр высоты. Top row: the "ВВ1" secondary
-// source with its ВСЕ / БП selectors, an entry field and a spare checkbox,
-// plus that source's video-gain slider down the left-hand edge. Below it, two
-// read-only readouts driven by the live radar picture.
 int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
 {
     RECT box = DrawBoxOnly(hDC, y, L::CODES_BOX_H);
 
-    // What the slider beside it actually does, in the units the panel is set
-    // to: how far it is across the displayed area on the ground, edge to edge.
-    // The zoom is what this reads - a wheel zoom or a preset moves it too,
-    // because it is measured from the display area rather than from the slider.
     double widthNM = DisplayWidthNM();
-    // The number alone - the unit is БЛОК 4's "Мили" / "Км".
     wchar_t scaleText[24];
     if (Plugin()->UnitDist() == DistUnit::NM)
         swprintf_s(scaleText, L"%d", (int)lround(widthNM));
@@ -5837,7 +5205,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
     AddScreenObject(SO_VV_SCALE, "VV_SCALE", vv, false,
         Tr("Масштаб: ширина отображаемой зоны от края до края"));
 
-    // "ВСЕ" straddles the top of the block, half over the ВВ1 label's row.
     RECT all = { box.left + 85, box.top + L::C_ALL_TOP, box.left + 125, box.top + L::C_ALL_TOP + L::C_ROW_H };
     Theme::OutlineBox(hDC, all, m_codeAll ? Theme::Active : Theme::ButtonMid, Theme::Border);
     Theme::DrawLine(hDC, all, Tr(L"ВСЕ"), m_fonts.Small, Theme::Text, DT_CENTER | DT_VCENTER);
@@ -5862,10 +5229,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
     Theme::OutlineBox(hDC, extra, m_codeExtra ? Theme::Active : Theme::Background, Theme::Border);
     AddScreenObject(SO_CODE_EXTRA, "CODE_EXTRA", extra, false, Tr("Источник ВВ1 включён"));
 
-    // Radar-scale slider: a dark track whose lower part fills cyan up to the
-    // thumb. Value grows upwards - pushed up the radar closes in, pulled down
-    // it opens out. Unless it is being dragged the thumb is re-derived from the
-    // display area every frame, so zooming by any other means moves it too.
     if (!m_vvDragging)
         SyncSliderFromZoom();
 
@@ -5889,10 +5252,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockCodes(HDC hDC, int y)
         RECT{ track.left - 4, track.top, track.right + 4, track.bottom }, true,
         Tr("Масштаб радара: вверх - приблизить, вниз - отдалить"));
 
-    // Two live readouts. Both stay empty when nothing matches, exactly as the
-    // reference shows them - so anything in either is an alarm, centred in its
-    // plate and coloured to be caught out of the corner of an eye rather than
-    // read: red for a distress squawk, amber for a code being carried twice.
     RECT distressCap = { box.left, box.top + L::C_DISTRESS_CAP, box.right, box.top + L::C_DISTRESS_CAP + L::C_CAP_H };
     Theme::DrawLine(hDC, distressCap, Tr(L"Коды бедствия"), m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
     RECT distress = { box.left + 24, box.top + L::C_DISTRESS_FIELD, box.left + 201, box.top + L::C_DISTRESS_FIELD + L::C_FIELD_H };
@@ -5916,8 +5275,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockUnits(HDC hDC, int y)
 {
     RECT box = DrawBlockFrame(hDC, y, Tr(L"Ед. изм."), L::UNITS_BOX_H);
 
-    // The level row is three columns of its own; the three rows under it are a
-    // plain two-column grid whose right column starts further left.
     const int col1  = box.left + 5;
     const int colM  = box.left + 70;
     const int colFM = box.left + 140;
@@ -5952,16 +5309,9 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
 
     RECT box = DrawBlockFrame(hDC, y, cfg.Airport(), L::AERODROME_BOX_H);
 
-    // Two rows that line up as a column pair: ДАВЛ over Э/П in tags of one
-    // size, and their two readouts starting at one and the same left edge with
-    // the value itself left-aligned inside the plate - so the pressure and the
-    // transition level read straight down the block. The tags are bare
-    // outlines with the card showing through, not the near-black plates the
-    // blocks above use.
     const int kTagLeft   = 5,  kTagRight  = 57;
     const int kValLeft   = 63;
 
-    // Row 1: ДАВЛ | 760/1013
     int cy = box.top + L::A_TOP;
     RECT davlTag = { box.left + kTagLeft, cy, box.left + kTagRight, cy + L::A_ROW };
     RECT davlVal = { box.left + kValLeft, cy, box.left + 199, cy + L::A_ROW };
@@ -5970,8 +5320,6 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
         m_fonts.Body, true, DT_LEFT | DT_VCENTER);
     cy += L::A_ROW + L::A_GAP;
 
-    // Row 2: Э/П | F050 | АТИС. The button opens the report and nothing else -
-    // the letter has a window of its own out on the radar and no control here.
     RECT epTag = { box.left + kTagLeft, cy, box.left + kTagRight, cy + L::A_ROW };
     RECT epVal = { box.left + kValLeft, cy, box.left + 127, cy + L::A_ROW };
     RECT atisBtn = { box.left + 146, cy, box.left + 199, cy + L::A_ROW };
@@ -5989,34 +5337,20 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
     return box.bottom;
 }
 
-// The АТИС window, drawn from the photograph of the real system: an olive
-// card behind a light two-pixel frame, a grey title bar shading light-to-dark
-// with a white caption and an X at its right end, the index line on the card
-// itself, and the message on a mid-grey panel in white monospace with a
-// black-troughed scrollbar down the panel's right-hand edge.
-//
-// The geometry is fixed rather than proportional - the window does not resize,
-// and every offset below is the reference photograph's own measurement scaled
-// to this size.
 void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 {
     const int W = 370, H = 430;
-    const int kFrame   = 2;    // the light edge round the window and round the panel
+    const int kFrame   = 2;
     const int kTitleH  = 21;
-    const int kSide    = 14;   // panel inset from the window's sides
-    const int kTrackW  = 18;   // scrollbar column
-    const int kEndBtn  = 16;   // the square at each end of the scrollbar
+    const int kSide    = 14;
+    const int kTrackW  = 18;
+    const int kEndBtn  = 16;
     const int kButtonH = 21;
     const int kButtonW = 60;
 
     RECT ra = GetRadarArea();
     if (!m_atisPositioned)
     {
-        // Opened under the index strip in the top left corner - the report
-        // belongs to the strip that was clicked, and the strip is what says
-        // where the АТИС lives on this screen. Off the strip's own rectangle
-        // when there is one; ".atis" can have hidden it, and then the corner
-        // is measured the same way the strip measures it.
         const bool haveStrip = (m_atisLetterArea.bottom > m_atisLetterArea.top);
         m_atisArea.left = haveStrip ? m_atisLetterArea.left : ra.left + 8;
         m_atisArea.top = haveStrip ? m_atisLetterArea.bottom + 6
@@ -6024,7 +5358,6 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
         m_atisPositioned = true;
     }
 
-    // Same clamp as the panel: keep the window inside the radar area.
     if (m_atisArea.left + W > ra.right)
         m_atisArea.left = ra.right - W;
     if (m_atisArea.top + H > ra.bottom)
@@ -6040,18 +5373,11 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    // ---- The card and its light edge ---------------------------------------
-    // The window's corners are rounded, so the two things that reach them -
-    // the card itself and the title bar across the top - are drawn through a
-    // clip of that same shape. Everything below the title bar sits well inside
-    // the corners and needs no clipping of its own; the light edge is drawn
-    // last, over the lot, so it comes out clean.
     HRGN winRgn = Theme::WinRegion(m_atisArea);
     SelectClipRgn(hDC, winRgn);
 
     Theme::FlatFill(hDC, m_atisArea, Theme::WinBody);
 
-    // ---- Title bar ---------------------------------------------------------
     RECT title = { m_atisArea.left + kFrame, m_atisArea.top + kFrame,
                    m_atisArea.right - kFrame, m_atisArea.top + kFrame + kTitleH };
     Theme::VGradient(hDC, title, Theme::WinTitleTop, Theme::WinTitleBot);
@@ -6061,16 +5387,12 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 
     AddScreenObject(SO_ATIS_HEADER, "ATIS_HEADER", title, true, Tr("Перетащите окно АТИС"));
 
-    // The bar sits on a light strip running the full width of the card - the
-    // one edge in the reference that is not part of a box.
     RECT titleEdge = { title.left, title.bottom, title.right, title.bottom + kFrame };
     Theme::FlatFill(hDC, titleEdge, Theme::WinFrame);
 
     Theme::DrawLine(hDC, title, L"ATIS message", m_fonts.WinTitle, Theme::WinTitleText,
         DT_CENTER | DT_VCENTER);
 
-    // The close mark is drawn rather than typed: at this size no font gives the
-    // thick, square X the reference has.
     RECT close = { m_atisArea.right - kFrame - 24, title.top + 1,
                    m_atisArea.right - kFrame - 4, title.bottom - 1 };
     {
@@ -6088,16 +5410,11 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     }
     AddScreenObject(SO_ATIS_CLOSE, "ATIS_CLOSE", close, false, Tr("Закрыть"));
 
-    // ---- Index line, on the card itself ------------------------------------
-    // Plain text on the card, exactly as the reference photograph has it - the
-    // letter gets a window of its own (DrawAtisLetterWindow) rather than a
-    // plate here.
     RECT index = { m_atisArea.left + kSide + 4, titleEdge.bottom + 14,
                    m_atisArea.right - kSide, titleEdge.bottom + 36 };
     Theme::DrawLine(hDC, index, L"Index:   " + Plugin()->AtisIndex(),
         m_fonts.MonoBig, Theme::Text, DT_LEFT | DT_VCENTER);
 
-    // ---- OK, bottom right --------------------------------------------------
     RECT ok = { m_atisArea.right - kSide - 9 - kButtonW,
                 m_atisArea.bottom - kFrame - 13 - kButtonH,
                 m_atisArea.right - kSide - 9, m_atisArea.bottom - kFrame - 13 };
@@ -6106,7 +5423,6 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::ButtonText, DT_CENTER | DT_VCENTER);
     AddScreenObject(SO_ATIS_OK, "ATIS_OK", ok, false, Tr("Закрыть"));
 
-    // ---- The message panel: text and scrollbar share one light frame -------
     RECT panel = { m_atisArea.left + kSide, index.bottom + 17,
                    m_atisArea.right - kSide, ok.top - 6 };
     Theme::FlatFrame(hDC, panel, kFrame, Theme::WinFrame);
@@ -6122,12 +5438,8 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 
     RECT textArea = { paper.left + 8, paper.top + 6, paper.right - 6, paper.bottom - 6 };
 
-    // The live broadcast when the network is carrying one, otherwise both
-    // languages as the config composed them.
     const std::wstring atisText = Plugin()->AtisMessage();
 
-    // Measure the wrapped text so the scroll range and the thumb size are real
-    // rather than guessed.
     HFONT oldFont = (HFONT)SelectObject(hDC, m_fonts.Mono);
     RECT calc = { 0, 0, textArea.right - textArea.left, 0 };
     DrawTextW(hDC, atisText.c_str(), -1, &calc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
@@ -6143,7 +5455,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 
     RECT scrolled = textArea;
     OffsetRect(&scrolled, 0, -m_atisScrollPx);
-    scrolled.bottom = scrolled.top + totalH + 1; // clipped to textArea anyway
+    scrolled.bottom = scrolled.top + totalH + 1;
 
     oldFont = (HFONT)SelectObject(hDC, m_fonts.Mono);
     SetTextColor(hDC, Theme::PaperInk);
@@ -6153,7 +5465,6 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     SelectClipRgn(hDC, NULL);
     DeleteObject(clip);
 
-    // ---- Scrollbar: black trough, light thumb, a black square at each end --
     Theme::FlatFill(hDC, track, Theme::ScrollTrough);
 
     RECT btnUp = { track.left, track.top, track.right, track.top + kEndBtn };
@@ -6161,8 +5472,6 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     AddScreenObject(SO_ATIS_LINE_UP, "ATIS_UP", btnUp, false, Tr("Прокрутить вверх"));
     AddScreenObject(SO_ATIS_LINE_DN, "ATIS_DN", btnDn, false, Tr("Прокрутить вниз"));
 
-    // Both squares carry the mark the reference has - a small light square with
-    // a dark centre - and a light rule divides each from the trough.
     for (const RECT* btn : { &btnUp, &btnDn })
     {
         int cx = (btn->left + btn->right) / 2;
@@ -6189,15 +5498,11 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     Theme::FlatFrame(hDC, thumb, 1, Theme::ScrollEdge);
     AddScreenObject(SO_ATIS_SCROLLBAR, "ATIS_SCROLL", bar, true, Tr("Прокрутка текста АТИС"));
 
-    // The window's own rounded edge, over everything inside it.
     Theme::WinBorder(hDC, m_atisArea, kFrame, Theme::WinFrame);
 
     RestoreDC(hDC, saved);
 }
 
-// ---- Menu bar ----------------------------------------------------------------
-// The items in the order the real system prints them. None of them opens
-// anything yet, so all of them are drawn grey and none takes a click.
 namespace
 {
     const wchar_t* const kMenuItems[] = {
@@ -6206,10 +5511,6 @@ namespace
     };
     const int kMenuItemCount = (int)_countof(kMenuItems);
 
-    // The keyboard layout typing would go in with - "RU", "EN" - as the
-    // language indicator at the end of the bar shows it. The layout is per
-    // thread, so it is the one of whichever window has the keyboard, which is
-    // what the Windows taskbar shows too. Empty if it cannot be told.
     std::wstring KeyboardLanguage()
     {
         HWND fg = GetForegroundWindow();
@@ -6228,9 +5529,6 @@ namespace
     }
 }
 
-// The bar's own height, but never less than TopSky's menu is tall
-// (Config::AtisTopOffset) - a bar shorter than that would leave the bottom of
-// TopSky's menu showing under it.
 int CGalaxyATMSystemRadarScreen::MenuBarHeight()
 {
     return max(L::MENU_BAR_H, Plugin()->GetConfig().AtisTopOffset());
@@ -6238,8 +5536,6 @@ int CGalaxyATMSystemRadarScreen::MenuBarHeight()
 
 void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
 {
-    // The full width of the radar on the toolbar's bottom edge, over the panel
-    // too: the panel hangs under the bar rather than beside it.
     RECT ra = GetRadarArea();
     const int top = PanelTop();
     RECT bar = { ra.left, top, ra.right, top + MenuBarHeight() };
@@ -6251,17 +5547,11 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
 
     Theme::FlatFill(hDC, bar, Theme::MenuBarFill);
 
-    // The whole bar first, so a click anywhere on it - between two items too -
-    // is ours and never falls through to TopSky's menu; the items registered
-    // after it win over it.
     AddScreenObject(SO_MENU_BAR, "MENU_BAR", bar, false, "");
 
-    const int kPadX = 8;   // bar edge -> first item
-    const int kGap  = 9;   // between two items
+    const int kPadX = 8;
+    const int kGap  = 9;
 
-    // The input language, in the bar's far right corner, a size under the
-    // menu items - it is a readout, not something to pick. Placed first, so
-    // everything else knows where the bar ends for it.
     int contentRight = bar.right - kPadX;
     const std::wstring language = KeyboardLanguage();
     if (!language.empty())
@@ -6272,7 +5562,6 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         contentRight = r.left - 2 * kGap;
     }
 
-    // The items, from the left.
     int x = bar.left + kPadX;
     for (int i = 0; i < kMenuItemCount; i++)
     {
@@ -6280,8 +5569,6 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         HFONT font = m_fonts.Menu;
         SIZE sz = Theme::MeasureText(hDC, font, text);
 
-        // A screen too narrow for the lot loses items off the end rather than
-        // printing one past the bar.
         if (x + sz.cx > contentRight)
             break;
 
@@ -6291,78 +5578,39 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         x += sz.cx + kGap;
     }
 
-    // LOGIN and Bypass: two buttons in a white frame, rounded as the panel's
-    // own plates are, well out towards the right. LOGIN is what logs in - the
-    // Авторизация card has no button of its own. Bypass goes past the base,
-    // and only once a LOGIN has failed: until then it is grey, frame and all,
-    // and pressing it tells the controller to register. In the trainer nobody
-    // logs in, and both are grey and take no clicks.
-    const int kBtnLead = 40;         // last item -> LOGIN, at the least
-    const int kBtnPastCentre = 440;  // the middle of the bar -> LOGIN
-    // A size under the panel's own text, so the two sit a little lighter on
-    // the bar than the menu items beside them.
-    const int kBtnPadX = 6;    // text -> frame, either side
-    const int kBtnGap  = 6;    // between the two
+    const int kBtnLead = 40;
+    const int kBtnPastCentre = 440;
+    const int kBtnPadX = 6;
     const int kBtnH    = 18;
     HFONT btnFont = m_fonts.Small;
     SIZE szLogin  = Theme::MeasureText(hDC, btnFont, L"LOGIN");
-    SIZE szBypass = Theme::MeasureText(hDC, btnFont, L"Bypass");
     const int loginW  = szLogin.cx + 2 * kBtnPadX;
-    const int bypassW = szBypass.cx + 2 * kBtnPadX;
     int btnTop = bar.top + (bar.bottom - bar.top - kBtnH) / 2;
-    // Out past the middle of the screen, but clear of the language on a
-    // narrower one - and never over the last item.
     const int loginLeft = max(x - kGap + kBtnLead,
-        min((bar.left + bar.right) / 2 + kBtnPastCentre, contentRight - loginW - kBtnGap - bypassW));
-    RECT login  = { loginLeft, btnTop, loginLeft + loginW, btnTop + kBtnH };
-    RECT bypass = { login.right + kBtnGap, btnTop, login.right + kBtnGap + bypassW, btnTop + kBtnH };
-    if (bypass.right <= contentRight)
+        min((bar.left + bar.right) / 2 + kBtnPastCentre, contentRight - loginW));
+    RECT login = { loginLeft, btnTop, loginLeft + loginW, btnTop + kBtnH };
+    if (login.right <= contentRight)
     {
         const bool training = Plugin()->TrainingSession();
-        const bool bypassLive = BypassAvailable();
-        const COLORREF loginInk  = training ? Theme::MenuTextDisabled : Theme::Text;
-        const COLORREF bypassInk = bypassLive ? Theme::Text : Theme::MenuTextDisabled;
+        const COLORREF loginInk = training ? Theme::MenuTextDisabled : Theme::Text;
         Theme::OutlineBox(hDC, login, Theme::MenuBarFill, loginInk);
         Theme::DrawLine(hDC, login, L"LOGIN", btnFont, loginInk, DT_CENTER | DT_VCENTER);
-        Theme::OutlineBox(hDC, bypass, Theme::MenuBarFill, bypassInk);
-        Theme::DrawLine(hDC, bypass, L"Bypass", btnFont, bypassInk, DT_CENTER | DT_VCENTER);
         if (!training)
-        {
             AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, Tr("Войти в систему"));
-            if (m_authState == AuthState::LoggedOut)
-                AddScreenObject(SO_AUTH_BYPASS, "MENU_BYPASS", bypass, false,
-                    bypassLive ? Tr("Войти без проверки в базе") : "");
-        }
     }
 
     RestoreDC(hDC, saved);
 }
 
-// The АТИС index on its own: a single read-only strip standing on the radar
-// outside the panel, carrying the line the real system shows and nothing else -
-// "INDEX ATIS: <letter>" on black inside a light frame, the letter lit in lime
-// against the white label. It replaces the little olive card that used to hold
-// the letter alone: no title bar, no "x" and no chrome to take up radar, since
-// the strip itself is the readout. It is up from the start; ".atis" hides and
-// shows it, and a left click on it opens and closes the full report under it.
 void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
 {
-    // Drawn as two runs rather than one string - the label and the letter
-    // carry different colours - so both are measured separately and the strip
-    // is sized to the pair.
     const std::wstring label  = L"INDEX ATIS: ";
     const std::wstring letter = Plugin()->AtisIndex();
 
-    // Monospaced, so the strip keeps the same width whatever letter is on the
-    // air. Sized to the text rather than fixed: a config carrying a longer
-    // index still fits.
-    const int kFrame = 2;     // the light edge, as thick as every other window's
+    const int kFrame = 2;
     const int kPadX  = 7;
     const int kPadY  = 3;
 
-    // The message font rather than the index one: the strip stands beside the
-    // panel all session and only ever carries a single letter, so it is read at
-    // a glance without being drawn at the size the report's own heading uses.
     HFONT font = m_fonts.Mono;
 
     SIZE szLabel  = Theme::MeasureText(hDC, font, label);
@@ -6370,20 +5618,10 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
     const int W = szLabel.cx + szLetter.cx + 2 * (kFrame + kPadX);
     const int H = max(szLabel.cy, szLetter.cy) + 2 * (kFrame + kPadY);
 
-    // The top left corner of the radar, where the real system carries it - the
-    // opposite corner to the panel, which is docked right, so the two never
-    // reach for the same pixels however wide the letter makes the strip.
-    // Flush against the left edge of the screen, with no gap: the strip is
-    // docked to it the way the panel is docked to the right one.
-    //
-    // Straight under the menu bar, which itself covers TopSky's menu - see
-    // MenuBarHeight. There is nothing to drag and nothing to restore from the
-    // ASR.
     RECT ra = GetRadarArea();
     m_atisLetterArea.left = ra.left;
     m_atisLetterArea.top  = PanelTop() + MenuBarHeight();
 
-    // Only if the display is narrower than the strip, which no real one is.
     if (m_atisLetterArea.left + W > ra.right)
         m_atisLetterArea.left = max(ra.left, ra.right - W);
 
@@ -6393,14 +5631,9 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    // Square corners and a flat fill, not the rounded olive card: this one is
-    // a readout on the radar rather than a window over it.
     Theme::FlatFill(hDC, m_atisLetterArea, Theme::ControlFill);
     Theme::FlatFrame(hDC, m_atisLetterArea, kFrame, Theme::WinFrame);
 
-    // Label first, then the letter hard against it: the pair is laid out from
-    // the left inside the padding, which is the same thing as centring it -
-    // the strip was sized to exactly this text.
     int textLeft = m_atisLetterArea.left + kFrame + kPadX;
     RECT labelR = { textLeft, m_atisLetterArea.top, textLeft + szLabel.cx,
                     m_atisLetterArea.bottom };
@@ -6411,34 +5644,17 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
     Theme::DrawLine(hDC, letterR, letter, font, Theme::AtisIndexText,
         DT_LEFT | DT_VCENTER);
 
-    // One object for the whole strip, and it does one thing: open and close the
-    // report. Registered fixed rather than moveable - the strip is docked.
     AddScreenObject(SO_ATIS_LETTER_HEADER, "ATIS_L_HEADER", m_atisLetterArea, false,
         Tr("ЛКМ - текст АТИС, .atis - скрыть"));
 
     RestoreDC(hDC, saved);
 }
 
-// ---- "Список РЦ" -----------------------------------------------------------
-// The sector list: one line per flight this sector is concerned with, in the
-// fourteen columns the real system prints. Everything in it is derived from the
-// live flight plans on the frame it is drawn - the window holds no copy of the
-// traffic, only how it is being looked at (sort order, which page each pane is
-// turned to).
-//
-// The window is "rc.svg" to the pixel, at m_rcScale per cent of its
-// size - two fifths to begin with. Every number in the drawing below is that
-// export's own coordinate in its 2068x904 artboard, put through the scale
-// rather than re-derived, so the layout can be checked straight against the
-// file, and the whole window grows and shrinks with the one number.
 namespace
 {
     const int kRcSvgW = 2068, kRcSvgH = 904;
     const int kRcScaleMin = 25, kRcScaleMax = 100;
 
-    // The export's heading plates, in its own coordinates. A plate is also the
-    // span its column's values are centred across - the export centres every
-    // title and every value on its plate.
     struct RcColumn { const wchar_t* title; int svgLeft, svgRight; };
 
     const RcColumn kRcColumns[] = {
@@ -6459,7 +5675,6 @@ namespace
     };
     const int kRcCols = (int)(sizeof(kRcColumns) / sizeof(kRcColumns[0]));
 
-    // What each cell of a row carries, in the order of the columns above.
     enum
     {
         RC_KF, RC_CALLSIGN, RC_SQUAWK, RC_S, RC_TYPE, RC_W, RC_CFL,
@@ -6467,12 +5682,6 @@ namespace
         RC_PVO, RC_CRD
     };
 
-    // The two panes of the export, top and bottom edge each. Both open with
-    // the heading row - a light 46-unit band with the plates 3 units inside
-    // it - and then rows of 46 on a 49 pitch, so the pane's black shows through
-    // as the rule between two rows. Six rows fill a pane as the export draws
-    // it; a pane with more flights than that grows a row pitch for each, and
-    // everything under it moves down by as much.
     const int kRcPaneTopSvg[2]    = { 102, 462 };
     const int kRcPaneBottomSvg[2] = { 445, 802 };
     const int kRcHeadSvg = 46, kRcPlateInsetSvg = 3;
@@ -6481,27 +5690,17 @@ namespace
 
     int RcGrowSvg(int rows) { return (rows - kRcRows) * kRcRowPitchSvg; }
 
-    // The three rules the export draws across a row, 2.5 units wide each:
-    // between CFL and the entry Точка, between Вход and the exit Точка, and
-    // between ВыхЭш and ПВО - each in the gap between those two plates.
     const float kRcDividerSvg[] = { 844.0f, 1256.0f, 1852.5f };
     const float kRcDividerWSvg = 2.5f;
 
-    // КФ - how a конфликтная ситуация is told: two airborne flights closer than
-    // the separation minima, now or within the look-ahead, each flown straight
-    // on along its track at its present ground and vertical speed. The
-    // vertical figure sits under the 1000 ft minimum by the tolerance a
-    // Mode C level is read with, so two flights a standard level apart are
-    // not flagged for the jitter in their readouts.
     const double kKfLateralNm    = 5.0;
     const double kKfVerticalFt   = 800.0;
     const int    kKfLookaheadSec = 120;
     const int    kKfStepSec      = 10;
-    const int    kKfMinGsKt      = 50;       // slower is on the ground
-    const double kKfScanNm       = 40.0;     // further apart cannot close in the look-ahead
+    const int    kKfMinGsKt      = 50;
+    const double kKfScanNm       = 40.0;
     const double kKfScanFt       = 10000.0;
 
-    // The close mark on the title bar - the export's own outline of it.
     const float kRcCrossSvg[12][2] = {
         { 2011.27f, 64.4168f }, { 2008.58f, 61.7335f }, { 2019.32f, 51.0002f },
         { 2008.58f, 40.2668f }, { 2011.27f, 37.5835f }, { 2022.00f, 48.3168f },
@@ -6509,10 +5708,6 @@ namespace
         { 2035.42f, 61.7335f }, { 2032.73f, 64.4168f }, { 2022.00f, 53.6835f },
     };
 
-    // The text a row is ordered by. For the two time/level columns that is the
-    // time in front of the slash - ordering on the whole cell would work the
-    // same, but a dashed-out time would then sort among the levels; for
-    // everything else the cell itself.
     std::wstring RcSortText(const SectorListRow& r, int cell)
     {
         const std::wstring& v = r.cells[cell];
@@ -6534,12 +5729,9 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
     out.clear();
 
     SYSTEMTIME st;
-    GetSystemTime(&st);   // already UTC, like everything else on the panel
+    GetSystemTime(&st);
     const int nowMin = st.wHour * 60 + st.wMinute;
 
-    // A coordination time is given as minutes from now; a negative one means
-    // the flight is not crossing that boundary at all, and prints as dashes
-    // rather than as a time in the past.
     auto hhmm = [nowMin](int minutesAhead) -> std::wstring
     {
         if (minutesAhead < 0)
@@ -6558,12 +5750,6 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         return buf;
     };
 
-    // КФ. EuroScope raises no conflict alert a plugin could read, so the check
-    // is made here, the way a short-term conflict alert makes it: every
-    // airborne target is taken once per frame, and a flight is in conflict
-    // when some other one is inside the minima now or at any step of the
-    // look-ahead. Pairs too far apart to close in that time are passed over
-    // before any of the stepping is done.
     struct KfTrack
     {
         std::string callsign;
@@ -6610,17 +5796,10 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
     for (CFlightPlan fp = GetPlugIn()->FlightPlanSelectFirst(); fp.IsValid();
          fp = GetPlugIn()->FlightPlanSelectNext(fp))
     {
-        // The list is this sector's, not the world's: a flight nobody here has
-        // been told about, and one EuroScope has already written off, are both
-        // none of this position's business.
         int state = fp.GetState();
         if (state == FLIGHT_PLAN_STATE_NON_CONCERNED || state == FLIGHT_PLAN_STATE_REDUNDANT)
             continue;
 
-        // The filter strip. The entry time is 0 inside the sector, the minutes
-        // to go outside it, and -1 for a flight that will not enter - one that
-        // never comes near, and one that has already left. Which of those two
-        // it is, is told by whether it was ever seen inside or on its way in.
         const std::string callsign = fp.GetCallsign();
         const int entryMin = fp.GetSectorEntryMinutes();
         const ULONGLONG nowTick = GetTickCount64();
@@ -6648,11 +5827,6 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         row.mine = fp.GetTrackingControllerIsMe();
         row.crdState = fp.GetCoordinatedNextControllerState();
 
-        // Which way it is going - east is a course from 0 up to 180, west the
-        // rest, as the semicircular rule divides them. Read off the route,
-        // first point to last, so a row does not change colour every time the
-        // flight turns; the track it is flying only when the route is too
-        // short to point anywhere, as over a circuit.
         CRadarTarget track = fp.GetCorrelatedRadarTarget();
         double course = -1.0;
         CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
@@ -6669,9 +5843,6 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
 
         row.cells[RC_CALLSIGN] = Widen(fp.GetCallsign());
 
-        // ВРЛ - the code the aircraft is meant to be squawking, and "S" beside
-        // it as the flag for the one thing worth noticing about a code: that
-        // the transponder is not actually showing it.
         std::wstring assigned = Widen(cad.GetSquawk());
         std::wstring actual;
         CRadarTarget rt = fp.GetCorrelatedRadarTarget();
@@ -6690,8 +5861,6 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         int cleared = fp.GetClearedAltitude();
         row.cells[RC_CFL] = level(cleared > 0 ? cleared : fp.GetFinalAltitude());
 
-        // Entry and exit: the point in a column of its own, then time / level,
-        // each part dashed out on its own when it has not been agreed.
         row.cells[RC_ENTRY_POINT] = Widen(fp.GetEntryCoordinationPointName());
         row.cells[RC_ENTRY] = hhmm(fp.GetSectorEntryMinutes()) + L"/"
             + level(fp.GetEntryCoordinationAltitude());
@@ -6702,14 +5871,10 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         int exitFt = fp.GetExitCoordinationAltitude();
         row.cells[RC_EXIT_LEVEL] = level(exitFt > 0 ? exitFt : fp.GetFinalAltitude());
 
-        // ПВО has no source in the network, so it is driven the way the
-        // controllers themselves mark it - a note in the scratchpad.
         std::wstring pad = RcUpper(Widen(cad.GetScratchPadString()));
         row.cells[RC_PVO] = (pad.find(L"ПВО") != std::wstring::npos
                           || pad.find(L"PVO") != std::wstring::npos) ? L"+" : L"";
 
-        // Крд - whether the next controller has been coordinated with. The
-        // word is the same either way; which of them it is, is the colour.
         row.cells[RC_CRD] = (row.crdState != COORDINATION_STATE_NONE) ? L"ACT" : L"";
 
         out.push_back(row);
@@ -6725,15 +5890,12 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
         });
 }
 
-// m_rcScale, never more than the room given and never under the smallest.
 int CGalaxyATMSystemRadarScreen::RcScale(int availW, int availH)
 {
     const int fit = min(availW * 100 / kRcSvgW, availH * 100 / kRcSvgH);
     return max(kRcScaleMin, min(m_rcScale, min(kRcScaleMax, fit)));
 }
 
-// A hit-box of the list's: a screen object on the radar, or one of its own
-// window's while that is what is being drawn.
 void CGalaxyATMSystemRadarScreen::RcObject(int type, const char* id, RECT r, bool moveable, const char* tip)
 {
     if (m_rcDrawingFloat)
@@ -6742,11 +5904,6 @@ void CGalaxyATMSystemRadarScreen::RcObject(int type, const char* id, RECT r, boo
         AddScreenObject(type, id, r, moveable, tip);
 }
 
-// How many rows each pane shows (m_rcPageRows), and the window's height that
-// comes to, in the export's units. Every flight gets a row of its own, so the
-// list is read without paging through it - as far as maxSvgH, the room there
-// is, allows. Past that the two panes share what room there is, and only
-// then is a pane paged, with a right click, as before.
 int CGalaxyATMSystemRadarScreen::PlanSectorList(const std::vector<SectorListRow>& all, int maxSvgH)
 {
     int count[2] = { 0, 0 };
@@ -6763,7 +5920,6 @@ int CGalaxyATMSystemRadarScreen::PlanSectorList(const std::vector<SectorListRow>
     }
     else
     {
-        // Half each, and what one of them does not need to the other.
         give[0] = min(need[0], room / 2);
         give[1] = min(need[1], room - give[0]);
         give[0] = min(need[0], room - give[1]);
@@ -6779,8 +5935,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
     std::vector<SectorListRow> all;
     BuildSectorList(all);
 
-    // Never bigger than the radar it stands on, whatever it was scaled to;
-    // grown past the bottom, it moves up rather than lose rows.
     RECT ra = GetRadarArea();
     const int scale = RcScale(ra.right - ra.left, ra.bottom - ra.top);
     const int svgH = PlanSectorList(all, (ra.bottom - ra.top) * 100 / scale);
@@ -6788,8 +5942,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
 
     if (!m_rcPositioned)
     {
-        // Centred over the radar rather than tucked beside the panel: at this
-        // width there is no edge it would sit against comfortably.
         m_rcArea.left = ra.left + max(0, ((ra.right - ra.left) - W) / 2);
         m_rcArea.top  = ra.top + 60;
         m_rcPositioned = true;
@@ -6810,14 +5962,9 @@ void CGalaxyATMSystemRadarScreen::DrawSectorListWindow(HDC hDC)
     DrawSectorList(hDC, m_rcArea, scale, false, all);
 }
 
-// Laid out for the rows PlanSectorList settled on.
 void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, bool floating,
     const std::vector<SectorListRow>& all)
 {
-    // The two panes are the two halves of the sector's traffic: above, the
-    // flights I am working; below, the ones still to come into my hands. A
-    // row's ground says which way the flight is going - yellow east, blue
-    // west - whichever pane it is in.
     std::vector<const SectorListRow*> other, mine;
     for (const SectorListRow& r : all)
         (r.mine ? mine : other).push_back(&r);
@@ -6825,8 +5972,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
     auto S  = [scale](int svg) { return (svg * scale + 50) / 100; };
     auto SF = [scale](double svg) { return (float)(svg * scale / 100.0); };
 
-    // "rc.svg" sets the caption, the headings and the filter strip at 32 and
-    // the values at 24, in the weights Theme::ListFont names.
     if (m_rcFontScale != scale)
     {
         for (HFONT f : { m_rcFont, m_rcHeadFont, m_rcRowFont, m_rcKfFont })
@@ -6843,8 +5988,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
     if (floating)
         m_rcFloatHits.clear();
 
-    // Everything in the window is placed off these two, in the export's own
-    // coordinates: X(1036) is the pixel its 1036 landed on.
     const int ox = area.left, oy = area.top;
     auto X = [ox, &S](int svg) { return ox + S(svg); };
     auto Y = [oy, &S](int svg) { return oy + S(svg); };
@@ -6852,17 +5995,11 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    // ---- The ground: the panel's olive at 80 %, the radar showing through --
-    // Off the radar there is nothing to show through, and the olive is solid.
     if (floating)
         Theme::FlatFill(hDC, area, Theme::ListGround);
     else
         FillAlpha(hDC, area, Theme::ListGround, Theme::ListGroundAlpha);
 
-    // ---- Title bar and its close mark --------------------------------------
-    // Both are curves - the bar's two rounded top corners and the cross's
-    // slanted arms - so they go through GDI+ antialiased, in a scope of their
-    // own, before any plain GDI drawing touches the DC again.
     RECT bar = { X(10), Y(20), X(2058), Y(82) };
     {
         Gdiplus::Graphics g(hDC);
@@ -6871,7 +6008,7 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
 
         const Gdiplus::REAL l = (Gdiplus::REAL)bar.left, r = (Gdiplus::REAL)bar.right;
         const Gdiplus::REAL t = (Gdiplus::REAL)bar.top, b = (Gdiplus::REAL)bar.bottom;
-        const Gdiplus::REAL d = SF(20) * 2;   // an arc takes its circle's diameter
+        const Gdiplus::REAL d = SF(20) * 2;
 
         Gdiplus::GraphicsPath shape;
         shape.AddArc(l, t, d, d, 180.0f, 90.0f);
@@ -6890,18 +6027,13 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
         g.FillPolygon(&inkBrush, cross, 12);
     }
 
-    // The caption stands at the left end of the bar, where the export starts
-    // it, at its 52.
     const std::wstring caption = Tr(L"Список РЦ");
     RECT captionR = { X(52), bar.top, X(1990), bar.bottom };
     Theme::DrawLine(hDC, captionR, caption, m_rcFont, Theme::ListTitleText,
         DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
 
-    // The cross is small; its hit box is the square round it with some margin.
     RECT close = { X(1998), bar.top, X(2046), bar.bottom };
 
-    // Without Inter the window is in Arial, and says so on its own title bar,
-    // right of the caption, where it is seen by whoever is looking at the list.
     if (!Theme::InterInstalled())
     {
         const int captionRight = captionR.left + Theme::MeasureText(hDC, m_rcFont, caption).cx;
@@ -6913,9 +6045,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
     RcObject(SO_RC_HEADER, "RC_HEADER", drag, true, Tr("Перетащите список РЦ"));
     RcObject(SO_RC_CLOSE, "RC_CLOSE", close, false, Tr("Закрыть"));
 
-    // ---- The two panes -----------------------------------------------------
-    // The upper pane grown pushes the lower one down, and both push the
-    // filter strip.
     const int grow0 = RcGrowSvg(m_rcPageRows[0]);
     const int growAll = grow0 + RcGrowSvg(m_rcPageRows[1]);
     for (int p = 0; p < 2; p++)
@@ -6924,10 +6053,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
         const int pageRows = m_rcPageRows[p];
         const bool paged = (int)rows.size() > pageRows;
 
-        // A pane longer than the room there is turns a page at a time (right
-        // click on a row); a page past the end of its list - turned there, or
-        // left there as the traffic went - is the first page again, and one
-        // that holds every flight has no other page.
         int& scroll = p ? m_rcScroll : m_rcScrollMine;
         if (!paged || scroll < 0 || scroll >= (int)rows.size())
             scroll = 0;
@@ -6937,9 +6062,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
         RECT pane = { X(10), Y(top), X(2058), Y(bottom) };
         Theme::FlatFill(hDC, pane, Theme::ListPaneFill);
 
-        // Heading row: the light band, the grey plates standing in it, and each
-        // title centred on its plate - Regular above, Medium below, as the
-        // export has them. A plate sorts the list by its column.
         RECT band = { X(10), Y(top), X(2058), Y(top + kRcHeadSvg) };
         Theme::FlatFill(hDC, band, Theme::ListHeadRule);
         for (int c = 0; c < kRcCols; c++)
@@ -6995,21 +6117,12 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
                     DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
             }
 
-            // The whole row answers a click by selecting the aircraft, which is
-            // what makes the list a way into the traffic rather than a readout.
             RcObject(SO_RC_ROW, row.callsign.c_str(), line, false,
                 paged ? Tr("Выбрать борт (ПКМ - следующая страница)") : Tr("Выбрать борт"));
         }
     }
 
-    // ---- The filter strip under the panes -------------------------------------
-    // "Рейс:" and its field on the left; "До (мин)" and "После (мин)" with
-    // theirs on the right - each field where the export has it, a black box in
-    // a white frame 2 units wide, and each label centred on its field's height.
-    // A click opens EuroScope's edit box, and an empty field is no limit.
     {
-        // A field is given by the export's rectangle; its frame is stroked on
-        // that outline, so half of it stands outside.
         auto field = [&](int svgX, int svgY, const std::wstring& text, const char* id, const char* tip) -> RECT
         {
             const int fw = max(1, S(2));
@@ -7022,7 +6135,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
             RcObject(SO_RC_FILTER, id, r, false, tip);
             return r;
         };
-        // "Рейс:" starts at the export's 13; the other two end where it ends them.
         auto label = [&](const RECT& f, int svgEdge, bool rightAligned, const std::wstring& text)
         {
             RECT r = rightAligned ? RECT{ area.left, f.top, X(svgEdge), f.bottom }
@@ -7044,11 +6156,6 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
         label(after, 1856, true, Tr(L"После (мин)"));
     }
 
-    // ---- The grip that scales it -------------------------------------------
-    // Three short diagonals in the bottom right corner, in the 20 units the
-    // export leaves right of and under the "После (мин)" field, in the light of
-    // the heading band. Pulled, the window keeps its top left corner and its
-    // shape, and its width follows the cursor.
     const int g = max(8, S(20));
     RECT grip = { area.right - g, area.bottom - g, area.right, area.bottom };
     {
@@ -7069,13 +6176,8 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
     RestoreDC(hDC, saved);
 }
 
-// ---- "Список РЦ" outside EuroScope -------------------------------------------
 namespace
 {
-    // EuroScope's main window - what the list's own window belongs to when it
-    // has to be made without a click to find it from, as for a list the ASR
-    // left outside. The biggest visible top-level window of this process that
-    // nothing owns.
     HWND EuroScopeMainWindow()
     {
         struct Found { HWND hwnd; LONG area; } found = { NULL, 0 };
@@ -7097,8 +6199,6 @@ namespace
     }
 }
 
-// The list's own window, made once and answering through this screen: its
-// title bar is Windows' to drag, the rest is the list's.
 bool CGalaxyATMSystemRadarScreen::CreateRcFloat(HWND owner)
 {
     if (m_rcFloat.IsCreated())
@@ -7120,15 +6220,12 @@ bool CGalaxyATMSystemRadarScreen::CreateRcFloat(HWND owner)
 
 bool CGalaxyATMSystemRadarScreen::UndockSectorList(RECT requested)
 {
-    // The view the drag is on, to turn its coordinates into the screen's.
     HWND view = m_rcDragView;
     if (view == NULL || !IsWindow(view))
         return false;
     if (!CreateRcFloat(GetAncestor(view, GA_ROOT)))
         return false;
 
-    // The size it had on the radar, which may have been less than asked for:
-    // it is not to jump bigger under the cursor on the way out.
     const RECT ra = GetRadarArea();
     m_rcScale = RcScale(ra.right - ra.left, ra.bottom - ra.top);
 
@@ -7150,8 +6247,6 @@ void CGalaxyATMSystemRadarScreen::RenderRcFloat()
 {
     if (!m_rcFloat.IsCreated())
     {
-        // Left outside by the last session: made again where it stood, or on
-        // the main monitor if that one is no longer there.
         if (!CreateRcFloat(EuroScopeMainWindow()))
             return;
         if (MonitorFromPoint(m_rcFloatPos, MONITOR_DEFAULTTONULL) == NULL)
@@ -7162,8 +6257,6 @@ void CGalaxyATMSystemRadarScreen::RenderRcFloat()
     std::vector<SectorListRow> all;
     BuildSectorList(all);
 
-    // No bigger than the monitor it is on. It grows down from where it stands,
-    // not moving under the controller's eye, as far as the monitor's bottom.
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(MonitorFromWindow(m_rcFloat.Handle(), MONITOR_DEFAULTTONEAREST), &mi);
     const int scale = RcScale(mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top);
@@ -7179,9 +6272,6 @@ void CGalaxyATMSystemRadarScreen::RenderRcFloat()
     m_rcFloatDrawn = GetTickCount64();
 }
 
-// The window takes its clicks the way the radar gives them to the list: on
-// the button's release, to whatever box is under it. The grip is pulled with
-// the mouse held by the window, so it can go past the window's own edge.
 void CGalaxyATMSystemRadarScreen::RcFloatMouse(UINT msg, POINT pt)
 {
     if (m_rcFloatResizing)
@@ -7225,7 +6315,6 @@ void CGalaxyATMSystemRadarScreen::RcFloatMouse(UINT msg, POINT pt)
         return;
     const int button = (msg == WM_LBUTTONUP) ? BUTTON_LEFT : BUTTON_RIGHT;
 
-    // A copy: the drawing that follows the click fills the list afresh.
     const RcHit h = *hit;
     m_rcEntry.Close();
     if (h.type == SO_RC_FILTER)
@@ -7253,7 +6342,6 @@ void CGalaxyATMSystemRadarScreen::RcFloatMouse(UINT msg, POINT pt)
     }
     if (h.type == SO_RC_CLOSE)
     {
-        // Put away where it stands: ".rc" brings it back out there.
         m_rcOpen = false;
         m_rcFloat.Hide();
         RequestRefresh();
@@ -7265,9 +6353,6 @@ void CGalaxyATMSystemRadarScreen::RcFloatMouse(UINT msg, POINT pt)
     RenderRcFloat();
 }
 
-// Dropped wholly inside the radar it came from, the list goes back onto it,
-// where it was dropped; anywhere else it stays out, and that is where it is
-// remembered to be.
 void CGalaxyATMSystemRadarScreen::RcFloatMoved()
 {
     RECT wr;
@@ -7278,9 +6363,6 @@ void CGalaxyATMSystemRadarScreen::RcFloatMoved()
     if (owner == NULL || IsIconic(owner))
         return;
 
-    // The windows under the list's middle, from EuroScope's main one down;
-    // the radar is the deepest of them the radar area fits into - the main
-    // window's own client area would take it too, off by the toolbars.
     const POINT mid = { (wr.left + wr.right) / 2, (wr.top + wr.bottom) / 2 };
     std::vector<HWND> chain;
     for (HWND h = owner; h != NULL && chain.size() < 16; )
@@ -7314,8 +6396,6 @@ void CGalaxyATMSystemRadarScreen::RcFloatMoved()
 
 void CGalaxyATMSystemRadarScreen::TickRcFloat()
 {
-    // Not painted for a while: this display is not the one on screen - another
-    // ASR's tab is - or the panel is off. Its list goes away with it.
     if (m_rcFloat.Visible() && !m_rcFloatResizing && GetTickCount64() - m_rcFloatDrawn > 3000)
     {
         m_rcEntry.Close();
@@ -7323,8 +6403,6 @@ void CGalaxyATMSystemRadarScreen::TickRcFloat()
     }
 }
 
-// Grabs the thumb by its middle, so the point taken hold of stays under the
-// cursor for the whole drag instead of jumping to the top of the thumb.
 void CGalaxyATMSystemRadarScreen::ScrollAtisTo(POINT pt, RECT track)
 {
     int usable = (track.bottom - track.top) - m_atisThumbH;
@@ -7336,7 +6414,6 @@ void CGalaxyATMSystemRadarScreen::ScrollAtisTo(POINT pt, RECT track)
     m_atisScrollPx = (int)((__int64)rel * m_atisScrollMax / usable);
 }
 
-// The ВВ1 slider reads bottom-up: the cursor at the foot of the track is 0 %.
 void CGalaxyATMSystemRadarScreen::SetVvGainFrom(POINT pt)
 {
     int h = m_vvSliderRect.bottom - m_vvSliderRect.top;
@@ -7348,14 +6425,10 @@ void CGalaxyATMSystemRadarScreen::SetVvGainFrom(POINT pt)
     ApplyZoomFromSlider();
 }
 
-// ---- ВВ1 slider <-> radar scale ---------------------------------------------
-// The slider is the radar's zoom: pushed up the picture closes in, pulled down
-// it opens out. Scale is geometric rather than linear, so a given travel on the
-// slider is the same proportional zoom wherever it is on the track.
 namespace
 {
-    const double kZoomMinSpanNM = 6.0;      // slider at 100 %
-    const double kZoomMaxSpanNM = 900.0;    // slider at 0 %
+    const double kZoomMinSpanNM = 6.0;
+    const double kZoomMaxSpanNM = 900.0;
 }
 
 double CGalaxyATMSystemRadarScreen::GainToSpanNM(int gain)
@@ -7372,8 +6445,6 @@ int CGalaxyATMSystemRadarScreen::SpanNMToGain(double spanNM)
     return max(0, min(100, (int)lround(t * 100.0)));
 }
 
-// North-south extent of what is on screen. Latitude is used rather than the
-// diagonal because a degree of it is 60 NM anywhere, with no cosine to carry.
 double CGalaxyATMSystemRadarScreen::DisplaySpanNM()
 {
     CPosition leftDown, rightUp;
@@ -7381,11 +6452,6 @@ double CGalaxyATMSystemRadarScreen::DisplaySpanNM()
     return fabs(rightUp.m_Latitude - leftDown.m_Latitude) * 60.0;
 }
 
-// East-west, which is what "from one edge of the picture to the other" means
-// on a screen wider than it is tall - so this, not the latitude span above, is
-// the number the scale readout prints. A degree of longitude shortens with the
-// cosine of the latitude, taken at the middle of the display area; the
-// wrap-around case keeps a window straddling the antimeridian honest.
 double CGalaxyATMSystemRadarScreen::DisplayWidthNM()
 {
     CPosition leftDown, rightUp;
@@ -7408,8 +6474,6 @@ void CGalaxyATMSystemRadarScreen::ApplyZoomFromSlider()
     if (current <= 0.0)
         return;
 
-    // The whole rectangle is scaled about its own centre, which keeps both the
-    // aspect ratio and whatever the controller had centred exactly as they were.
     double k = GainToSpanNM(m_vvGain) / current;
     if (k <= 0.0 || fabs(k - 1.0) < 0.005)
         return;
@@ -7426,30 +6490,15 @@ void CGalaxyATMSystemRadarScreen::ApplyZoomFromSlider()
     SetDisplayArea(newLeftDown, newRightUp);
 }
 
-// Keeps the thumb honest when the zoom was changed by any other means - the
-// mouse wheel, a preset, an ASR load. Skipped mid-drag so the slider does not
-// fight the cursor.
 void CGalaxyATMSystemRadarScreen::SyncSliderFromZoom()
 {
     m_vvGain = SpanNMToGain(DisplaySpanNM());
 }
 
-// ---- Vectors drawn over radar targets ----------------------------------------
-// This is БЛОК 3's actual effect on the radar picture, as opposed to the panel
-// controls (DrawBlockVectors) that configure it.
-//
-// Two independent kinds of line, matching the reference screenshot of a real
-// target (SYL487): a plain "vector by plan" that follows the flight plan's own
-// predicted trajectory (climb/descent profile and turns included, via
-// GetPositionPredictions - not just a straight bearing to the next waypoint),
-// and a "track vector" that extrapolates the current track/ground speed in a
-// straight line, drawn with an arrowhead and - when "Расчётный эшелон" is
-// checked - a predicted-level label like "F282" with a trend arrow, exactly as
-// seen in that screenshot.
 COLORREF CGalaxyATMSystemRadarScreen::GetTagColorForFlightPlan(CFlightPlan fp)
 {
     if (!fp.IsValid())
-        return RGB(150, 150, 150); // untracked / uncorrelated
+        return RGB(150, 150, 150);
 
     int state = fp.GetState();
     if (state == FLIGHT_PLAN_STATE_ASSUMED)
@@ -7463,7 +6512,7 @@ COLORREF CGalaxyATMSystemRadarScreen::GetTagColorForFlightPlan(CFlightPlan fp)
 
 CPosition CGalaxyATMSystemRadarScreen::CalculateDestinationPoint(CPosition start, double bearingDeg, double distanceNM)
 {
-    const double R = 3440.065; // Earth radius, NM
+    const double R = 3440.065;
 
     double lat1 = start.m_Latitude * M_PI / 180.0;
     double lon1 = start.m_Longitude * M_PI / 180.0;
@@ -7498,31 +6547,17 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
 
     double heading = atan2(dy, dx);
 
-    // Where the chevron sits. A climbing or descending aircraft gets it at the
-    // point it is predicted to reach its cleared level, worked out from the
-    // vertical speed against the ground speed the vector is already scaled by:
-    // as the aircraft closes on that level the mark slides back down the vector
-    // towards the target symbol, and reaching it puts the mark on the symbol.
-    // A level not reached within the vector leaves the mark at the tip, where
-    // the whole vector ends. Level flight itself draws no chevron at all (see
-    // isLevel below) - there is no predicted level to point at.
     double levelFrac = 1.0;
-    int verticalSpeed = rt.GetVerticalSpeed();   // ft/min
+    int verticalSpeed = rt.GetVerticalSpeed();
     CFlightPlan vecFp = rt.GetCorrelatedFlightPlan();
     if (vecFp.IsValid() && abs(verticalSpeed) > 100 && timeMinForLevel > 0.0)
     {
         int clearedFt = vecFp.GetClearedAltitude();
         if (clearedFt > 0)
         {
-            // Compare like with like: a cleared flight level is a
-            // standard-pressure altitude, a cleared altitude below the
-            // transition level is a true one.
             bool clearedIsFL = clearedFt / 100 >= Plugin()->TransitionLevelFL();
             int currentFt = clearedIsFL ? pos.GetFlightLevel() : pos.GetPressureAltitude();
 
-            // A negative time means the aircraft is moving away from the
-            // level rather than towards it - nothing to mark, so the chevron
-            // stays at the tip.
             double minutesToLevel = (double)(clearedFt - currentFt) / verticalSpeed;
             if (minutesToLevel > 0.0)
                 levelFrac = min(1.0, minutesToLevel / timeMinForLevel);
@@ -7533,8 +6568,6 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
     pMark.x = p0.x + (int)lround((p1.x - p0.x) * levelFrac);
     pMark.y = p0.y + (int)lround((p1.y - p0.y) * levelFrac);
 
-    // Open chevron ("galochka") instead of a filled arrowhead - two short
-    // strokes angled back from the tip, not a solid triangle.
     const double arrowAngle = 28.0 * M_PI / 180.0;
     double headLength = min(Theme::VectorHeadLength, totalLen * levelFrac * 0.4);
 
@@ -7546,9 +6579,6 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
                         (Gdiplus::REAL)(pMark.y + headLength * sin(heading + M_PI + arrowAngle))),
     };
 
-    // Level flight (the same +-100 fpm band the trend arrow below uses) has no
-    // predicted-level point to mark, so the chevron is skipped rather than
-    // drawn for free at the tip.
     bool isLevel = abs(verticalSpeed) <= 100;
 
     {
@@ -7556,14 +6586,9 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
 
         if (minuteTicks >= 2)
         {
-            // One tick per minute with a gap after each of them. Every endpoint is
-            // interpolated along the p0->p1 pixel line rather than converted from
-            // its own geographic position: separate conversions rounded each tick
-            // independently, so consecutive ticks ended up a pixel off each other
-            // instead of lying on one straight line.
             double ux = (p1.x - p0.x) / totalLen, uy = (p1.y - p0.y) / totalLen;
             double segLen = totalLen / minuteTicks;
-            double gap = min(Theme::VectorTickGap, segLen * 0.25);  // never swallow a short segment whole
+            double gap = min(Theme::VectorTickGap, segLen * 0.25);
 
             for (int i = 0; i < minuteTicks; i++)
             {
@@ -7575,10 +6600,6 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
         else
             canvas.Line(p0.x, p0.y, p1.x, p1.y);
 
-        // The chevron's own weight (see Theme), never lighter than the vector
-        // it caps - a lighter head under a heavier line reads as a fray at the
-        // end of it rather than as an arrow. One polyline, so the tip is a join rather
-        // than two line ends laid over each other.
         if (headLength > 1.0 && !isLevel)
         {
             canvas.pen.SetWidth(Theme::VectorHeadWidth);
@@ -7586,35 +6607,21 @@ void CGalaxyATMSystemRadarScreen::DrawTrackVector(HDC hDC, CRadarTarget rt, doub
         }
     }
 
-    // Only for a climb or descent: in level flight the predicted level is just
-    // the level already in the формуляр, and there is no chevron to label.
     if (m_vecShowLevel && !isLevel)
     {
-        // The label belongs to the chevron, so it reads the level at the point
-        // the chevron marks - the cleared level itself when it is reached
-        // within the vector, the level at the tip when it is not.
         double labelTimeMin = timeMinForLevel * levelFrac;
         int climbFt = (int)(verticalSpeed * labelTimeMin);
 
-        // Which reading it is taken from - QNH or standard pressure - is
-        // decided on the predicted level, so the label matches where the
-        // aircraft will be rather than where it is now.
         bool belowTL = (pos.GetFlightLevel() + climbFt) / 100 < Plugin()->TransitionLevelFL();
         int currentAltFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
         int predictedAltFt = currentAltFt + climbFt;
         if (predictedAltFt < 0)
             predictedAltFt = 0;
 
-        // БЛОК 4's "на векторе-измерителе": the predicted-level label follows
-        // whichever altitude unit is currently selected there.
         wchar_t trend = (verticalSpeed > 100) ? L'\x2191' : (verticalSpeed < -100) ? L'\x2193' : L' ';
-        // "FL+M" prints both formats at once - far too wide to hang off a
-        // vector - so the vector always shows a single one.
         AltUnit vecUnit = (Plugin()->UnitAlt() == AltUnit::M) ? AltUnit::M : AltUnit::FL;
         std::wstring label = Widen(FormatAltitudeUnit(predictedAltFt, vecUnit).c_str()) + trend;
 
-        // Drawn in EuroScope's own tag font (captured in OnRefresh) so it reads
-        // as part of the formular beside it rather than as a second typeface.
         RECT r = { pMark.x + 6, pMark.y - 16, pMark.x + 110, pMark.y };
         SetBkMode(hDC, TRANSPARENT);
         Theme::DrawLine(hDC, r, label, m_esFont ? m_esFont : m_fonts.Small, color,
@@ -7635,10 +6642,6 @@ void CGalaxyATMSystemRadarScreen::DrawPlanVector(HDC hDC, CFlightPlan fp, const 
     if (minutes >= count)
         minutes = count - 1;
 
-    // It is fundamentally a time vector - one point per minute along the
-    // flight plan's own predicted trajectory (climb/descent profile and turns
-    // included, not a straight bearing) - so, like the track vector, it reads
-    // as a tick per minute rather than one unbroken line.
     std::vector<POINT> pts;
     pts.push_back(ConvertCoordFromPositionToPixel(currentPos));
     for (int i = 1; i <= minutes; i++)
@@ -7651,9 +6654,6 @@ void CGalaxyATMSystemRadarScreen::DrawPlanVector(HDC hDC, CFlightPlan fp, const 
     if (abs(p1.x - p0.x) < 1 && abs(p1.y - p0.y) < 1)
         return;
 
-    // No arrowhead/label - matches the reference screenshot, where the
-    // plan-following vector is undecorated (only the track vector carries the
-    // chevron and predicted-level text).
     if (minutes >= 2)
         DrawGappedPolyline(hDC, pts, color, Theme::VectorTickGap);
     else
@@ -7672,30 +6672,24 @@ void CGalaxyATMSystemRadarScreen::DrawTargetVectors(HDC hDC)
         if (!pos.IsValid())
             continue;
         if (pos.GetPressureAltitude() < 700)
-            continue; // airborne only, matches the ground-clutter filter used elsewhere
+            continue;
 
-        // Фильтр высоты: outside the От/До band this target gets no vectors.
         if (!Plugin()->AltFilterPasses(pos.GetPressureAltitude()))
             continue;
 
         int groundSpeed = rt.GetGS();
         if (groundSpeed < 10)
-            continue; // stationary - nothing meaningful to extrapolate
+            continue;
 
         CFlightPlan fp = rt.GetCorrelatedFlightPlan();
         COLORREF color = GetTagColorForFlightPlan(fp);
 
-        // "Э" - fixed duration in minutes, ticked once per minute.
         if (m_vecTimeEnabled)
         {
             double lengthNM = (groundSpeed / 60.0) * m_vecTimeMin;
             DrawTrackVector(hDC, rt, lengthNM, (double)m_vecTimeMin, m_vecTimeMin, color);
         }
 
-        // "Д" - fixed distance in km; not minute-based, so drawn as one
-        // unbroken line. The level label still needs a time, so it's derived
-        // from how long the aircraft takes to cover that distance at its
-        // current ground speed.
         if (m_vecDistEnabled)
         {
             double lengthNM = m_vecDistKm / 1.852;
@@ -7703,9 +6697,6 @@ void CGalaxyATMSystemRadarScreen::DrawTargetVectors(HDC hDC)
             DrawTrackVector(hDC, rt, lengthNM, timeMin, 0, color);
         }
 
-        // "Вектор по плану" - it is itself a time vector along the flight
-        // plan's own predicted trajectory, always driven by the "Э" minutes
-        // value regardless of whether the Э track vector above is enabled.
         if (m_vecByPlan && fp.IsValid() && m_vecTimeMin > 0)
         {
             DrawPlanVector(hDC, fp, pos.GetPosition(), m_vecTimeMin, color);
@@ -7715,10 +6706,6 @@ void CGalaxyATMSystemRadarScreen::DrawTargetVectors(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// Wake turbulence category as arcs behind the target - one for a heavy, two
-// for a super - centred on the reciprocal of its track, so they turn with the
-// aircraft. The vector's colour and weight, and
-// antialiased on the same GDI+ surface.
 void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
 {
     for (CRadarTarget rt = GetPlugIn()->RadarTargetSelectFirst(); rt.IsValid();
@@ -7728,15 +6715,11 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
         if (!pos.IsValid())
             continue;
 
-        // The same targets the vectors are drawn for: airborne, and inside
-        // the От/До band - a ramp full of parked heavies would otherwise carry
-        // arcs round every stand.
         if (pos.GetPressureAltitude() < 700)
             continue;
         if (!Plugin()->AltFilterPasses(pos.GetPressureAltitude()))
             continue;
 
-        // The category lives on the flight plan; an uncorrelated target has none.
         CFlightPlan fp = rt.GetCorrelatedFlightPlan();
         if (!fp.IsValid())
             continue;
@@ -7745,11 +6728,6 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
         if (arcs == 0)
             continue;
 
-        // Which way is "behind" on screen, and how many pixels a mile is, both
-        // from one point well ahead on the track rather than from the heading
-        // itself - so the arcs still sit behind the aircraft on a rotated
-        // display - and far enough ahead that neither is lost to rounding to
-        // whole pixels when zoomed right out.
         const double kAheadNM = 20.0;
         CPosition here = pos.GetPosition();
         POINT c = ConvertCoordFromPositionToPixel(here);
@@ -7761,22 +6739,14 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
             continue;
         double pxPerNM = aheadPx / kAheadNM;
 
-        // Only gently with the zoom, between a floor and a ceiling (see Theme):
-        // clear of the symbol zoomed right out, and not ballooning at an
-        // approach zoom.
         double zoom = pow(pxPerNM, Theme::WakeArcZoomPower);
         double dist = min(Theme::WakeArcDistMax, max(Theme::WakeArcDistMin, Theme::WakeArcDistScale * zoom));
         double step = min(Theme::WakeArcStepMax, max(Theme::WakeArcStepMin, Theme::WakeArcStepScale * zoom));
 
-        // The arc's own circle is smaller than its distance, so its centre is
-        // pulled back behind the target by the difference - the middle of the
-        // arc still lands at `dist`. A super's second arc shares that centre.
         double arcR = dist * Theme::WakeArcSize;
         double back = (dist - arcR) / aheadPx;
         double cx = c.x - dx * back, cy = c.y - dy * back;
 
-        // GDI+ angles run clockwise from +x, the same sense as atan2 on a
-        // y-down screen, so the reciprocal is simply half a turn on.
         double behindDeg = atan2(dy, dx) * 180.0 / M_PI + 180.0;
 
         VectorCanvas canvas(hDC, GetTagColorForFlightPlan(fp));
@@ -7793,14 +6763,6 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
     }
 }
 
-// ---- Ruler --------------------------------------------------------------------
-// A plain distance/bearing/time measuring line, dragged out anywhere on the
-// radar while ruler mode is on (".ruler" command). Matches the reference: a
-// beige line with a short one-sided tick and a 3-line label stacked directly
-// above it - bearing, "XX.X km(YY.Y)" distance in km with NM in brackets, and
-// "MM:SS" time. An endpoint dropped near a radar target snaps to its callsign
-// and is re-resolved from that target's live position every frame, so the
-// ruler follows the aircraft instead of staying pinned to where it was drawn.
 bool CGalaxyATMSystemRadarScreen::FindNearbyTarget(POINT pt, std::string& callsignOut)
 {
     const double thresholdPx = 20.0;
@@ -7836,7 +6798,7 @@ CPosition CGalaxyATMSystemRadarScreen::ResolveRulerPoint(bool snapped, const std
         {
             CRadarTargetPositionData pos = rt.GetPosition();
             if (pos.IsValid())
-                fixed = pos.GetPosition(); // also serves as the fallback if the target later drops out
+                fixed = pos.GetPosition();
         }
     }
     return fixed;
@@ -7877,25 +6839,10 @@ int CGalaxyATMSystemRadarScreen::FindNearestRulerIndex(POINT pt, double threshol
     return bestIndex;
 }
 
-// ---- Side mouse button ------------------------------------------------------
-// EuroScope hands a plug-in only BUTTON_LEFT / MIDDLE / RIGHT, so a thumb button
-// never arrives as an event and has to be read off the keyboard state instead.
-//
-// A press toggles ruler mode on/off - the same thing ".ruler" does - rather
-// than arming it only for as long as the button stays down. While the mode is
-// on, every left-drag on the radar draws a new line and the radar cannot be
-// panned by dragging (the drag capture claims the whole radar area); that is
-// the deliberate trade-off of an explicit toggle, on or off by one click of
-// either the button or the command, same as a light switch.
 void CGalaxyATMSystemRadarScreen::PollRulerButton()
 {
-    // Cheap enough to share this tick: the сигмет window is open only while
-    // the left button is held, and the release does not always come back as an
-    // event (see CloseSigmetInfoIfButtonReleased).
     CloseSigmetInfoIfButtonReleased();
 
-    // Pressing or letting go of Shift adds or drops the зоны' hit-boxes,
-    // which can only happen in a frame (see OnRefresh).
     bool shift = ShiftHeldInEuroScope();
     if (shift != m_areaShiftDown)
     {
@@ -7903,10 +6850,6 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
         RequestRefresh();
     }
 
-    // The формуляр under the cursor is the expanded one, and a cursor moving
-    // over the radar asks for no frame of its own - so it is looked for here,
-    // against where each label was drawn last frame, and a frame is asked for
-    // only when the cursor has moved onto a different label or off them all.
     {
         std::string hover;
         POINT cursor;
@@ -7928,12 +6871,6 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
         }
     }
 
-    // A heading pull ends with the left button, but EuroScope does not always
-    // say so: a right click in the middle of one swallows the release, and the
-    // line was left stuck to the radar. So the buttons are watched here too.
-    // The right button drops the pull at once. A left button seen up is given
-    // a few polls for EuroScope's own release - which assigns the heading - to
-    // arrive before the pull is dropped without assigning anything.
     if (m_hdgDragging)
     {
         const bool left = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
@@ -7943,8 +6880,8 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
         {
             m_hdgDragging = false;
             m_hdgDragMoved = false;
-            m_hdgDragCancelled = left;              // still held: ignore the rest of this press
-            m_hdgDragEndTick = GetTickCount64();    // nor act on the click that may follow
+            m_hdgDragCancelled = left;
+            m_hdgDragEndTick = GetTickCount64();
             m_hdgReleaseTicks = 0;
             RequestRefresh();
         }
@@ -7952,50 +6889,32 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
     else
     {
         m_hdgReleaseTicks = 0;
-        // A press handed to EuroScope (a simulator session's AHDG pull) may
-        // never come back as a move with the button up - EuroScope keeps the
-        // mouse for its own drag - so the button is watched for it here.
         if (m_hdgDragCancelled && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
             m_hdgDragCancelled = false;
     }
 
     if (m_rulerButton != 0)
     {
-        // GetAsyncKeyState is machine-wide: a thumb-button click meant for the
-        // browser in front must not reach in here and draw a line behind it.
         HWND fg = GetForegroundWindow();
         DWORD pid = 0;
         if (fg != NULL)
             GetWindowThreadProcessId(fg, &pid);
         if (pid != GetCurrentProcessId())
         {
-            // Drop the latch too, so coming back to EuroScope with the button
-            // still held does not fire the moment it is released elsewhere.
             m_rulerButtonDown = false;
             return;
         }
 
         bool down = (GetAsyncKeyState(m_rulerButton) & 0x8000) != 0;
         if (down && !m_rulerButtonDown)
-            m_rulerPressPending = true;   // acted on in OnRefresh
+            m_rulerPressPending = true;
         m_rulerButtonDown = down;
     }
 
-    // A pending press needs a frame to be acted on; an armed ruler needs one
-    // every tick to keep its crosshair under the cursor, and a line still
-    // being placed to keep its free end there.
     if (m_rulerPressPending || m_rulerArmed || m_rulerPlacing)
         RequestRefresh();
 }
 
-// The side button is read straight off the keyboard state rather than
-// delivered as an event, so the cursor has to be found the same way: Windows
-// reports it in screen coordinates, and EuroScope talks to a plug-in in the
-// radar window's client coordinates. The SDK exposes no window handle, so the
-// two candidates under the cursor - the deepest child window and its top-level
-// owner - are tried in turn, and whichever of them puts the cursor inside this
-// screen's radar area is the right one. Returns false when the cursor is over
-// another application, over EuroScope's own chrome, or over another display.
 bool CGalaxyATMSystemRadarScreen::CursorRadarPoint(POINT& out, HWND* view)
 {
     POINT scr;
@@ -8030,13 +6949,6 @@ bool CGalaxyATMSystemRadarScreen::CursorRadarPoint(POINT& out, HWND* view)
     return false;
 }
 
-// One left click on the armed radar places one end of a measuring line: the
-// first click anchors the start on the point the line is to run from, the
-// second fixes the end and leaves the finished line on the screen. In between
-// the line follows the cursor by itself, so nothing is ever held down and no
-// drag is captured - the radar keeps panning exactly as it does with no line
-// at all. The finished line disarms the ruler, so the next one starts with a
-// fresh press of the side button.
 void CGalaxyATMSystemRadarScreen::PlaceRulerPoint(POINT pt)
 {
     if (!m_rulerPlacing)
@@ -8055,9 +6967,6 @@ void CGalaxyATMSystemRadarScreen::PlaceRulerPoint(POINT pt)
 
     UpdateRulerEnd(pt);
 
-    // Two presses in the same spot are a fumbled click rather than a
-    // measurement of no length: the line itself would be too short to draw,
-    // but it would still collect delete hit-boxes and sit there invisibly.
     POINT a = ConvertCoordFromPositionToPixel(ResolveRulerPoint(
         m_rulerPending.startSnapped, m_rulerPending.startCallsign, m_rulerPending.startFixed));
     POINT b = ConvertCoordFromPositionToPixel(ResolveRulerPoint(
@@ -8068,10 +6977,6 @@ void CGalaxyATMSystemRadarScreen::PlaceRulerPoint(POINT pt)
     m_rulerArmed = false;
 }
 
-// While the ruler is armed the cursor carries a small crosshair, so the mode
-// is visible on the radar itself and not only in a tooltip. It is gone the
-// moment the first point is placed - from there on the line being drawn out
-// says the same thing.
 void CGalaxyATMSystemRadarScreen::DrawRulerCursor(HDC hDC)
 {
     POINT pt;
@@ -8079,8 +6984,6 @@ void CGalaxyATMSystemRadarScreen::DrawRulerCursor(HDC hDC)
         return;
 
     int saved = SaveDC(hDC);
-    // Only straight horizontal/vertical strokes, so a plain 1 px GDI pen is
-    // already as crisp as it gets - no need for GDI+ here.
     HPEN pen = CreatePen(PS_SOLID, (int)Theme::RulerWidth, Theme::Ruler);
     HPEN oldPen = (HPEN)SelectObject(hDC, pen);
 
@@ -8095,9 +6998,6 @@ void CGalaxyATMSystemRadarScreen::DrawRulerCursor(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-// The free end re-evaluates the snap every time it moves, so it magnetises
-// onto a target as the cursor passes over it and lets go again once it moves
-// away - the same behaviour the dragged end used to have.
 void CGalaxyATMSystemRadarScreen::UpdateRulerEnd(POINT pt)
 {
     std::string cs;
@@ -8108,11 +7008,6 @@ void CGalaxyATMSystemRadarScreen::UpdateRulerEnd(POINT pt)
         m_rulerPending.endFixed = ConvertCoordFromPixelToPosition(pt);
 }
 
-// A copy of baseFont (normally EuroScope's own tag font) sized a little
-// smaller, so the ruler's bearing/distance/time readout does not compete
-// with the tags for attention. Cached against the font it was derived from,
-// so this only recreates a GDI font object when that source actually
-// changes rather than once per frame.
 HFONT CGalaxyATMSystemRadarScreen::GetRulerFont(HFONT baseFont)
 {
     if (baseFont == NULL)
@@ -8153,12 +7048,6 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    // The line itself and its leader are stroked further down, through GDI+
-    // so they come out antialiased - once the text has been measured, since
-    // plain GDI calls on the DC have to wait until the GDI+ surface is gone.
-
-    // One-sided tick at the midpoint, always pointing towards the top of the
-    // screen so the label reads above the line, exactly like the reference.
     int midX = (p0.x + p1.x) / 2, midY = (p0.y + p1.y) / 2;
     double ux = dx / len, uy = dy / len;
     double perpX = -uy, perpY = ux;
@@ -8166,11 +7055,6 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
     const double tickLen = 26.0;
     POINT tickTop = { midX + (int)(perpX * tickLen), midY + (int)(perpY * tickLen) };
 
-    // Where the label actually hangs. Undragged that is the end of the tick;
-    // dragged, the tick is simply stretched to follow it, so a readout moved
-    // clear of the traffic underneath still points back at its own line. The
-    // stroke itself is drawn further down, once the text has been measured -
-    // it has to stop at the edge of the label rather than run under it.
     r.labelAnchor = tickTop;
     POINT labelAt = { tickTop.x + r.labelOffset.x, tickTop.y + r.labelOffset.y };
 
@@ -8193,16 +7077,8 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
         swprintf_s(line3, L"--:--");
     }
 
-    // Stacked directly above the tick's far end - time nearest the tick,
-    // bearing furthest away - left-aligned starting a couple pixels left of it.
-    // Drawn in EuroScope's own tag font (m_esFont, captured in OnRefresh) at
-    // its full size, so it reads as part of the same radar picture as the tags
-    // around it rather than a second, smaller typeface.
     HFONT rulerFont = GetRulerFont(m_esFont ? m_esFont : m_fonts.Ruler);
 
-    // Row pitch taken from that font's own metrics rather than a guessed
-    // constant, so the three lines stay snug together whatever size EuroScope
-    // happens to be using.
     int rowH = 15;
     {
         HFONT oldFont = (HFONT)SelectObject(hDC, rulerFont);
@@ -8212,14 +7088,14 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
         SelectObject(hDC, oldFont);
     }
 
-    // The three rows as one block, only as wide as the widest of them - a flat
-    // 150 px box would reach far past the text, swallowing clicks meant for
-    // whatever sits beside it and leaving the leader nothing sensible to stop
-    // against. Measured before anything is drawn, because the leader below is
-    // clipped to this box.
+    const wchar_t* const rowText[3] = { line1, line2, line3 };
+    int rowW[3] = { 0, 0, 0 };
     int textW = 0;
-    for (const wchar_t* t : { line1, line2, line3 })
-        textW = max(textW, (int)Theme::MeasureText(hDC, rulerFont, t).cx);
+    for (int i = 0; i < 3; i++)
+    {
+        rowW[i] = (int)Theme::MeasureText(hDC, rulerFont, rowText[i]).cx;
+        textW = max(textW, rowW[i]);
+    }
 
     int left = labelAt.x - 4;
     RECT r3 = { left, labelAt.y - rowH, left + 150, labelAt.y };
@@ -8227,51 +7103,30 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
     RECT r1 = { left, r2.top - rowH, left + 150, r2.top };
     r.labelRect = { left, r1.top, left + textW + 8, r3.bottom };
 
-    // The leader from the midpoint of the line to the readout, stopped a few
-    // pixels short of the text. Undragged it lands on the bottom-left corner
-    // and reads exactly as the old fixed-length tick did; dragged to the other
-    // side of the line it now stops at whichever edge it reaches first instead
-    // of striking through the three rows. Nothing is drawn at all when the
-    // label has been pulled over the midpoint itself - there is no gap left to
-    // bridge, and any stroke there would only be the text's own underlay.
-    RECT leaderStop = r.labelRect;
-    InflateRect(&leaderStop, 3, 3);
+    std::vector<RECT> rows;
+    const RECT rowRects[3] = { r1, r2, r3 };
+    for (int i = 0; i < 3; i++)
+    {
+        RECT row = { rowRects[i].left, rowRects[i].top, rowRects[i].left + rowW[i],
+                     rowRects[i].bottom };
+        InflateRect(&row, 3, 3);
+        rows.push_back(row);
+    }
 
     POINT from = { midX, midY };
-    double lx = (double)labelAt.x - from.x, ly = (double)labelAt.y - from.y;
-    double tEnter = 0.0, tExit = 1.0;
-    const double clipP[4] = { -lx, lx, -ly, ly };
-    const double clipQ[4] = { (double)from.x - leaderStop.left, (double)leaderStop.right - from.x,
-                              (double)from.y - leaderStop.top,  (double)leaderStop.bottom - from.y };
-    bool drawLeader = true;
-    for (int i = 0; i < 4 && drawLeader; i++)
-    {
-        if (fabs(clipP[i]) < 1e-9)
-        {
-            if (clipQ[i] < 0.0)
-                drawLeader = false;   // parallel to this edge and outside it
-            continue;
-        }
-        double t = clipQ[i] / clipP[i];
-        if (clipP[i] < 0.0) { if (t > tEnter) tEnter = t; }
-        else                { if (t < tExit)  tExit = t; }
-    }
+    POINT leaderFrom, leaderTo;
+    const bool drawLeader = ClipLeaderToText(from, labelAt, rows, 0.0, leaderFrom, leaderTo);
     {
         VectorCanvas canvas(hDC, Theme::Ruler, Theme::RulerWidth);
         canvas.Line(p0.x, p0.y, p1.x, p1.y);
-        if (drawLeader && tEnter > 0.0 && tEnter <= tExit)
-            canvas.Line(from.x, from.y, from.x + lx * tEnter, from.y + ly * tEnter);
+        if (drawLeader)
+            canvas.Line(leaderFrom.x, leaderFrom.y, leaderTo.x, leaderTo.y);
     }
 
     Theme::DrawLine(hDC, r1, line1, rulerFont, Theme::Ruler, DT_LEFT | DT_VCENTER);
     Theme::DrawLine(hDC, r2, line2, rulerFont, Theme::Ruler, DT_LEFT | DT_VCENTER);
     Theme::DrawLine(hDC, r3, line3, rulerFont, Theme::Ruler, DT_LEFT | DT_VCENTER);
 
-    // Registered last of everything on the radar, so the drag beats both the
-    // line's own delete boxes and EuroScope's panning. A line still being
-    // placed (index < 0) has nothing to drag yet, and while the ruler is armed
-    // the whole radar is a click target for the next point - a drag handle on
-    // top of that would eat the click that ends the line.
     if (index >= 0 && !m_rulerArmed && !m_rulerPlacing)
     {
         char id[16];
@@ -8282,9 +7137,6 @@ void CGalaxyATMSystemRadarScreen::DrawRulerLine(HDC hDC, RulerLine& r, int index
     RestoreDC(hDC, saved);
 }
 
-// ---- Popups (БЛОК 3 value pickers) ------------------------------------------
-// Typed in rather than picked from a list: the flight-level range is far too
-// long to make a list worth scrolling through.
 void CGalaxyATMSystemRadarScreen::OpenAltFilterPicker(RECT area, bool isFrom)
 {
     int current = isFrom ? Plugin()->AltFilterFromFL() : Plugin()->AltFilterToFL();
@@ -8293,9 +7145,6 @@ void CGalaxyATMSystemRadarScreen::OpenAltFilterPicker(RECT area, bool isFrom)
     GetPlugIn()->OpenPopupEdit(area, isFrom ? FN_ALTFILTER_FROM : FN_ALTFILTER_TO, initial);
 }
 
-// ---- Interaction --------------------------------------------------------------
-// Removes whichever ruler line passes closest to the click, if any is within
-// range - shared by a right-click and a left double-click on the ruler canvas.
 void CGalaxyATMSystemRadarScreen::RemoveRulerNear(POINT pt)
 {
     int idx = FindNearestRulerIndex(pt, 15.0);
@@ -8320,8 +7169,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         return;
     }
 
-    // The armed radar surface: a left click puts down one end of the line, a
-    // right click abandons the whole thing.
     if (ObjectType == SO_RULER_CANVAS)
     {
         if (Button == BUTTON_LEFT)
@@ -8337,12 +7184,9 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         return;
     }
 
-    // The press already did the work; the click that follows it is nothing.
     if (ObjectType == SO_SIGMET_AREA)
         return;
 
-    // Any click that isn't on the open list, or on a chevron that toggles it,
-    // dismisses the list.
     if (ObjectType != SO_DROPDOWN_ITEM &&
         ObjectType != SO_VEC_DIST_FIELD && ObjectType != SO_VEC_TIME_FIELD &&
         ObjectType != SO_OS_FONT_FIELD)
@@ -8371,20 +7215,10 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
-    // Nothing opens from the menu yet. The bar is registered only so a click
-    // on it is ours rather than TopSky's menu underneath; all it does is close
-    // an open dropdown, like any other click on the panel. LOGIN on it is
-    // SO_AUTH_LOGIN.
     case SO_MENU_BAR:
         RequestRefresh();
         break;
 
-    // LOGIN opens the Вход window, where the controller types the name and
-    // password they registered with on the site; the panel opens once the
-    // server has taken them. One taken out of the base is told "Доступ
-    // приостановлен"; one who cannot be checked at all - off the network, no
-    // server - is told why on the Авторизация card and stays out, and that
-    // failure is what opens Bypass.
     case SO_AUTH_LOGIN:
         if (m_authState == AuthState::LoggedOut && !m_loginWindowOpen && !Plugin()->TrainingSession())
         {
@@ -8392,8 +7226,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             const std::string who = (callsign != NULL && *callsign != '\0') ? callsign : "(no callsign)";
 
             m_authMessage.clear();
-            m_authFailed = false;
-            m_authBypassed = false;
             if (Plugin()->AccessSuspended())
             {
                 m_authMessage = Tr(L"Доступ приостановлен");
@@ -8403,14 +7235,12 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             else if (!Plugin()->LiveConnection())
             {
                 m_authMessage = Tr(L"Нет подключения к VATSIM");
-                m_authFailed = true;
                 Log::Error("auth", "LOGIN " + who + " failed: not controlling on the live VATSIM network"
                     " (EuroScope connection type " + std::to_string(GetPlugIn()->GetConnectionType()) + ")");
             }
             else if (Plugin()->GetConfig().SquawkServerUrl().empty())
             {
                 m_authMessage = Tr(L"База пользователей недоступна");
-                m_authFailed = true;
                 Log::Error("auth", "LOGIN " + who + " failed: Squawk.ServerUrl is not set in GalaxyATMSystem.json");
             }
             else
@@ -8420,9 +7250,15 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
                 m_loginProblem.clear();
                 Plugin()->ResetLogin();
 
-                // Straight into the first field still to fill in.
-                int first = LF_PASSWORD;
-                for (int field : { LF_SURNAME, LF_FIRST_NAME })
+                const CGalaxyATMSystemPlugin::SavedLogin& saved = Plugin()->SavedIdentity();
+                const std::wstring* const from[LF_COUNT] = { &saved.cid, &saved.surname,
+                    &saved.firstName, &saved.patronymic };
+                for (int field = 0; field < LF_COUNT; field++)
+                    if (m_loginValues[field].empty())
+                        m_loginValues[field] = *from[field];
+
+                int first = LF_COUNT - 1;
+                for (int field : { LF_CID, LF_SURNAME, LF_FIRST_NAME })
                 {
                     if (m_loginValues[field].empty())
                     {
@@ -8436,35 +7272,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
-    // Bypass: past the base, but only after a LOGIN that failed - see
-    // BypassAvailable. Pressed before that, it says how to get in instead.
-    case SO_AUTH_BYPASS:
-        if (m_authState == AuthState::LoggedOut && !Plugin()->TrainingSession())
-        {
-            if (BypassAvailable())
-            {
-                Log::Warn("auth", "Bypass: panel opened past the user base after a failed attempt"
-                    + (m_authMessage.empty() ? std::string(" to register") : " - \"" + Log::Utf8(m_authMessage) + "\""));
-                CloseLoginWindow();
-                m_authMessage.clear();
-                m_authFailed = false;
-                m_authBypassed = true;
-                StartAuthCheck();
-            }
-            else if (Plugin()->AccessSuspended())
-            {
-                Log::Warn("auth", "Bypass refused: access suspended");
-                ShowNotice(Tr(L"Доступ приостановлен"));
-            }
-            else
-            {
-                Log::Info("auth", "Bypass refused: no LOGIN has failed - told to register");
-                ShowNotice(Tr(L"Пожалуйста, зарегистрируйтесь в системе в установленном порядке"));
-            }
-        }
-        RequestRefresh();
-        break;
-
     case SO_NOTICE_WINDOW:
         break;
     case SO_NOTICE_OK:
@@ -8473,7 +7280,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
-    // A click on the Вход window beside the box being typed in ends the typing.
     case SO_LOGIN_WINDOW:
         CommitEntry();
         break;
@@ -8499,10 +7305,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     }
 
     case SO_TIMER_TOGGLE:
-        // Пуск и стоп по левой кнопке, сброс по правой. The timer is what a
-        // controller times a hold or an approach with, so it starts when it is
-        // pressed and not when the session connects - the shift's own length
-        // is on the clock above it anyway.
         if (Button == BUTTON_RIGHT)
         {
             m_timerElapsedMs = 0;
@@ -8515,8 +7317,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         }
         else
         {
-            // Resumed from where it stopped rather than restarted: сброс is
-            // the right button's job and nothing else zeroes the count.
             m_timerStartTick = GetTickCount64();
             m_timerRunning = true;
         }
@@ -8535,10 +7335,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         break;
 
     case SO_VEC_DIST_TOGGLE:
-        // Д and Э are one choice rather than two switches: the extrapolation
-        // vector is drawn by distance or by time, never by both at once, so
-        // turning either on turns the other off. Clicking the one already on
-        // is still the way to have no extrapolation vector at all.
         m_vecDistEnabled = !m_vecDistEnabled;
         if (m_vecDistEnabled)
             m_vecTimeEnabled = false;
@@ -8603,18 +7399,12 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_UNIT_DIST_NM: Plugin()->SetUnitDist(DistUnit::NM); RequestRefresh(); break;
     case SO_UNIT_DIST_KM: Plugin()->SetUnitDist(DistUnit::Km); RequestRefresh(); break;
 
-    // The report is opened either from the panel's own button or from the INDEX
-    // АТИС strip on the radar; the strip itself is hidden and shown by ".atis"
-    // alone, since it carries no chrome of its own to close it with.
     case SO_ATIS_BUTTON:
     case SO_ATIS_LETTER_HEADER:
         m_atisOpen = !m_atisOpen;
         m_atisScrollPx = 0;
         RequestRefresh();
         break;
-    // "Список РЦ". The window carries no sort control of its own, so the
-    // headings are it: a heading sorts the list by its column, and the one it
-    // is already sorted by turns the order round.
     case SO_RC_SORT:
     {
         int col = atoi(sObjectId);
@@ -8633,10 +7423,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         CFlightPlan picked = GetPlugIn()->FlightPlanSelect(sObjectId);
         if (Button == BUTTON_RIGHT)
         {
-            // Nor a scrollbar: a pane that has outgrown the screen turns on by
-            // a page with a right click. The pane is the row's own - the
-            // flight's tracking says which - and a page past the end wraps
-            // back to the first as the window draws.
             if (picked.IsValid())
             {
                 const bool mine = picked.GetTrackingControllerIsMe();
@@ -8646,8 +7432,6 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         }
         else if (picked.IsValid())
         {
-            // The same selection the radar makes, so the tag, the lists and
-            // every tag function are all pointed at the aircraft clicked.
             GetPlugIn()->SetASELAircraft(picked);
         }
         RequestRefresh();
@@ -8694,26 +7478,11 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
 
-    // A zone's details are not handled here at all - they come up while the
-    // button is held (OnButtonDownScreenObject) and go away when it is let go.
-
     default:
         break;
     }
 }
 
-// Holding the left button down on a сигмет's outline - or Shift and the left
-// button on a зона - opens what it has to say, and letting go closes it again.
-// See OnRefresh for why a зона wants Shift. The press is routed here by
-// whichever hit-box it landed on, but which area it belongs to is worked out
-// from the geometry rather than from that box's id, so overlapping areas each
-// answer for the part of themselves the cursor is actually on.
-//
-// A зона whose geometry answers for none of them falls back on the box's own
-// area - the one whose outline runs nearest the middle of that square. The
-// click is ours either way once it has landed on a box: EuroScope does not
-// pass it on to whatever is underneath, so refusing it there would only lose
-// the press rather than give it to the traffic.
 void CGalaxyATMSystemRadarScreen::OnButtonDownScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, int Button)
 {
@@ -8748,9 +7517,6 @@ void CGalaxyATMSystemRadarScreen::OnButtonDownScreenObject(int ObjectType, const
     }
 }
 
-// The matching release. It only arrives while the cursor is still on one of
-// our objects, so the poll timer closes the window in every other case - see
-// CloseSigmetInfoIfButtonReleased.
 void CGalaxyATMSystemRadarScreen::OnButtonUpScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, int Button)
 {
@@ -8765,9 +7531,6 @@ void CGalaxyATMSystemRadarScreen::OnButtonUpScreenObject(int ObjectType, const c
     }
 }
 
-// A left double-click on a ruler line removes it - the same target search as
-// the right-click, just reached through EuroScope's own double-click event
-// instead of a second click registered as a plain click.
 void CGalaxyATMSystemRadarScreen::OnDoubleClickScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, int Button)
 {
@@ -8775,11 +7538,6 @@ void CGalaxyATMSystemRadarScreen::OnDoubleClickScreenObject(int ObjectType, cons
         RemoveRulerNear(Pt);
 }
 
-// "Список РЦ"'s filter strip, typed into EuroScope's edit box on the radar or
-// into ours on the list's own window. A callsign is kept upper case and
-// without spaces; a number of minutes is taken only as plain digits, and
-// nothing at all clears the limit. Either way both panes go back to their
-// first page.
 void CGalaxyATMSystemRadarScreen::ApplyRcFilter(int functionId, const std::wstring& typed)
 {
     if (functionId == FN_RC_FILTER_CALLSIGN)
@@ -8800,7 +7558,7 @@ void CGalaxyATMSystemRadarScreen::ApplyRcFilter(int functionId, const std::wstri
         if (!digits.empty())
         {
             if (digits.size() > 4 || digits.find_first_not_of(L"0123456789") != std::wstring::npos)
-                return;   // not a number of minutes - the field keeps what it had
+                return;
             value = _wtoi(digits.c_str());
         }
         (functionId == FN_RC_FILTER_BEFORE ? m_rcFilterBefore : m_rcFilterAfter) = value;
@@ -8811,20 +7569,13 @@ void CGalaxyATMSystemRadarScreen::ApplyRcFilter(int functionId, const std::wstri
 
 void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)
 {
-    // The "ULLL Squawk" column's clicks and menu. EuroScope may deliver a TAG
-    // item function here or to the plugin, depending on whether it was clicked
-    // on a tag or in an AC list, so both routes lead to the same handler, which
-    // ignores ids that are not its own and drops a duplicate of one click.
     Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
-
-    // A Вход field typed into EuroScope's own edit box, where ours could not be
-    // opened. Any attempt that failed is forgotten along with the old text.
     if (FunctionId >= FN_LOGIN_FIELD && FunctionId < FN_LOGIN_FIELD + LF_COUNT)
     {
         const int field = FunctionId - FN_LOGIN_FIELD;
-        std::wstring typed = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
-        m_loginValues[field] = (field == LF_PASSWORD) ? typed : TrimSpaces(typed);
+        const std::wstring typed = (sItemString != NULL) ? Widen(sItemString) : std::wstring();
+        m_loginValues[field] = TrimSpaces(typed);
         m_loginProblem.clear();
         Plugin()->ResetLogin();
         RequestRefresh();
@@ -8848,8 +7599,6 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
     if (FunctionId != FN_ALTFILTER_FROM && FunctionId != FN_ALTFILTER_TO)
         return;
 
-    // Accept what was typed only if it is a plain flight level; anything else
-    // leaves the current value alone rather than resetting the filter to zero.
     if (sItemString == NULL)
         return;
     std::string typed(sItemString);
@@ -8877,23 +7626,16 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
 void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char* sObjectId,
     POINT Pt, RECT Area, bool Released)
 {
-    // Pulling on AHDG lays a heading line from the aircraft to the cursor;
-    // letting go assigns the heading it points along. A press that hardly
-    // moves is a click, left to OnClickScreenObject.
     if (ObjectType == SO_FORMULAR_AHDG)
     {
         const bool leftHeld = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 
-        // A pull dropped half-way (see PollRulerButton) ignores whatever
-        // EuroScope still sends for that press, until the button is let go.
         if (m_hdgDragCancelled)
         {
             if (Released || !leftHeld)
                 m_hdgDragCancelled = false;
             return;
         }
-        // And only a press actually held starts a pull - never a move
-        // EuroScope sends after the button is already up.
         if (!m_hdgDragging && (Released || !leftHeld))
             return;
 
@@ -8925,8 +7667,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
-    // A формуляр moves relative to its target, like the ruler's readout to
-    // its line, so it keeps its place beside the aircraft as it flies.
     if (ObjectType == SO_FORMULAR)
     {
         if (Released)
@@ -8940,7 +7680,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
             return;
         FormularState& f = it->second;
 
-        // Held by the callsign point, which is what the offset places.
         if (m_dragOffset.x == 0 && m_dragOffset.y == 0)
         {
             m_dragOffset.x = Pt.x - f.callsignAt.x;
@@ -8968,9 +7707,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
-    // A ruler's readout moves relative to its own line rather than to the
-    // screen: the offset is what is stored, so the label keeps its place
-    // beside the measurement when the radar is panned or zoomed.
     if (ObjectType == SO_RULER_LABEL)
     {
         if (Released)
@@ -8997,8 +7733,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
-    // The sector list's grip: the window keeps its top left corner and its
-    // shape, and its width follows the cursor, held where it was taken.
     if (ObjectType == SO_RC_RESIZE)
     {
         if (!m_rcResizing)
@@ -9014,15 +7748,8 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
-    // The sector list pulled well past an edge of the radar comes out of
-    // EuroScope into a window of its own, and the rest of the drag is that
-    // window's (see UndockSectorList). A little way past, it only stops at the
-    // edge, as every window here does.
     if (ObjectType == SO_RC_HEADER)
     {
-        // What EuroScope may still send for the drag it handed over - moves
-        // with the button long since let go included, which would otherwise
-        // pick up a list put back on the radar and carry it off on the cursor.
         if (m_rcFloating || (!Released && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)))
         {
             m_dragOffset = { 0, 0 };
@@ -9035,8 +7762,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
                 m_dragOffset.x = Pt.x - m_rcArea.left;
                 m_dragOffset.y = Pt.y - m_rcArea.top;
 
-                // The view, found while the cursor is still on the title bar:
-                // by the time the list is pulled out it may be off the radar.
                 POINT cursor;
                 HWND view = NULL;
                 m_rcDragView = CursorRadarPoint(cursor, &view) ? view : NULL;
@@ -9054,9 +7779,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         }
     }
 
-    // The АТИС report, the sector list and the Вход window are the only
-    // windows that can be dragged - the panel is docked to the right edge of
-    // the radar area, and the АТИС index strip is docked to the panel.
     RECT* target = NULL;
     if (ObjectType == SO_RC_HEADER)
         target = &m_rcArea;
@@ -9097,32 +7819,21 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
-    // ".eng" puts the whole plugin into English - every caption, label,
-    // tooltip, window title and command message it draws itself - and ".rus"
-    // puts it back. Nothing that comes off the network or out of the config
-    // is touched: callsigns, position names, зоны and the АТИС text stay as
-    // they were written.
     if (cmd == ".eng" || cmd == ".rus")
     {
         Lang::Set(cmd == ".eng" ? Lang::Id::En : Lang::Id::Ru);
-        // In the language just switched to, so the answer is itself the proof
-        // that the switch took.
         std::string msg = Narrow(Tr(cmd == ".eng" ? L"английский" : L"русский"));
         GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Язык")).c_str(),
             msg.c_str(), true, false, false, false, false);
         RequestRefresh();
         return true;
     }
-    // The plugin's own формуляр on and off - for a display whose tag family
-    // still draws EuroScope's.
     if (cmd == ".formular")
     {
         m_formularsVisible = !m_formularsVisible;
         RequestRefresh();
         return true;
     }
-    // Which wiki label is drawn: "auto" by the position logged in on, or one
-    // of them fixed - for an observer, who has no position to go by.
     if (cmd.compare(0, 10, ".formular ") == 0)
     {
         const std::string arg = cmd.substr(10);
@@ -9139,8 +7850,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         std::wstring what = Tr(kLabelNames[(int)CurrentFormularKind()]);
         if (m_formularKindSetting == FormularKindSetting::Auto)
             what += Tr(L" - по позиции");
-        // What EuroScope says the connection is - decides whether the "{}"
-        // of a simulator session shows.
         what += Tr(L", подключение: ") + std::to_wstring(GetPlugIn()->GetConnectionType());
         std::string msg = Narrow(what);
         GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Формуляр")).c_str(),
@@ -9148,10 +7857,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
-    // What EuroScope says about the connection, me and the selected aircraft -
-    // everything a click on a формуляр depends on to take effect: TopSky's
-    // CFL menu only works on an assumed aircraft, and a simulator's aircraft
-    // only follows what is assigned to it. Printed to the message window.
     if (cmd == ".galaxydiag")
     {
         CPlugIn* p = GetPlugIn();
@@ -9189,9 +7894,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         return true;
     }
 
-    // Why the метки are or are not there: which TopSkySymbols.txt they came
-    // from, which symbols it gave, and what became of every target on the
-    // last frame. Printed to the message window.
     if (cmd == ".symbols")
     {
         CPlugIn* p = GetPlugIn();
@@ -9212,14 +7914,12 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         return true;
     }
 
-    // Back to the Авторизация block, as at the start of a session.
     if (cmd == ".logout")
     {
-        Plugin()->SetSessionAuthorized(false);   // every display, not only this one
+        Plugin()->SetSessionAuthorized(false);
         m_authState = AuthState::LoggedOut;
         m_authMessage.clear();
-        m_authFailed = false;
-        m_authBypassed = false;
+        m_autoLoginTried = true;
         CloseLoginWindow();
         m_openDropdown = DropdownKind::None;
         RequestRefresh();
@@ -9230,9 +7930,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         m_sigmetsVisible = !m_sigmetsVisible;
         if (!m_sigmetsVisible)
             m_sigmetInfoIndex = -1;
-        // The count comes along with the toggle: a feed that could not be
-        // reached leaves the overlay empty and otherwise says nothing at all,
-        // and "показаны, 0" is the only way to tell that from clear weather.
         std::wstring what = m_sigmetsVisible ? Tr(L"показаны") : Tr(L"скрыты");
         std::shared_ptr<const std::vector<Sigmet>> list = Plugin()->Sigmets();
         what += Tr(L", загружено: ") + std::to_wstring(list ? list->size() : 0);
@@ -9247,9 +7944,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         m_zonesVisible = !m_zonesVisible;
         if (!m_zonesVisible)
             m_zoneInfoIndex = -1;
-        // Both counts, because either one alone is ambiguous: nothing on the
-        // radar can mean the file was not read, or that the plan has nothing
-        // booked at this hour, and those call for very different fixes.
         size_t active = 0;
         for (char on : m_zoneActive)
             active += on ? 1 : 0;
@@ -9257,9 +7951,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         what += Tr(L", активно: ") + std::to_wstring(active)
             + Tr(L" из ") + std::to_wstring(Plugin()->GetConfig().Zones().size());
 
-        // What the two feeds have to say, since between them they decide most
-        // of that count: a plan that did not come back and a NOTAM source that
-        // was never configured look identical on the radar.
         std::shared_ptr<const std::vector<ZoneBooking>> aup = Plugin()->AupBookings();
         what += Tr(L", план: ") + std::to_wstring(aup ? aup->size() : 0);
 
@@ -9275,16 +7966,12 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
-    // "Список РЦ" - the sector list. No control on the panel either: the list
-    // is a window of its own, and this is how it is called up and put away.
     if (cmd == ".rc")
     {
         m_rcOpen = !m_rcOpen;
         RequestRefresh();
         return true;
     }
-    // ".rc 60" - opens it at that size, in per cent of the drawing: 25 to 100,
-    // 40 being the size it starts at. The grip in its corner does the same.
     if (cmd.compare(0, 4, ".rc ") == 0)
     {
         const int pct = atoi(cmd.c_str() + 4);
@@ -9295,17 +7982,12 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
-    // The INDEX АТИС strip has no button on the panel and no "x" of its own -
-    // this is the only thing that hides and brings it back.
     if (cmd == ".atis")
     {
         m_atisLetterOpen = !m_atisLetterOpen;
         RequestRefresh();
         return true;
     }
-    // The side button arms a line and left clicks place it; ".ruler" is the
-    // way out of one started by mistake, since abandoning it needs no cursor
-    // of its own.
     if (cmd == ".ruler")
     {
         m_rulerPlacing = false;
@@ -9314,8 +7996,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
-    // ".rulerbtn 1" / "2" pick which thumb button draws the lines, "0" turns
-    // the shortcut off - and with it the only way to draw one.
     if (cmd.compare(0, 10, ".rulerbtn ") == 0)
     {
         std::string arg = cmd.substr(10);
@@ -9332,18 +8012,11 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
             msg.c_str(), true, false, false, false, false);
         return true;
     }
-    // The config file is read at load and never again, which is no way to tune
-    // зоны or their colours: every change cost a restart of EuroScope. This
-    // re-reads it and starts every feed over on what it now says.
     if (cmd == ".reload")
     {
         Plugin()->ReloadConfig();
-        // TopSkySymbols.txt is read once as well; this is how an edit to it
-        // shows up.
         ResetTrackSymbols();
 
-        // Whatever was open pointed into the old lists. Everything else a
-        // screen holds about зоны is worked out per frame.
         m_zoneInfoIndex = -1;
         m_sigmetInfoIndex = -1;
         m_zoneActive.clear();
@@ -9375,7 +8048,6 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     return false;
 }
 
-// ---- ASR persistence --------------------------------------------------------
 void CGalaxyATMSystemRadarScreen::OnAsrContentToBeClosed(void)
 {
     delete this;
@@ -9383,8 +8055,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeClosed(void)
 
 void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
 {
-    // No "PanelPos": the panel is docked to the right edge of the radar area
-    // and has no position of its own to remember.
     char buf[64];
     sprintf_s(buf, "%d", m_visible ? 1 : 0);
     SaveDataToAsr("PanelVisible", "ULLL panel visible", buf);
@@ -9431,18 +8101,12 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
     sprintf_s(buf, "%d,%ld,%ld", m_rcFloating ? 1 : 0, m_rcFloatPos.x, m_rcFloatPos.y);
     SaveDataToAsr("SectorListOutside", "outside EuroScope,screenX,screenY", buf);
 
-    // The gain is written for the sake of the format only - it is the radar
-    // scale now, which EuroScope stores in the ASR itself and which the slider
-    // re-derives on the first frame.
     sprintf_s(buf, "%d,%d,%d,%d", m_codeAll ? 1 : 0, m_codeBp ? 1 : 0,
         m_codeExtra ? 1 : 0, m_vvGain);
     SaveDataToAsr("CodeBlock", "all,bp,extra,gain", buf);
 
     SaveDataToAsr("CodeFilter", "ВВ1 code filter", Narrow(m_codeFilter).c_str());
 
-    // The language is plugin-wide, but the ASR is the only place a setting
-    // survives a restart - so it is written with every screen and the last one
-    // read wins, which is the same answer whichever screen that is.
     SaveDataToAsr("Language", "plugin language: rus, eng", Lang::Name(Lang::Current()));
 }
 
@@ -9451,7 +8115,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
     if (!Loaded)
         return;
 
-    // "PanelPos" written by an older build is ignored - the panel is docked.
     const char* vis = GetDataFromAsr("PanelVisible");
     if (vis != NULL)
         m_visible = (atoi(vis) != 0);
@@ -9468,9 +8131,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         {
             m_vecDistEnabled = de != 0;
             m_vecDistKm = dk;
-            // An ASR written before Д and Э became one choice can carry both;
-            // the distance vector wins so the pair is never left in a state
-            // the panel itself cannot produce.
             m_vecTimeEnabled = (te != 0) && !m_vecDistEnabled;
             m_vecTimeMin = tm;
             m_vecByPlan = bp != 0;
@@ -9506,7 +8166,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
     const char* os = GetDataFromAsr("Os");
     if (os != NULL)
     {
-        // An ASR from before the size picker carries only the first two.
         int lines = 0, speed = 0, size = 0;
         if (sscanf_s(os, "%d,%d,%d", &lines, &speed, &size) >= 2)
         {
@@ -9569,10 +8228,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
     else if (language != NULL && strcmp(language, Lang::Name(Lang::Id::Ru)) == 0)
         Lang::Set(Lang::Id::Ru);
 
-    // "Список РЦ": whether it is up, how it was last sorted and how big it is
-    // - an ASR from before it could be scaled carries only the first three.
-    // The scroll position is not restored - the traffic will have moved on by
-    // the next session, so the list opens at the top.
     const char* rc = GetDataFromAsr("SectorList");
     if (rc != NULL)
     {
@@ -9586,8 +8241,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    // Its filter strip. The callsign comes last, so an empty one still lets
-    // the two limits be read.
     const char* rcFilter = GetDataFromAsr("SectorListFilter");
     if (rcFilter != NULL)
     {
@@ -9601,8 +8254,6 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    // Out of EuroScope, and where on the desktop - put on the main monitor
-    // instead when the one it was on is not connected (RenderRcFloat).
     const char* rcOutside = GetDataFromAsr("SectorListOutside");
     if (rcOutside != NULL)
     {

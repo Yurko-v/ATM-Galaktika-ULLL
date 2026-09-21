@@ -10,31 +10,10 @@
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "advapi32.lib")
 
-// -----------------------------------------------------------------------------
-// The one HTTP(S) fetch the plugin needs, shared by everything that reads from
-// the internet: the airport's METAR and the SIGMET feed.
-//
-// Blocking, so it belongs on a worker thread - but bounded by a timeout on
-// every stage and by a hard cap on the response, so a worker can never hang
-// around waiting to be joined and a runaway response can never eat memory.
-//
-// A request goes the way Windows is set up to send web traffic first. Many VPN
-// clients hook in by setting a local proxy (or a PAC script) as the system one,
-// and some of those will not carry a request to a Russian host - the squawk
-// server - or anything over plain http, while EuroScope's own connection to the
-// network, which ignores that setting, works fine. So when a proxy is set and
-// no answer came back through it at all, the request is made once more straight
-// out, around it. With no proxy set there is only the one way, and no retry.
-//
-// Every way a request falls over is written to GalaxyATMSystem.log (see Log.h)
-// with the URL, the way it went, the stage it stopped at and the Windows error.
-// -----------------------------------------------------------------------------
 namespace Net
 {
     namespace Detail
     {
-        // Whether Internet Options send traffic through a proxy or a PAC script -
-        // what WinINet's INTERNET_OPEN_TYPE_PRECONFIG follows.
         inline bool SystemProxyConfigured()
         {
             const wchar_t* key = L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
@@ -45,8 +24,6 @@ namespace Net
                     NULL, &enabled, &size) == ERROR_SUCCESS && enabled != 0)
                 return true;
 
-            // Only whether a script is named matters, so a short buffer does:
-            // a longer URL answers ERROR_MORE_DATA.
             wchar_t pac[8] = { 0 };
             DWORD pacSize = sizeof(pac);
             const LSTATUS s = RegGetValueW(HKEY_CURRENT_USER, key, L"AutoConfigURL", RRF_RT_REG_SZ,
@@ -54,7 +31,6 @@ namespace Net
             return s == ERROR_MORE_DATA || (s == ERROR_SUCCESS && pac[0] != L'\0');
         }
 
-        // Which of the two ways a logged request went.
         inline const char* Via(DWORD accessType)
         {
             return accessType == INTERNET_OPEN_TYPE_DIRECT ? "direct" : "system proxy settings";
@@ -122,7 +98,6 @@ namespace Net
             InternetCloseHandle(req);
             InternetCloseHandle(net);
 
-            // An error page is not the document asked for, whatever is in it.
             if (haveStatus && status >= 400)
             {
                 Log::Error("net", what + ": HTTP " + std::to_string(status) + " - " + Log::Snippet(out));
@@ -267,12 +242,6 @@ namespace Net
         }
     }
 
-    // A request with a method, headers and a body, and the status code back.
-    // The squawk server says no with a status and a JSON body worth reading
-    // (409 "pool_empty", 401 for a wrong key), where HttpGet only knows whether
-    // anything came back. Returns false only when no HTTP answer arrived at all -
-    // by either way, when a proxy is set. Headers are "Name: value\r\n" lines.
-    // What a status means is the caller's to say, so it is the caller that logs it.
     inline bool HttpRequest(const char* method, const std::string& url,
         const std::string& headers, const std::string& body, HttpResponse& out,
         size_t maxBytes = 65536, DWORD timeoutMs = 5000)

@@ -1,12 +1,4 @@
 <?php
-// The VATSIM data feed: reading it, and the part of it every request needs -
-// who is online as a controller right now.
-//
-// The cron job reads the whole feed once a minute, pilots included. An endpoint
-// that cannot find its caller in that snapshot reads the feed again from here,
-// so a controller who has just logged in is not turned away for the minute it
-// takes the cron to notice - and so the service keeps working for a while if
-// the cron stops altogether.
 
 declare(strict_types=1);
 
@@ -38,7 +30,6 @@ function vatsim_fetch(string $source, int $connectTimeout = 10, int $timeout = 3
     return $data === false ? null : $data;
 }
 
-// The feed as an array, or null if it is not one, or is too old to act on.
 function vatsim_parse(?string $raw): ?array
 {
     $feed = json_decode((string)$raw, true);
@@ -53,12 +44,6 @@ function vatsim_parse(?string $raw): ?array
     return $feed;
 }
 
-// callsign -> CID, for everyone online on a real position. Observers are left
-// out on purpose: an OBS hands out no codes, so an OBS is not a caller.
-//
-// null, not an empty list, if the feed has no controllers section at all: an
-// empty list means nobody is controlling, and locks everyone out - which is
-// right when it is true and wrong when the feed has simply changed shape.
 function vatsim_controllers(array $feed): ?array
 {
     if (!isset($feed['controllers']) || !is_array($feed['controllers'])) {
@@ -77,9 +62,6 @@ function vatsim_controllers(array $feed): ?array
     return $out;
 }
 
-// callsign -> CID for the observers the feed lists (facility 0). Apart from the
-// controllers: an OBS may open the plug-in's panel, so api/name.php lets one
-// in, but hands out no codes, so nothing else looks at this list.
 function vatsim_observers(array $feed): array
 {
     $out = [];
@@ -94,7 +76,6 @@ function vatsim_observers(array $feed): array
     return $out;
 }
 
-// Empties the table and fills it with callsign -> CID.
 function vatsim_write_callsigns(PDO $pdo, string $table, array $map): void
 {
     $pdo->exec("DELETE FROM $table");
@@ -110,15 +91,10 @@ function vatsim_write_callsigns(PDO $pdo, string $table, array $map): void
     }
 }
 
-// Replaces the snapshot of who is controlling, and of who is observing, and
-// stamps it with the feed's own time - not ours, so a feed that has stopped
-// moving looks stale even if we keep fetching it.
 function vatsim_write_controllers(array $map, int $feedTime, array $observers = []): void
 {
     $pdo = db();
 
-    // Emptied and refilled in one go, so a request arriving mid-refresh cannot
-    // find the table half written. The cron job already has one open.
     $own = !$pdo->inTransaction();
     if ($own) {
         $pdo->beginTransaction();
@@ -126,10 +102,6 @@ function vatsim_write_controllers(array $map, int $feedTime, array $observers = 
 
     vatsim_write_callsigns($pdo, 'network_controllers', $map);
 
-    // The observers' table came later: a server whose schema.sql has not been
-    // imported again since has none, and that must not stop the controllers -
-    // and with them every code - from being written. Observers just cannot
-    // log in there until it is.
     try {
         vatsim_write_callsigns($pdo, 'network_observers', $observers);
     } catch (PDOException $e) {

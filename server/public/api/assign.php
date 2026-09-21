@@ -1,13 +1,4 @@
 <?php
-// POST {"callsign": "AFL123", "position": "ULLI_DEL", "new": false}
-//
-// Gives the aircraft a code. If it already holds one, that code comes back -
-// which is what keeps every position on the same code for the same aircraft.
-// "new": true gives back the code it holds and hands out a different one, for
-// a code found to clash on the radar.
-//
-// 200 {"callsign", "code", "existing"} | 409 {"error": "pool_empty"}
-//     401 {"error": "not_online"} if that position is not controlling on VATSIM
 
 declare(strict_types=1);
 
@@ -24,8 +15,6 @@ if ($callsign === null || $position === null) {
     json_out(400, ['error' => 'bad_request']);
 }
 
-// Read first, checked second: the position in the body is what the caller is
-// checked against - they must be controlling it on the network right now.
 $cid = require_caller($position);
 
 $exclude = [];
@@ -37,8 +26,6 @@ for ($attempt = 0; $attempt < 3; $attempt++) {
         }
         release_assignment((int)$current['id']);
         $exclude[] = $current['code'];
-        // Given back. If another position assigns this aircraft before we do,
-        // the next pass finds that code and returns it rather than a third one.
         $new = false;
     }
 
@@ -50,7 +37,6 @@ for ($attempt = 0; $attempt < 3; $attempt++) {
         if ($result === 'callsign_taken') {
             continue 2;
         }
-        // 'code_taken': another aircraft got this code a moment ago - try the next.
     }
 
     json_out(409, ['error' => 'pool_empty']);

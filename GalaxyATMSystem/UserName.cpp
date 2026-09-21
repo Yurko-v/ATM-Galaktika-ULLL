@@ -10,8 +10,6 @@
 
 namespace
 {
-    // The same feed the ATIS is read from; see Atis.cpp for why the cap sits
-    // so far above the feed's real size.
     const char* kFeedUrl = "https://data.vatsim.net/v3/vatsim-data.json";
     const size_t kMaxBytes = 16 * 1024 * 1024;
     const DWORD  kTimeoutMs = 15000;
@@ -25,8 +23,6 @@ namespace
     bool IsCyrillic(wchar_t c) { return c >= 0x0400 && c <= 0x04FF; }
     bool IsLatin(wchar_t c)    { return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z'); }
 
-    // The spellings a Russian name turns up in on the network, and the English
-    // names that have a Russian form of their own. Keys are lower case.
     const std::map<std::wstring, std::wstring>& KnownNames()
     {
         static const std::map<std::wstring, std::wstring> names = {
@@ -114,8 +110,6 @@ namespace
 
     bool IsVowel(wchar_t c) { return wcschr(L"aeiouy", c) != NULL; }
 
-    // Letter-by-letter, for a name the table does not know. Longest spelling
-    // first, so "shch" is one letter and not "ш" + "ч".
     std::wstring Transliterate(const std::wstring& lower)
     {
         static const std::pair<const wchar_t*, const wchar_t*> kGroups[] = {
@@ -152,16 +146,16 @@ namespace
             bool first = (i == 0);
             bool afterVowel = !first && IsVowel(lower[i - 1]);
             if (c == L'e' && first)
-                out += L"э";                       // Eduard, Edward
+                out += L"э";
             else if (c == L'j' && first)
-                out += L"дж";                      // John, James
+                out += L"дж";
             else if (c == L'y' && (first || afterVowel))
-                out += L"й";                       // Sergey, Nikolay
+                out += L"й";
             else if (c == L'i' && !first && wcschr(L"aeo", lower[i - 1]) != NULL
                      && (i + 1 == lower.size() || !IsVowel(lower[i + 1])))
-                out += L"й";                       // Aidan, Eilon
+                out += L"й";
             else if (c == L'h' && afterVowel && (i + 1 == lower.size() || !IsVowel(lower[i + 1])))
-                ;                                  // silent: John, Sarah
+                ;
             else if (c >= L'a' && c <= L'z')
                 out += kLetters[c - L'a'];
             i++;
@@ -226,10 +220,6 @@ bool FetchVatsimIdentity(const std::string& callsign, VatsimIdentity& out)
 
 namespace
 {
-    // The endpoint folder without its trailing slash, and the position and the
-    // key cut down to the characters they are made of - the position goes into
-    // a query string or a JSON body, the key into a header. False when there is
-    // no server or no position to ask about.
     bool ServerRequestParts(const std::string& baseUrl, const std::string& apiKey,
         const std::string& position, std::string& url, std::string& pos, std::string& headers)
     {
@@ -268,8 +258,6 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
         return false;
     }
 
-    // A server set up before the table existed: there is no name to be had
-    // from it, and asking again every minute would not change that.
     if (response.status == 404)
     {
         Log::Error("auth", "user base: " + endpoint + " answered 404 - the server has no name table (name.php)");
@@ -302,8 +290,6 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
 
 namespace
 {
-    // A JSON string, quotes and all. A character below a space is written as
-    // \u00XX rather than dropped: a password has to arrive exactly as typed.
     std::string JsonString(const std::wstring& value)
     {
         static const char kHex[] = "0123456789abcdef";
@@ -328,8 +314,8 @@ namespace
 }
 
 bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const std::string& position,
-    const std::wstring& surname, const std::wstring& firstName, const std::wstring& patronymic,
-    const std::wstring& password, std::wstring& name, std::string& error)
+    const std::wstring& cid, const std::wstring& surname, const std::wstring& firstName,
+    const std::wstring& patronymic, std::wstring& name, std::string& error)
 {
     std::string url, pos, headers;
     if (!ServerRequestParts(baseUrl, apiKey, position, url, pos, headers))
@@ -338,14 +324,13 @@ bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const st
         return false;
     }
 
-    std::string body = "{\"position\":\"" + pos + "\",\"surname\":" + JsonString(surname)
-        + ",\"first_name\":" + JsonString(firstName) + ",\"patronymic\":" + JsonString(patronymic)
-        + ",\"password\":" + JsonString(password) + "}";
+    std::string body = "{\"position\":\"" + pos + "\",\"cid\":" + JsonString(cid)
+        + ",\"surname\":" + JsonString(surname)
+        + ",\"first_name\":" + JsonString(firstName) + ",\"patronymic\":" + JsonString(patronymic) + "}";
     headers += "Content-Type: application/json\r\n";
 
     Net::HttpResponse response;
     const bool answered = Net::HttpRequest("POST", url + "/login.php", headers, body, response);
-    SecureZeroMemory(&body[0], body.size());
     if (!answered)
     {
         Log::Error("auth", "login: no answer from " + url + "/login.php - see the [net] line before this");
@@ -375,8 +360,6 @@ bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const st
 
 namespace
 {
-    // One word of a name, in Russian and capitalised. Empty for a word with no
-    // letters in it - digits, the network showing a CID for a hidden name.
     std::wstring RussianWord(std::wstring word)
     {
         bool cyrillic = false, latin = false;
@@ -386,8 +369,6 @@ namespace
             else if (IsLatin(c)) latin = true;
         }
 
-        // CharLower/CharUpper rather than towlower/towupper: those go by the C
-        // locale, which leaves Cyrillic exactly as it was.
         if (cyrillic)
         {
             CharLowerBuffW(&word[0], (DWORD)word.size());
@@ -410,8 +391,6 @@ namespace
         return ru;
     }
 
-    // "Владимирович", "Сергеевна", "Ильич", "Кузьминична" - or one written in
-    // Latin letters.
     bool IsPatronymic(std::wstring word)
     {
         if (word.empty())
@@ -430,8 +409,6 @@ namespace
 
 std::wstring RussianShortName(const std::wstring& fullName)
 {
-    // Words, however they are separated: "Yuriy Velbovets", "Yuriy_Velbovets"
-    // and "Yuriy.V" all turn up. Anything with no letters in it is dropped.
     std::vector<std::wstring> words;
     size_t pos = 0;
     while (pos < fullName.size())
@@ -450,11 +427,6 @@ std::wstring RussianShortName(const std::wstring& fullName)
     if (words.size() == 1)
         return RussianWord(words[0]);
 
-    // Already shortened, the way it is put in the config or the server's
-    // table: a surname and its initials - "Велбовец Ю.В.", "Велбовец.Ю.В",
-    // "Ю.В. Велбовец". Told from a full name by every other word being a
-    // single letter, and only in Cyrillic, where such a word is nothing but an
-    // initial. The surname is kept as it was written - "Римская-Корсакова".
     if (words.size() <= 3 && std::any_of(fullName.begin(), fullName.end(), IsCyrillic))
     {
         size_t longWords = 0, surname = 0;
@@ -478,8 +450,6 @@ std::wstring RussianShortName(const std::wstring& fullName)
         }
     }
 
-    // First name then surname, as the network has it - unless a patronymic
-    // says otherwise: "Фамилия Имя Отчество" or "Имя Отчество Фамилия".
     size_t first = 0, last = words.size() - 1, patronymic = std::wstring::npos;
     if (words.size() >= 3)
     {
@@ -495,8 +465,6 @@ std::wstring RussianShortName(const std::wstring& fullName)
         }
     }
 
-    // The surname, a space, and each initial with its own full stop:
-    // "Велбовец Ю.В.".
     std::wstring out = RussianWord(words[last]) + L" ";
     std::wstring name = RussianWord(words[first]);
     if (!name.empty())

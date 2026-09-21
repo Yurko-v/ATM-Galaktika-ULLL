@@ -1,11 +1,3 @@
--- Galaxy ATM System - squawk server schema (MySQL 5.7+ / MariaDB 10.2+).
--- Import once through phpMyAdmin or: mysql DBNAME < schema.sql
-
--- Every code ever handed out. A row is active while released_at is NULL.
--- The two generated columns are NULL on a released row, so the unique keys
--- below only bite on active rows: one aircraft holds at most one code, and a
--- code is held by at most one aircraft - two positions asking at the same
--- moment cannot both get it.
 CREATE TABLE IF NOT EXISTS assignments (
     id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
     callsign         VARCHAR(12)  NOT NULL,
@@ -23,8 +15,6 @@ CREATE TABLE IF NOT EXISTS assignments (
     KEY idx_code_released (code, released_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- The VATSIM network as of the last cron run: every pilot online, the code
--- they squawk and the code a controller gave them.
 CREATE TABLE IF NOT EXISTS network_pilots (
     callsign             VARCHAR(12) NOT NULL,
     transponder          CHAR(4)     NULL,
@@ -34,46 +24,18 @@ CREATE TABLE IF NOT EXISTS network_pilots (
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Who is online as a controller, as of the last look at the feed - written by
--- the cron job, and by an endpoint that had to look for itself (lib/vatsim.php).
--- This is what stands in for an API key: a request is let in because the
--- position it claims is really controlling right now. Observers are not here.
 CREATE TABLE IF NOT EXISTS network_controllers (
     callsign VARCHAR(20) NOT NULL,
     cid      VARCHAR(12) NOT NULL,
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- The observers (facility 0) online, written alongside network_controllers.
--- Read by api/name.php alone: an OBS may open the plug-in's panel, but is
--- never let in to hand out a code.
 CREATE TABLE IF NOT EXISTS network_observers (
     callsign VARCHAR(20) NOT NULL,
     cid      VARCHAR(12) NOT NULL,
     PRIMARY KEY (callsign)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- The users of the КСА, by CID: who may log in to the plug-in's panel, and the
--- name the Пользователь block shows for them.
---
--- A controller registers on the site (public/register/): CID, surname, first
--- name, patronymic and a password of their own. LOGIN in the plug-in then asks
--- for the same surname, first name, patronymic and password, and api/login.php
--- checks them against the row for the CID the network lists for the position.
--- A row without password_hash - one the admin entered by name only - logs
--- nobody in until its controller registers on the site.
---
--- 'name' is what is shown: written out in full - "Велбовец Юрий Владимирович"
--- - or already shortened, "Велбовец Ю.В."; the plug-in shortens it either way.
--- The admin page may correct it; the three parts are what LOGIN is checked by.
---
--- On a server set up before registration, add the new columns once:
---   ALTER TABLE user_names
---     ADD COLUMN surname       VARCHAR(40)  NULL AFTER name,
---     ADD COLUMN first_name    VARCHAR(40)  NULL AFTER surname,
---     ADD COLUMN patronymic    VARCHAR(40)  NULL AFTER first_name,
---     ADD COLUMN password_hash VARCHAR(255) NULL AFTER patronymic,
---     ADD COLUMN registered_at DATETIME     NULL AFTER password_hash;
 CREATE TABLE IF NOT EXISTS user_names (
     cid           VARCHAR(12)  NOT NULL,
     name          VARCHAR(100) NOT NULL,
@@ -86,7 +48,6 @@ CREATE TABLE IF NOT EXISTS user_names (
     PRIMARY KEY (cid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Requests counted per position over a rolling minute; see check_rate_limit().
 CREATE TABLE IF NOT EXISTS rate_limit (
     bucket       VARCHAR(40)  NOT NULL,
     window_start DATETIME     NOT NULL,
@@ -94,9 +55,6 @@ CREATE TABLE IF NOT EXISTS rate_limit (
     PRIMARY KEY (bucket)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Small key/value store: 'network_updated' and 'controllers_updated' are the
--- feed times of the last sync of each list, 'controllers_polled' the last time
--- an endpoint went to the feed itself.
 CREATE TABLE IF NOT EXISTS sync_state (
     name  VARCHAR(32) NOT NULL,
     value VARCHAR(64) NOT NULL,

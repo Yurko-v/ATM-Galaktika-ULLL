@@ -8,7 +8,6 @@ namespace
 {
     const wchar_t kClassName[] = L"GalaxyATMSystemFloat";
 
-    // ContinueDrag's request, posted to the window's own queue.
     const UINT kContinueDrag = WM_APP + 0x48;
 
     HINSTANCE ThisModule()
@@ -33,9 +32,6 @@ bool FloatWindow::Create(HWND owner)
     wc.lpszClassName = kClassName;
     if (!RegisterClassExW(&wc) && GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
     {
-        // Left over from a copy of the plug-in EuroScope has since unloaded,
-        // whose window procedure is gone with it - unless a window of ours is
-        // up with it, in which case the class is this copy's own.
         if (UnregisterClassW(kClassName, module))
             RegisterClassExW(&wc);
     }
@@ -54,7 +50,7 @@ void FloatWindow::Destroy()
 {
     if (m_hwnd != NULL)
     {
-        SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, 0);   // nothing it says while going reaches back in
+        SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, 0);
         DestroyWindow(m_hwnd);
         m_hwnd = NULL;
     }
@@ -176,7 +172,6 @@ LRESULT CALLBACK FloatWindow::Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return HTCLIENT;
     }
 
-    // Clicked, it works; it just does not take the keyboard off EuroScope.
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
 
@@ -202,9 +197,6 @@ LRESULT CALLBACK FloatWindow::Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             self->onMoved();
         return 0;
 
-    // A drag that began on the radar, handed over: Windows' own move loop,
-    // which follows the cursor until the button comes up. Too late when the
-    // button already has.
     case kContinueDrag:
         if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
         {

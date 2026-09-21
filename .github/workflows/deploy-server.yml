@@ -1,17 +1,3 @@
-# Deploys the squawk server (server/) to Beget: logs in over SSH, pulls the
-# repository clone, then runs server/deploy.sh to copy public/ and lib/ into
-# the site's own document root (a plain symlinked public_html returned 500 for
-# every request on at least one real Beget account - see server/deploy.sh and
-# server/README.md for why, and for the one-time setup this expects in place).
-#
-# Secrets:   BEGET_HOST     SSH address from the Beget panel
-#            BEGET_USER     Beget login
-#            BEGET_SSH_KEY  private key whose public half is in ~/.ssh/authorized_keys on Beget
-# Variables: BEGET_REPO_DIR   clone path relative to the home folder (default squawk/repo)
-#            BEGET_WEB_ROOT   the site's own folder, relative to the home folder
-#                              (e.g. squawk.example.beget.tech) - holds public_html
-#            SQUAWK_HEALTH_URL  optional, e.g. http://squawk.example.beget.tech/api/health.php
-
 name: Deploy squawk server
 
 on:
