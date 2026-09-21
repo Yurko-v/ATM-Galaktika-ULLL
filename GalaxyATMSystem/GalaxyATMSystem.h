@@ -481,6 +481,11 @@ private:
     void AutoLogin();
     bool m_autoLoginTried;
 
+    // Bypass: only after a failed LOGIN attempt (any error), never past a suspension.
+    // Pressed before that it asks to register.
+    bool m_authFailed;
+    bool BypassAvailable();
+
     std::wstring m_noticeText;
     void ShowNotice(const std::wstring& text);
     void DrawNoticeWindow(HDC hDC);
@@ -630,6 +635,7 @@ const int SO_PANEL_COLLAPSE = 2;
 const int SO_TIMER_TOGGLE = 5;
 
 const int SO_AUTH_LOGIN   = 90;
+const int SO_AUTH_BYPASS  = 96;
 
 const int SO_NOTICE_WINDOW = 84;
 const int SO_NOTICE_OK     = 85;

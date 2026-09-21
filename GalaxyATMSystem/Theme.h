@@ -90,15 +90,9 @@ namespace Theme
     const double   VectorHeadLength  = 7.0;
 
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcZoomPower = 0.25;
-    const double   WakeArcDistScale = 12.4;
-    const double   WakeArcDistMin   = 10.0;
-    const double   WakeArcDistMax   = 22.0;
-    const double   WakeArcSize      = 0.8;
-    const double   WakeArcStepScale = 3.1;
-    const double   WakeArcStepMin   = 4.0;
-    const double   WakeArcStepMax   = 5.5;
-    const double   WakeArcSweep     = 90.0;
+    const double   WakeArcRadius    = 20.0;   // px, target -> first arc
+    const double   WakeArcStep      = 10.0;   // px, first -> second arc (J)
+    const double   WakeArcSweep     = 60.0;   // degrees, centred behind
 
     const COLORREF SigmetLine   = RGB(0x1C, 0x3C, 0xA0);
     const int      SigmetWidth  = 2;

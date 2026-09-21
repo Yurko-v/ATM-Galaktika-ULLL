@@ -482,7 +482,7 @@ namespace L
     const int V_TOP = 5, V_ROW = 20, V_GAP1 = 8, V_CHK = 16, V_GAP2 = 6, V_BOT = 6;
     const int VECTORS_BOX_H = V_TOP + V_ROW + V_GAP1 + V_CHK + V_GAP2 + V_CHK + V_BOT;
 
-    const int O_TOP = 4, O_LABEL = V_ROW, O_GAP = 4, O_LIST_H = 106, O_BOT = 4;
+    const int O_TOP = 4, O_LABEL = V_ROW, O_GAP = 4, O_LIST_H = 130, O_BOT = 4;
     const int OS_ROW = 16, OS_PITCH = 21, OS_ROW0 = 4;
     const int OS_BOX_H = O_TOP + O_LABEL + O_GAP + O_LIST_H + O_BOT;
 
@@ -1793,6 +1793,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_authState = AuthState::LoggedOut;
     m_authStartTick = 0;
     m_autoLoginTried = false;
+    m_authFailed = false;
 
     m_timerRunning = false;
     m_timerStartTick = 0;
@@ -2396,6 +2397,9 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         }
         else
         {
+            // any failed attempt unlocks Bypass
+            if (Plugin()->MyLogin() == CGalaxyATMSystemPlugin::LoginState::Failed)
+                m_authFailed = true;
             DrawLoginWindow(hDC);
         }
     }
@@ -4580,6 +4584,7 @@ void CGalaxyATMSystemRadarScreen::AutoLogin()
             StartAuthCheck();
         else if (state == CGalaxyATMSystemPlugin::LoginState::Failed && m_authMessage.empty())
         {
+            m_authFailed = true;
             Plugin()->MyLogin(&m_authMessage);
             RequestRefresh();
         }
@@ -4620,6 +4625,7 @@ void CGalaxyATMSystemRadarScreen::SyncAuth()
     {
         m_authState = AuthState::LoggedIn;
         m_authMessage.clear();
+        m_authFailed = false;
         CloseLoginWindow();
     }
     else if (!session && m_authState == AuthState::LoggedIn)
@@ -4640,6 +4646,12 @@ void CGalaxyATMSystemRadarScreen::StartAuthCheck()
     m_authState = AuthState::Checking;
     m_authStartTick = GetTickCount64();
     RequestRefresh();
+}
+
+bool CGalaxyATMSystemRadarScreen::BypassAvailable()
+{
+    return m_authState == AuthState::LoggedOut && m_authFailed
+        && !Plugin()->AccessSuspended() && !Plugin()->TrainingSession();
 }
 
 void CGalaxyATMSystemRadarScreen::ShowNotice(const std::wstring& text)
@@ -5581,22 +5593,35 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
     const int kBtnLead = 40;
     const int kBtnPastCentre = 440;
     const int kBtnPadX = 6;
+    const int kBtnGap  = 6;
     const int kBtnH    = 18;
     HFONT btnFont = m_fonts.Small;
     SIZE szLogin  = Theme::MeasureText(hDC, btnFont, L"LOGIN");
+    SIZE szBypass = Theme::MeasureText(hDC, btnFont, L"Bypass");
     const int loginW  = szLogin.cx + 2 * kBtnPadX;
+    const int bypassW = szBypass.cx + 2 * kBtnPadX;
     int btnTop = bar.top + (bar.bottom - bar.top - kBtnH) / 2;
     const int loginLeft = max(x - kGap + kBtnLead,
-        min((bar.left + bar.right) / 2 + kBtnPastCentre, contentRight - loginW));
-    RECT login = { loginLeft, btnTop, loginLeft + loginW, btnTop + kBtnH };
-    if (login.right <= contentRight)
+        min((bar.left + bar.right) / 2 + kBtnPastCentre, contentRight - loginW - kBtnGap - bypassW));
+    RECT login  = { loginLeft, btnTop, loginLeft + loginW, btnTop + kBtnH };
+    RECT bypass = { login.right + kBtnGap, btnTop, login.right + kBtnGap + bypassW, btnTop + kBtnH };
+    if (bypass.right <= contentRight)
     {
         const bool training = Plugin()->TrainingSession();
-        const COLORREF loginInk = training ? Theme::MenuTextDisabled : Theme::Text;
+        const bool bypassLive = BypassAvailable();
+        const COLORREF loginInk  = training ? Theme::MenuTextDisabled : Theme::Text;
+        const COLORREF bypassInk = bypassLive ? Theme::Text : Theme::MenuTextDisabled;
         Theme::OutlineBox(hDC, login, Theme::MenuBarFill, loginInk);
         Theme::DrawLine(hDC, login, L"LOGIN", btnFont, loginInk, DT_CENTER | DT_VCENTER);
+        Theme::OutlineBox(hDC, bypass, Theme::MenuBarFill, bypassInk);
+        Theme::DrawLine(hDC, bypass, L"Bypass", btnFont, bypassInk, DT_CENTER | DT_VCENTER);
         if (!training)
+        {
             AddScreenObject(SO_AUTH_LOGIN, "MENU_LOGIN", login, false, Tr("Войти в систему"));
+            if (m_authState == AuthState::LoggedOut)
+                AddScreenObject(SO_AUTH_BYPASS, "MENU_BYPASS", bypass, false,
+                    bypassLive ? Tr("Войти без проверки в базе") : "");
+        }
     }
 
     RestoreDC(hDC, saved);
@@ -6734,28 +6759,21 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
         POINT ahead = ConvertCoordFromPositionToPixel(
             CalculateDestinationPoint(here, rt.GetTrackHeading(), kAheadNM));
         double dx = ahead.x - c.x, dy = ahead.y - c.y;
-        double aheadPx = sqrt(dx * dx + dy * dy);
-        if (aheadPx < 1.0)
+        if (dx * dx + dy * dy < 1.0)
             continue;
-        double pxPerNM = aheadPx / kAheadNM;
 
-        double zoom = pow(pxPerNM, Theme::WakeArcZoomPower);
-        double dist = min(Theme::WakeArcDistMax, max(Theme::WakeArcDistMin, Theme::WakeArcDistScale * zoom));
-        double step = min(Theme::WakeArcStepMax, max(Theme::WakeArcStepMin, Theme::WakeArcStepScale * zoom));
-
-        double arcR = dist * Theme::WakeArcSize;
-        double back = (dist - arcR) / aheadPx;
-        double cx = c.x - dx * back, cy = c.y - dy * back;
-
+        // short arcs centred on the target, fixed size
         double behindDeg = atan2(dy, dx) * 180.0 / M_PI + 180.0;
 
         VectorCanvas canvas(hDC, GetTagColorForFlightPlan(fp));
         canvas.pen.SetWidth(Theme::WakeArcWidth);
+        canvas.pen.SetStartCap(Gdiplus::LineCapRound);
+        canvas.pen.SetEndCap(Gdiplus::LineCapRound);
         for (int i = 0; i < arcs; i++)
         {
-            double r = arcR + i * step;
+            double r = Theme::WakeArcRadius + i * Theme::WakeArcStep;
             canvas.g.DrawArc(&canvas.pen,
-                (Gdiplus::REAL)(cx - r), (Gdiplus::REAL)(cy - r),
+                (Gdiplus::REAL)(c.x - r), (Gdiplus::REAL)(c.y - r),
                 (Gdiplus::REAL)(2.0 * r), (Gdiplus::REAL)(2.0 * r),
                 (Gdiplus::REAL)(behindDeg - Theme::WakeArcSweep / 2.0),
                 (Gdiplus::REAL)Theme::WakeArcSweep);
@@ -7235,12 +7253,14 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             else if (!Plugin()->LiveConnection())
             {
                 m_authMessage = Tr(L"Нет подключения к VATSIM");
+                m_authFailed = true;
                 Log::Error("auth", "LOGIN " + who + " failed: not controlling on the live VATSIM network"
                     " (EuroScope connection type " + std::to_string(GetPlugIn()->GetConnectionType()) + ")");
             }
             else if (Plugin()->GetConfig().SquawkServerUrl().empty())
             {
                 m_authMessage = Tr(L"База пользователей недоступна");
+                m_authFailed = true;
                 Log::Error("auth", "LOGIN " + who + " failed: Squawk.ServerUrl is not set in GalaxyATMSystem.json");
             }
             else
@@ -7267,6 +7287,31 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
                     }
                 }
                 EditLoginField(first);
+            }
+        }
+        RequestRefresh();
+        break;
+
+    case SO_AUTH_BYPASS:
+        if (m_authState == AuthState::LoggedOut && !Plugin()->TrainingSession())
+        {
+            if (BypassAvailable())
+            {
+                Log::Warn("auth", "Bypass: panel opened past the user base after a failed attempt");
+                CloseLoginWindow();
+                m_authMessage.clear();
+                m_authFailed = false;
+                StartAuthCheck();
+            }
+            else if (Plugin()->AccessSuspended())
+            {
+                Log::Warn("auth", "Bypass refused: access suspended");
+                ShowNotice(Tr(L"Доступ приостановлен"));
+            }
+            else
+            {
+                Log::Info("auth", "Bypass refused: no LOGIN has failed - told to register");
+                ShowNotice(Tr(L"Пожалуйста, зарегистрируйтесь в системе в установленном порядке"));
             }
         }
         RequestRefresh();
@@ -7919,6 +7964,7 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         Plugin()->SetSessionAuthorized(false);
         m_authState = AuthState::LoggedOut;
         m_authMessage.clear();
+        m_authFailed = false;
         m_autoLoginTried = true;
         CloseLoginWindow();
         m_openDropdown = DropdownKind::None;
