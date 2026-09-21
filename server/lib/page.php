@@ -140,7 +140,7 @@ function page_header(string $right = ''): string
 function page_footer(): string
 {
     return '<footer class="foot">'
-        . '<span>КСА УВД «Галактика» · ULLL FIR TEST</span>'
+        . '<span>КСА УВД «Галактика» · ULLL FIR</span>'
         . '<a href="https://vatsim-petersburg.com/" rel="noopener">vatsim-petersburg.com</a>'
         . '</footer>';
 }
