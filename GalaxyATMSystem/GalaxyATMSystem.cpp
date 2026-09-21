@@ -2726,6 +2726,71 @@ namespace
         return g_trackSymbols;
     }
 
+    // ICAO code -> telephony ("SDM" -> "Rossiya"), from ICAO_Airlines.txt next to TopSky.dll
+    // or in the sector's Data folder. Read once.
+    const std::wstring& AirlineName(const char* callsign)
+    {
+        static std::map<std::string, std::wstring> names;
+        static bool loaded = false;
+        static const std::wstring none;
+        if (!loaded)
+        {
+            loaded = true;
+            HMODULE topsky = GetModuleHandleW(L"TopSky.dll");
+            wchar_t path[MAX_PATH] = {};
+            if (topsky != NULL && GetModuleFileNameW(topsky, path, MAX_PATH) != 0)
+            {
+                std::wstring dir = path;
+                dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
+                for (const std::wstring& file : { dir + L"ICAO_Airlines.txt", dir + L"..\\..\\Data\\ICAO_Airlines.txt" })
+                {
+                    FILE* f = NULL;
+                    if (_wfopen_s(&f, file.c_str(), L"rb") != 0 || f == NULL)
+                        continue;
+                    char line[512];
+                    while (fgets(line, sizeof(line), f) != NULL)
+                    {
+                        if (line[0] == ';')
+                            continue;
+                        std::vector<std::string> fields;
+                        std::string cur;
+                        for (const char* p = line; *p != '\0' && *p != '\r' && *p != '\n'; p++)
+                        {
+                            if (*p == '\t') { fields.push_back(cur); cur.clear(); }
+                            else cur += *p;
+                        }
+                        fields.push_back(cur);
+                        if (fields.size() < 3 || fields[0].size() != 3 || fields[2].empty())
+                            continue;
+                        // "ROSSIYA" -> "Rossiya"
+                        std::wstring name = Widen(fields[2].c_str());
+                        bool wordStart = true;
+                        for (wchar_t& ch : name)
+                        {
+                            ch = wordStart ? towupper(ch) : towlower(ch);
+                            wordStart = !iswalpha(ch);
+                        }
+                        names.emplace(fields[0], name);
+                    }
+                    fclose(f);
+                    Log::Info("formular", Log::Utf8(file) + ": " + std::to_string(names.size()) + " airlines");
+                    break;
+                }
+            }
+        }
+        if (callsign == NULL || strlen(callsign) < 4)
+            return none;
+        std::string code(callsign, 3);
+        for (char& ch : code)
+        {
+            if (!isalpha((unsigned char)ch))
+                return none;
+            ch = (char)toupper((unsigned char)ch);
+        }
+        auto it = names.find(code);
+        return it != names.end() ? it->second : none;
+    }
+
     void DrawSymbolLineOutsideHole(HDC hDC, POINT at, POINT from, POINT to, double holeR)
     {
         const double dx = (double)to.x - from.x, dy = (double)to.y - from.y;
@@ -3082,13 +3147,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     kind == FormularKind::Twr ? base : Theme::FormularSector,
                     kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
 
-            if (vfr && ctrLabel)
+            if (vfr && ctrLabel && !expanded)
                 ident.push_back({ L"V", base, NULL });
             else if (vfr && kind == FormularKind::App && expanded)
                 ident.push_back({ L"V", Theme::FormularVfr, NULL });
         }
         if (ctrLabel && expanded && sq != NULL && *sq != '\0')
             ident.push_back({ Widen(sq), base, correlated ? &kFnTssr : NULL });
+        // flight rules, I / V
+        if (ctrLabel && expanded && planType != NULL && isalpha((unsigned char)planType[0]))
+            ident.push_back({ std::wstring(1, (wchar_t)toupper((unsigned char)planType[0])), base, NULL });
 
         std::vector<FormularRun> levels;
         const bool belowTL = pos.GetFlightLevel() / 100 < tl;
@@ -3146,6 +3214,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (m_osSpeed && ctrLabel)
             levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
                 base, correlated ? &kFnGs : NULL });
+        if (ctrLabel && expanded && correlated && fp.GetFlightPlanData().IsRvsm())
+            levels.push_back({ L"R", base, NULL });
 
         std::wstring ahdgText, aspText, arcText;
         if (correlated)
@@ -3189,9 +3259,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         std::vector<std::vector<FormularRun>> extra;
         if (expanded && correlated && ctrLabel)
         {
-            CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
             CFlightPlanData fpd = fp.GetFlightPlanData();
-            wchar_t buf[32];
 
             std::vector<FormularRun> exitLine;
             int xfl = fp.GetExitCoordinationAltitude();
@@ -3203,44 +3271,18 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             extra.push_back(exitLine);
 
             std::vector<FormularRun> assignedLine;
-            assignedLine.push_back({ ahdgText.empty() ? std::wstring(L"AHDG") : ahdgText, base, &kFnAhdg });
-            assignedLine.push_back({ aspText.empty() ? std::wstring(L"ASP") : aspText, base, &kFnAsp });
-            assignedLine.push_back({ arcText.empty() ? std::wstring(L"ARC") : arcText, base, &kFnArc });
-            const char* firExit = fp.GetNextFirCopxPointName();
-            if (firExit != NULL && *firExit != '\0')
-                assignedLine.push_back({ Widen(firExit), base, NULL });
+            assignedLine.push_back({ ahdgText.empty() ? std::wstring(L"ahd") : ahdgText, base, &kFnAhdg });
+            assignedLine.push_back({ aspText.empty() ? std::wstring(L"spd") : aspText, base, &kFnAsp });
             extra.push_back(assignedLine);
-
-            extra.push_back(std::vector<FormularRun>());
 
             std::vector<FormularRun> planLine;
             const char* atyp = fpd.GetAircraftFPType();
-            std::wstring typeText = (atyp != NULL && *atyp != '\0') ? Widen(atyp) : std::wstring(L"ATYP");
-            char wtc = fpd.GetAircraftWtc();
-            if (wtc != 0 && wtc != ' ' && wtc != '?')
-                typeText += L"/" + std::wstring(1, (wchar_t)wtc);
-            planLine.push_back({ typeText, base, &kFnAtyp });
-            const char* ades = fpd.GetDestination();
-            if (ades != NULL && *ades != '\0')
-                planLine.push_back({ Widen(ades), base, &kFnAdes });
-            int rfl = fpd.GetFinalAltitude();
-            if (rfl > 0)
-            {
-                swprintf_s(buf, L"%03d", rfl / 100);
-                planLine.push_back({ buf, base, &kFnRfl });
-            }
+            planLine.push_back({ (atyp != NULL && *atyp != '\0') ? Widen(atyp) : std::wstring(L"ATYP"),
+                base, &kFnAtyp });
+            const std::wstring& airline = AirlineName(callsign.c_str());
+            if (!airline.empty())
+                planLine.push_back({ airline, base, NULL });
             extra.push_back(planLine);
-
-            int ias = 0, machX100 = 0;
-            if (CalculatedIasMach(rt.GetGS(), pos.GetFlightLevel(), ias, machX100))
-            {
-                std::vector<FormularRun> speedLine;
-                swprintf_s(buf, L"N%03d", ias);
-                speedLine.push_back({ buf, base, NULL });
-                swprintf_s(buf, L"M%02d", machX100);
-                speedLine.push_back({ buf, base, NULL });
-                extra.push_back(speedLine);
-            }
         }
         else if (correlated && ctrLabel)
         {
