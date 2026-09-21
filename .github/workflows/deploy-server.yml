@@ -51,9 +51,20 @@ jobs:
 
           mkdir -p ~/.ssh
           # a key pasted from Windows carries \r, which ssh rejects as "error in libcrypto"
-          printf '%s\n' "$BEGET_SSH_KEY" | tr -d '\r' > ~/.ssh/beget
+          # or the whole key as one base64 line, which survives any copy-paste
+          printf '%s\n' "$BEGET_SSH_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' > ~/.ssh/beget
+          if ! grep -q -- '-----BEGIN' ~/.ssh/beget; then
+            tr -d ' \n' < ~/.ssh/beget | base64 -d > ~/.ssh/beget.dec 2>/dev/null && mv ~/.ssh/beget.dec ~/.ssh/beget
+          fi
           chmod 600 ~/.ssh/beget
-          ssh-keygen -y -f ~/.ssh/beget || { echo "::error::BEGET_SSH_KEY is not a valid OpenSSH private key"; exit 1; }
+          if ! ssh-keygen -y -f ~/.ssh/beget; then
+            echo "key: $(wc -l < ~/.ssh/beget) lines, $(wc -c < ~/.ssh/beget) bytes," \
+              "BEGIN: $(grep -c -- '-----BEGIN OPENSSH PRIVATE KEY-----' ~/.ssh/beget)," \
+              "END: $(grep -c -- '-----END OPENSSH PRIVATE KEY-----' ~/.ssh/beget)," \
+              "public key pasted: $(grep -c '^ssh-' ~/.ssh/beget)"
+            echo "::error::BEGET_SSH_KEY is not a valid OpenSSH private key"
+            exit 1
+          fi
           ssh-keyscan -H "$BEGET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           ssh -i ~/.ssh/beget -o BatchMode=yes "$BEGET_USER@$BEGET_HOST" \
