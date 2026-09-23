@@ -124,7 +124,7 @@ function brand_logo(): string
         // . ' L11.5 26.3 V24.8 L14.5 22.6 V17.4 L6 20 V18 L14.5 13 V7.4 C14.5 6.2 15 5 16 5 Z" fill="currentColor"/>'
         // . '</svg>'
         // . '<span class="fir"><span class="word">ULLL FIR</span><small>VATSIM</small></span>'
-        . '<img src="https://cdn.vatsim-petersburg.com/e0313a71-751a-11f0-9908-0242ac130004" alt="logo" style="width: 30px">'
+        . '<img src="https://cdn.vatsim-petersburg.com/e0313a71-751a-11f0-9908-0242ac130004" alt="logo">'
         . '</div>';
 }
 
