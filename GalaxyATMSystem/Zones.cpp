@@ -221,8 +221,8 @@ namespace
                     double radiusNM = 0.0;
                     if (const Json::Value* r = circle->Find(L"RadiusNM"))
                         radiusNM = r->AsNumber(0.0);
-                    else if (const Json::Value* r = circle->Find(L"RadiusKm"))
-                        radiusNM = r->AsNumber(0.0) / 1.852;
+                    else if (const Json::Value* km = circle->Find(L"RadiusKm"))
+                        radiusNM = km->AsNumber(0.0) / 1.852;
                     if (radiusNM > 0.0)
                         RingFromCircle(centre, radiusNM, out.ring);
                 }
@@ -721,6 +721,16 @@ namespace
         }
         return NULL;
     }
+
+    bool MentionedIn(const std::vector<ZoneBooking>* list, const std::wstring& id)
+    {
+        if (list == NULL)
+            return false;
+        for (const ZoneBooking& b : *list)
+            if (b.name == id)
+                return true;
+        return false;
+    }
 }
 
 bool ZoneActiveNow(const Zone& zone, const ZoneActivation& what,
@@ -746,15 +756,15 @@ bool ZoneActiveNow(const Zone& zone, const ZoneActivation& what,
     }
 
     const bool named = (zone.activation.compare(0, 4, L"AUP:") == 0);
-
     const bool permanent = (zone.activation.empty() || zone.activation == L"1");
-    if (!named && !(permanent && zone.kind == ZoneKind::Restricted))
+    if (!named && !permanent)
         return true;
 
-    std::wstring id = named ? ToUpper(zone.activation.substr(4)) : std::wstring();
+    std::wstring id = named ? ToUpper(zone.activation.substr(4)) : ToUpper(zone.id);
     if (id.empty())
-        id = ToUpper(zone.id);
-    if (id.empty())
+        return true;
+
+    if (permanent && !MentionedIn(what.aup, id))
         return true;
 
     const ZoneBooking* hit = BookingFor(what.aup, id, nowUtc);

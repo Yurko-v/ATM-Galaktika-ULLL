@@ -30,6 +30,30 @@ enum class VsUnit   { FtMin, MS };
 enum class GsUnit   { Knots, Kmh };
 enum class DistUnit { NM, Km };
 
+class BackgroundJob
+{
+public:
+    ~BackgroundJob() { Wait(); }
+
+    template <class Work>
+    bool Start(Work work)
+    {
+        if (m_busy)
+            return false;
+        Wait();
+        m_busy = true;
+        m_thread = std::thread([this, work]() { work(); m_busy = false; });
+        return true;
+    }
+
+    bool Busy() const { return m_busy; }
+    void Wait() { if (m_thread.joinable()) m_thread.join(); }
+
+private:
+    std::thread m_thread;
+    std::atomic<bool> m_busy{ false };
+};
+
 class CGalaxyATMSystemPlugin : public EuroScopePlugIn::CPlugIn
 {
 public:
@@ -55,8 +79,6 @@ public:
     virtual void OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan FlightPlan,
         const char* sSenderController, const char* sTargetController);
 
-    // "√" on the label: the crew speaks English. Shared with the other controllers
-    // through a scratch pad broadcast (like IASsure does) and strip annotation 8.
     bool IsEnglish(const std::string& callsign) const { return m_english.count(callsign) != 0; }
     void ToggleEnglish(EuroScopePlugIn::CFlightPlan fp);
 
@@ -145,7 +167,7 @@ private:
     std::wstring m_qnhMmHg;
     std::wstring m_qnhHpa;
 
-    std::thread      m_metarFetch;
+    BackgroundJob      m_metarFetch;
     std::atomic<int> m_fetchedQnhHpa{ 0 };
     bool             m_gotLiveMetar = false;
 
@@ -155,18 +177,17 @@ private:
 
     int  m_tagFontSize      = 10;
 
-    std::thread m_sigmetFetch;
+    BackgroundJob m_sigmetFetch;
     mutable std::mutex m_sigmetMutex;
     std::shared_ptr<const std::vector<Sigmet>> m_sigmets;
 
     void StartAtisFetch();
-    std::thread m_atisFetch;
-    std::atomic<bool> m_atisBusy{ false };
+    BackgroundJob m_atisFetch;
     mutable std::mutex m_atisMutex;
     AtisReport m_atisLive;
 
     void StartIdentityFetch(const std::string& callsign);
-    std::thread m_identityFetch;
+    BackgroundJob m_identityFetch;
     mutable std::mutex m_identityMutex;
     VatsimIdentity m_identity;
     bool m_accessSuspended = false;
@@ -174,7 +195,7 @@ private:
 
     bool m_fontChecked = false;
 
-    std::thread m_login;
+    BackgroundJob m_login;
     LoginState m_loginState = LoginState::Idle;
     SavedLogin m_savedLogin;
     bool m_savedLoginRead = false;
@@ -184,11 +205,11 @@ private:
 
     void StartAupFetch();
     void StartNotamFetch();
-    std::thread m_aupFetch;
+    BackgroundJob m_aupFetch;
     mutable std::mutex m_aupMutex;
     std::shared_ptr<const std::vector<ZoneBooking>> m_aup;
 
-    std::thread m_notamFetch;
+    BackgroundJob m_notamFetch;
     mutable std::mutex m_notamMutex;
     std::shared_ptr<const std::vector<ZoneBooking>> m_notams;
 
@@ -226,6 +247,8 @@ private:
     std::map<std::string, ApwCacheEntry> m_apwCache;
 
     const ApwResult& ApwFor(EuroScopePlugIn::CRadarTarget& target);
+
+    void ForgetGone();
 
     AltUnit  m_unitAlt  = AltUnit::FL;
     VsUnit   m_unitVs   = VsUnit::FtMin;
@@ -304,6 +327,8 @@ public:
     virtual void OnAsrContentToBeSaved(void);
     virtual void OnAsrContentLoaded(bool Loaded);
 
+    void ForgetGone(const std::set<std::string>& live);
+
 private:
     CGalaxyATMSystemPlugin* Plugin() { return (CGalaxyATMSystemPlugin*)GetPlugIn(); }
 
@@ -371,6 +396,15 @@ private:
         const FormularFn* fn;
         std::string text;
     };
+    struct CoordWatch
+    {
+        int lastState = 0;
+        int levelFt = 0;
+        std::string pointName;
+        int result = 0;
+        ULONGLONG resultAt = 0;
+        bool wasMine = false;
+    };
     struct FormularState
     {
         POINT offset = { 0, 0 };
@@ -381,27 +415,29 @@ private:
         POINT anchor = { 0, 0 };
         RECT  area = { 0, 0, 0, 0 };
         std::vector<FormularItem> items;
+        CoordWatch exitCoord;
+        CoordWatch entryCoord;
+        CoordWatch exitPoint;
+        CoordWatch entryPoint;
     };
     std::map<std::string, FormularState> m_formulars;
 
-    // orange highlight of whatever clickable thing is under the mouse. Rects are
-    // collected while drawing, the poll timer redraws when the cursor moves to another one.
     POINT m_hotCursor = { 0, 0 };
     bool  m_hotValid = false;
     int   m_hotIndex = -1;
     std::vector<RECT> m_hotRects;
     bool Hot(const RECT& r);
     void AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip);
-    void AddHotButton(HDC hDC, int type, const char* id, RECT r, const char* tip);   // label popups only
+    void AddHotButton(HDC hDC, int type, const char* id, RECT r, const char* tip);
     void TickHot();
 
-    // Speed window: left click on ASP of the РЦ label
     bool m_spdOpen = false;
     std::string m_spdCallsign;
     bool m_spdMach = false;
     int  m_spdTopRow = 0;
     int  m_spdSelected = 0;
-    int  m_spdMode = 0;             // 0 equal, 1 or greater, 2 or less
+    enum SpeedMode { SpeedExact, SpeedOrGreater, SpeedOrLess };
+    SpeedMode m_spdMode = SpeedExact;
     bool m_spdButtonsDown = true;
     bool m_spdEntryPending = false;
     ULONGLONG m_spdPendingTick = 0;
@@ -411,6 +447,9 @@ private:
     RECT m_spdList = { 0, 0, 0, 0 };
     RECT m_spdTrack = { 0, 0, 0, 0 };
     TextEntry m_spdEntry;
+    HFONT m_spdFont = NULL;
+    int   m_spdFontSize = 0;
+    HFONT GetSpeedFont();
     void OpenSpeedWindow(const char* callsign);
     void CloseSpeedWindow();
     void DrawSpeedWindow(HDC hDC);
@@ -419,8 +458,58 @@ private:
     void ApplySpeed();
     void TickSpeedWindow();
 
-    // эшелонатор: our CFL picker, left click on CFL of the РЦ label
+    struct XfrPosition
+    {
+        std::string positionId;
+        std::string callsign;
+    };
+    bool m_xfrOpen = false;
+    bool m_xfrPicksRoutePoint = false;
+    std::string m_xfrCallsign;
+    std::vector<XfrPosition> m_xfrPositions;
+    int  m_xfrTopRow = 0;
+    int  m_xfrSelected = -1;
+    bool m_xfrButtonsDown = true;
+    bool m_xfrEntryPending = false;
+    ULONGLONG m_xfrPendingTick = 0;
+    ULONGLONG m_xfrDrawnTick = 0;
+    RECT m_xfrArea = { 0, 0, 0, 0 };
+    RECT m_xfrField = { 0, 0, 0, 0 };
+    RECT m_xfrTrack = { 0, 0, 0, 0 };
+    TextEntry m_xfrEntry;
+    HFONT m_xfrFont = NULL;
+    int   m_xfrFontSize = 0;
+    HFONT GetTransferFont();
+    HFONT m_titleFont = NULL;
+    int   m_titleFontSize = 0;
+    HFONT GetTitleFont();
+    void OpenTransferWindow(const char* callsign);
+    void OpenCopxWindow(const char* callsign);
+    void CloseTransferWindow();
+    void DrawTransferWindow(HDC hDC);
+    void ScrollTransfer(int rows);
+    void ApplyTransfer();
+    void ReleaseTransfer();
+    void TickTransferWindow();
+
+    bool m_ftOpen = false;
+    std::string m_ftCallsign;
+    bool m_ftButtonsDown = true;
+    bool m_ftEntryPending = false;
+    ULONGLONG m_ftPendingTick = 0;
+    ULONGLONG m_ftDrawnTick = 0;
+    RECT m_ftArea = { 0, 0, 0, 0 };
+    RECT m_ftField = { 0, 0, 0, 0 };
+    TextEntry m_ftEntry;
+    std::map<std::string, std::string> m_localFreeText;
+    void OpenFreeTextWindow(const char* callsign);
+    void CloseFreeTextWindow();
+    void DrawFreeTextWindow(HDC hDC);
+    void ApplyFreeText();
+    void TickFreeTextWindow();
+
     bool m_cflOpen = false;
+    bool m_cflPicksExitLevel = false;
     std::string m_cflCallsign;
     int  m_cflTopRow = 0;
     int  m_cflHoverLevel = -1;
@@ -434,7 +523,7 @@ private:
     std::vector<std::pair<RECT, int>> m_cflCells;
     HWND m_cflView = NULL;
     TextEntry m_cflEntry;
-    void OpenCflPicker(const char* callsign);
+    void OpenCflPicker(const char* callsign, bool xfl = false);
     void CloseCflPicker();
     void DrawCflPicker(HDC hDC);
     void ApplyCfl(int fl);
@@ -444,7 +533,6 @@ private:
     HWND m_popupView = NULL;
     void UpdateWheelHook();
 public:
-    // mouse wheel over the эшелонатор / Speed list, from the thread mouse hook
     bool OnMouseWheel(int delta);
 private:
     bool  m_formularsVisible;
@@ -556,8 +644,6 @@ private:
     void AutoLogin();
     bool m_autoLoginTried;
 
-    // Bypass: only after a failed LOGIN attempt (any error), never past a suspension.
-    // Pressed before that it asks to register.
     bool m_authFailed;
     bool BypassAvailable();
 
@@ -712,7 +798,7 @@ const int SO_TIMER_TOGGLE = 5;
 const int SO_AUTH_LOGIN   = 90;
 
 const int SO_CFL_WINDOW = 100;
-const int SO_CFL_LEVEL  = 101;   // sObjectId = the flight level
+const int SO_CFL_LEVEL  = 101;
 const int SO_CFL_UP     = 102;
 const int SO_CFL_DOWN   = 103;
 const int SO_CFL_TRACK  = 104;
@@ -721,15 +807,30 @@ const int SO_CFL_OK     = 106;
 
 const int SO_SPD_WINDOW = 110;
 const int SO_SPD_CLOSE  = 111;
-const int SO_SPD_ROW    = 112;   // sObjectId = the value
+const int SO_SPD_ROW    = 112;
 const int SO_SPD_UP     = 113;
 const int SO_SPD_DOWN   = 114;
 const int SO_SPD_TRACK  = 115;
 const int SO_SPD_FIELD  = 116;
-const int SO_SPD_TAB    = 117;   // "0" Kt, "1" M
-const int SO_SPD_MODE   = 118;   // "0" equal, "1" or greater, "2" or less
+const int SO_SPD_TAB    = 117;
+const int SO_SPD_MODE   = 118;
 const int SO_SPD_YES    = 119;
 const int SO_SPD_CANCEL = 120;
+
+const int SO_XFR_WINDOW  = 121;
+const int SO_XFR_CLOSE   = 122;
+const int SO_XFR_ROW     = 123;
+const int SO_XFR_UP      = 124;
+const int SO_XFR_DOWN    = 125;
+const int SO_XFR_TRACK   = 126;
+const int SO_XFR_FIELD   = 127;
+const int SO_XFR_HANDOFF = 128;
+const int SO_XFR_RELEASE = 129;
+const int SO_FT_WINDOW   = 130;
+const int SO_FT_CLOSE    = 131;
+const int SO_FT_FIELD    = 132;
+const int SO_FT_OK       = 133;
+const int SO_FT_CANCEL   = 134;
 const int SO_AUTH_BYPASS  = 96;
 
 const int SO_NOTICE_WINDOW = 84;

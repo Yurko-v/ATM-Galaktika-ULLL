@@ -259,10 +259,7 @@ void Config::Load(HINSTANCE hModule)
         if (zones->kind == Json::Value::Kind::Object)
         {
             if (const Json::Value* v = zones->Find(L"AupUrl"))
-            {
-                std::wstring url = v->AsString();
-                m_AupUrl.assign(url.begin(), url.end());
-            }
+                m_AupUrl = Json::WideToUtf8(v->AsString());
             if (const Json::Value* v = zones->Find(L"AupRefreshMinutes"))
                 m_AupRefreshMin = (int)max(1LL, min(180LL, v->AsInt(m_AupRefreshMin)));
             if (const Json::Value* v = zones->Find(L"ShowNotamAreas"))
@@ -356,16 +353,16 @@ void Config::Load(HINSTANCE hModule)
                     }
                     else
                     {
-                        std::string raw((std::istreambuf_iterator<char>(keyFile)),
+                        std::string keyText((std::istreambuf_iterator<char>(keyFile)),
                             std::istreambuf_iterator<char>());
 
-                        size_t line = raw.find_first_of("\r\n");
+                        size_t line = keyText.find_first_of("\r\n");
                         if (line != std::string::npos)
-                            raw.erase(line);
-                        size_t from = raw.find_first_not_of(" \t");
-                        size_t to = raw.find_last_not_of(" \t");
+                            keyText.erase(line);
+                        size_t from = keyText.find_first_not_of(" \t");
+                        size_t to = keyText.find_last_not_of(" \t");
                         m_SquawkApiKey = (from == std::string::npos)
-                            ? std::string() : raw.substr(from, to - from + 1);
+                            ? std::string() : keyText.substr(from, to - from + 1);
                     }
                 }
             }

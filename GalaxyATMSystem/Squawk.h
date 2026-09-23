@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -54,6 +55,8 @@ public:
     bool IsPending(const std::string& callsign) const;
 
     std::string LastError(const std::string& callsign) const;
+
+    void Forget(const std::set<std::string>& live);
 
 private:
     struct Request

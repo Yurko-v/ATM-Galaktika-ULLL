@@ -207,6 +207,13 @@ std::string SquawkClient::LastError(const std::string& callsign) const
     return it == m_errors.end() ? std::string() : it->second;
 }
 
+void SquawkClient::Forget(const std::set<std::string>& live)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto it = m_errors.begin(); it != m_errors.end(); )
+        it = live.count(it->first) ? std::next(it) : m_errors.erase(it);
+}
+
 void SquawkClient::Run()
 {
     using Clock = std::chrono::steady_clock;

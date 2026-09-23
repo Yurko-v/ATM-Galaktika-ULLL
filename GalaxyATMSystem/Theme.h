@@ -41,6 +41,7 @@ namespace Theme
     const COLORREF DuplicateText = RGB(0xFF, 0xD6, 0x00);
 
     const COLORREF FormularSector = RGB(0x3E, 0x7F, 0xE0);
+    const COLORREF FormularInbound = FormularSector;
 
     const COLORREF FormularMapp = RGB(0xFF, 0x8C, 0x00);
 
@@ -53,8 +54,7 @@ namespace Theme
     const int TrackHistoryDots = 5;
 
     const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);
-    // эшелонатор (CFL picker)
-    const COLORREF CflFrame      = RGB(0x5C, 0x6A, 0x58);
+    const COLORREF CflFrame      = Background;
     const COLORREF CflCellLine   = RGB(0xB4, 0xB4, 0xB4);
     const COLORREF CflHover      = RGB(0x8C, 0x8C, 0x8C);
     const COLORREF CflField      = RGB(0x8A, 0x8F, 0x8A);
@@ -62,18 +62,22 @@ namespace Theme
     const COLORREF CflButton     = RGB(0x8C, 0x94, 0x8C);
     const COLORREF CflThumb      = RGB(0xA0, 0xA0, 0xA0);
 
-    // Speed window
     const COLORREF SpdTitle     = RGB(0x6C, 0xC0, 0xE8);
-    const COLORREF SpdBody      = RGB(0x50, 0x6C, 0x3C);
-    const COLORREF SpdSelected  = RGB(0xB4, 0xB4, 0xB4);
-    const COLORREF SpdTabOn     = RGB(0x9A, 0x9A, 0x9A);
-    const COLORREF SpdButton    = RGB(0x8C, 0x8C, 0x8C);
+    const COLORREF SpdBody      = Background;
+    const COLORREF SpdSelected  = RGB(0xD2, 0xCE, 0xC4);
+    const COLORREF SpdTabOn     = RGB(0x9C, 0x9C, 0x98);
+    const COLORREF SpdButton    = RGB(0x8C, 0x8C, 0x88);
+    const COLORREF SpdLine      = RGB(0xE6, 0xE6, 0xE6);
+    const COLORREF SpdThumb     = RGB(0x9C, 0x9C, 0x9C);
+    const COLORREF XfrSelected  = RGB(0x3A, 0x3A, 0x3A);
+    const COLORREF XfrTitleTop  = RGB(0x9C, 0xD8, 0xF2);
+    const COLORREF XfrOutline   = RGB(0x3C, 0x84, 0xAC);
+    const COLORREF XfrButtonTop    = RGB(0xA8, 0xA8, 0xA4);
+    const COLORREF XfrButtonBottom = RGB(0x7C, 0x7C, 0x78);
 
-    // anything clickable under the mouse
     const COLORREF HoverFill = RGB(0xE8, 0x8E, 0x2C);
     const BYTE     HoverAlpha = 150;
 
-    // target symbol and vector while the РЦ label is hovered
     const COLORREF FormularHoverTarget = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);
 
@@ -112,9 +116,9 @@ namespace Theme
     const double   VectorHeadLength  = 7.0;
 
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcRadius    = 20.0;   // px, target -> first arc
-    const double   WakeArcStep      = 10.0;   // px, first -> second arc (J)
-    const double   WakeArcSweep     = 60.0;   // degrees, centred behind
+    const double   WakeArcRadiusPx    = 20.0;
+    const double   WakeArcStepPx      = 10.0;
+    const double   WakeArcSweepDeg     = 60.0;
 
     const COLORREF SigmetLine   = RGB(0x1C, 0x3C, 0xA0);
     const int      SigmetWidth  = 2;
