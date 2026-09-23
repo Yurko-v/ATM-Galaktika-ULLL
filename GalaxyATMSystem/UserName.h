@@ -23,7 +23,6 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
     const std::string& position, std::wstring& name, bool& hasTable);
 
 bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const std::string& position,
-    const std::wstring& cid, const std::wstring& surname, const std::wstring& firstName,
-    const std::wstring& patronymic, std::wstring& name, std::string& error);
+    const std::wstring& cid, const std::wstring& surname, std::wstring& name, std::string& error);
 
 std::wstring RussianShortName(const std::wstring& fullName);

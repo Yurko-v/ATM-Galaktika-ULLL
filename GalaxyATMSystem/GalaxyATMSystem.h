@@ -97,26 +97,28 @@ public:
 
     bool LiveConnection() const;
 
+    bool ListedOnNetwork() const;
+
     bool AccessSuspended() const;
 
     bool TrainingSession() const;
 
     enum class LoginState { Idle, Sending, Done, Failed };
-    void StartLogin(const std::wstring& cid, const std::wstring& surname,
-        const std::wstring& firstName, const std::wstring& patronymic);
+    void StartLogin(const std::wstring& cid, const std::wstring& surname);
     LoginState MyLogin(std::wstring* message = NULL) const;
     void ResetLogin();
 
     struct SavedLogin
     {
-        std::wstring cid, surname, firstName, patronymic;
-        bool Complete() const { return !cid.empty() && !surname.empty() && !firstName.empty(); }
+        std::wstring cid, surname;
+        bool Complete() const { return !cid.empty() && !surname.empty(); }
     };
     const SavedLogin& SavedIdentity();
     void SaveIdentity(const SavedLogin& id);
 
     bool SessionAuthorized() const { return m_sessionAuthorized; }
     void SetSessionAuthorized(bool on) { m_sessionAuthorized = on; }
+    bool Unlocked() const { return m_sessionAuthorized || TrainingSession(); }
 
     std::string RegisterPageUrl() const;
 
@@ -195,13 +197,21 @@ private:
 
     bool m_fontChecked = false;
 
+    void SendLoginJob();
+    void RetryLoginIfDue();
     BackgroundJob m_login;
     LoginState m_loginState = LoginState::Idle;
+    SavedLogin m_pendingLogin;
+    std::string m_loginPosition;
+    ULONGLONG m_loginFirstTick = 0;
+    ULONGLONG m_loginRetryTick = 0;
     SavedLogin m_savedLogin;
     bool m_savedLoginRead = false;
     std::wstring m_loginMessage;
 
     bool m_sessionAuthorized = false;
+    bool m_wasUnlocked = false;
+    void StartAllFetches();
 
     void StartAupFetch();
     void StartNotamFetch();
@@ -404,6 +414,7 @@ private:
         int result = 0;
         ULONGLONG resultAt = 0;
         bool wasMine = false;
+        int myReply = 0;
     };
     struct FormularState
     {
@@ -419,8 +430,12 @@ private:
         CoordWatch entryCoord;
         CoordWatch exitPoint;
         CoordWatch entryPoint;
+        int agreedXflFt = 0;
+        std::string agreedCopx;
     };
     std::map<std::string, FormularState> m_formulars;
+    int AgreedXfl(EuroScopePlugIn::CFlightPlan& fp);
+    std::string AgreedCopx(EuroScopePlugIn::CFlightPlan& fp);
 
     POINT m_hotCursor = { 0, 0 };
     bool  m_hotValid = false;
@@ -651,7 +666,7 @@ private:
     void ShowNotice(const std::wstring& text);
     void DrawNoticeWindow(HDC hDC);
 
-    enum LoginField { LF_CID, LF_SURNAME, LF_FIRST_NAME, LF_PATRONYMIC, LF_COUNT };
+    enum LoginField { LF_CID, LF_SURNAME, LF_COUNT };
     bool m_loginWindowOpen;
     std::wstring m_loginValues[LF_COUNT];
     std::wstring m_loginProblem;

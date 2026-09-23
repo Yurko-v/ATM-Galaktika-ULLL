@@ -38,6 +38,8 @@ namespace
     const int kDistanceStepsCount = sizeof(kDistanceSteps) / sizeof(kDistanceSteps[0]);
     const int kTimeSteps[] = { 1, 2, 3, 4, 5, 10, 15 };
     const int kTimeStepsCount = sizeof(kTimeSteps) / sizeof(kTimeSteps[0]);
+
+    const int kAtisLinePx = 18;
     const int kFontSizeSteps[] = { 8, 9, 10, 11, 12, 13, 14, 16 };
     const int kFontSizeStepsCount = sizeof(kFontSizeSteps) / sizeof(kFontSizeSteps[0]);
 
@@ -571,6 +573,7 @@ void __declspec(dllexport) EuroScopePlugInExit(void)
     delete g_plugin;
     g_plugin = NULL;
 
+    Theme::SharedCanvas().Release();
     if (g_gdiplusToken != 0)
     {
         Gdiplus::GdiplusShutdown(g_gdiplusToken);
@@ -595,11 +598,11 @@ static void LogConfigLoad(const Config& config, const char* when)
 CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     EuroScopePlugIn::COMPATIBILITY_CODE,
     "Galaxy ATM System",
-    "0.2.0",
-    "Yuriy Velbovets",
-    "ULLL controller control panel")
+    "0.10.0",
+    "ULLL Team",
+    "©2024-2026")
 {
-    Log::Info("plugin", "Galaxy ATM System 0.2.0 loaded");
+    Log::Info("plugin", "Galaxy ATM System 0.10.0 loaded");
     m_config.Load(g_hModule);
     LogConfigLoad(m_config, "load");
 
@@ -621,12 +624,16 @@ CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     m_sigmets = std::make_shared<const std::vector<Sigmet>>();
     m_aup = std::make_shared<const std::vector<ZoneBooking>>();
 
+    ConfigureSquawk();
+}
+
+void CGalaxyATMSystemPlugin::StartAllFetches()
+{
     StartMetarFetch();
     StartSigmetFetch();
     StartAtisFetch();
     StartAupFetch();
     StartNotamFetch();
-    ConfigureSquawk();
 }
 
 CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
@@ -684,11 +691,8 @@ void CGalaxyATMSystemPlugin::ReloadConfig()
     m_qnhHpa = m_config.QnhHpa();
     m_gotLiveMetar = false;
 
-    StartMetarFetch();
-    StartSigmetFetch();
-    StartAtisFetch();
-    StartAupFetch();
-    StartNotamFetch();
+    if (Unlocked())
+        StartAllFetches();
     ConfigureSquawk();
 }
 
@@ -842,6 +846,14 @@ bool CGalaxyATMSystemPlugin::LiveConnection() const
     return (ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !MyPosition().empty();
 }
 
+bool CGalaxyATMSystemPlugin::ListedOnNetwork() const
+{
+    const std::string position = MyPosition();
+    std::lock_guard<std::mutex> lock(m_identityMutex);
+    return !position.empty() && !m_identity.Empty()
+        && _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0;
+}
+
 bool CGalaxyATMSystemPlugin::AccessSuspended() const
 {
     std::lock_guard<std::mutex> lock(m_identityMutex);
@@ -859,12 +871,22 @@ bool CGalaxyATMSystemPlugin::TrainingSession() const
 
 namespace
 {
+    const int       kFeedPollSeconds  = 15;
+    const int       kNamePollSeconds  = 60;
+    const ULONGLONG kLoginRetryMs     = kFeedPollSeconds * 1000;
+    const ULONGLONG kLoginWaitMs      = 3 * 60 * 1000;
+
+    bool NotListedYet(const std::string& error)
+    {
+        return error == "not_online" || error == "network_stale" || error == "network";
+    }
+
     std::wstring LoginMessage(const std::string& error)
     {
         if (error == "wrong_cid")
             return Tr(L"CID не тот, под которым вы в сети VATSIM");
         if (error == "wrong_credentials")
-            return Tr(L"Фамилия, имя или отчество не те, что при регистрации");
+            return Tr(L"Фамилия не та, что при регистрации");
         if (error == "not_registered")
             return Tr(L"Вы не зарегистрированы в системе КСА");
         if (error == "rate_limited")
@@ -886,42 +908,92 @@ namespace
     }
 }
 
-void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& cid, const std::wstring& surname,
-    const std::wstring& firstName, const std::wstring& patronymic)
+void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& cid, const std::wstring& surname)
 {
     const std::string position = MyPosition();
     {
         std::lock_guard<std::mutex> lock(m_identityMutex);
-        if (m_loginState == LoginState::Sending || m_login.Busy())
+        const bool waitingForFeed = m_loginState == LoginState::Sending && m_loginRetryTick != 0;
+        if ((m_loginState == LoginState::Sending && !waitingForFeed) || m_login.Busy())
             return;
         m_loginState = LoginState::Sending;
         m_loginMessage.clear();
+        m_pendingLogin.cid = cid;
+        m_pendingLogin.surname = surname;
+        m_loginPosition = position;
+        m_loginFirstTick = GetTickCount64();
+        m_loginRetryTick = 0;
+    }
+    SendLoginJob();
+}
+
+void CGalaxyATMSystemPlugin::SendLoginJob()
+{
+    SavedLogin login;
+    std::string position;
+    {
+        std::lock_guard<std::mutex> lock(m_identityMutex);
+        login = m_pendingLogin;
+        position = m_loginPosition;
     }
 
     std::string url = m_config.SquawkServerUrl();
     std::string key = m_config.SquawkApiKey();
-    m_login.Start([this, cid, surname, firstName, patronymic, position, url, key]()
+    m_login.Start([this, login, position, url, key]()
         {
             std::wstring name;
             std::string error;
-            const bool ok = SubmitLogin(url, key, position, cid, surname, firstName, patronymic, name, error);
+            const bool ok = SubmitLogin(url, key, position, login.cid, login.surname, name, error);
 
             std::lock_guard<std::mutex> lock(m_identityMutex);
+            const ULONGLONG now = GetTickCount64();
             if (ok)
             {
                 if (!name.empty() && _stricmp(m_identity.callsign.c_str(), position.c_str()) == 0)
                     m_identity.registeredName = name;
                 m_accessSuspended = false;
                 m_loginState = LoginState::Done;
-                Log::Info("auth", "LOGIN " + position + ": let in by the user base as \"" + Log::Utf8(name) + "\"");
+                m_loginRetryTick = 0;
+                Log::Info("auth", "LOGIN " + position + ": let in by the user base as \"" + Log::Utf8(name)
+                    + "\" after " + std::to_string((now - m_loginFirstTick) / 1000) + " s");
+            }
+            else if (NotListedYet(error) && now - m_loginFirstTick + kLoginRetryMs < kLoginWaitMs)
+            {
+                m_loginRetryTick = now + kLoginRetryMs;
+                m_loginMessage = Tr(L"Ждём, пока сеть VATSIM покажет вашу позицию...");
+                Log::Info("auth", "LOGIN " + position + ": " + error + ", asking again in "
+                    + std::to_string(kFeedPollSeconds) + " s");
             }
             else
             {
                 m_loginState = LoginState::Failed;
-                m_loginMessage = LoginMessage(error);
+                m_loginRetryTick = 0;
+                m_loginMessage = NotListedYet(error) ? Tr(L"Сеть VATSIM так и не показала вашу позицию")
+                                                     : LoginMessage(error);
                 Log::Error("auth", "LOGIN " + position + " refused: " + error);
             }
         });
+}
+
+void CGalaxyATMSystemPlugin::RetryLoginIfDue()
+{
+    const bool live = LiveConnection();
+    const std::string position = MyPosition();
+    {
+        std::lock_guard<std::mutex> lock(m_identityMutex);
+        if (m_loginState != LoginState::Sending || m_loginRetryTick == 0 || m_login.Busy()
+            || GetTickCount64() < m_loginRetryTick)
+            return;
+        m_loginRetryTick = 0;
+        if (!live || _stricmp(position.c_str(), m_loginPosition.c_str()) != 0)
+        {
+            m_loginState = LoginState::Failed;
+            m_loginMessage = Tr(L"Нет подключения к VATSIM");
+            Log::Warn("auth", "LOGIN " + m_loginPosition + ": gave up waiting - the connection is gone or the position changed");
+            return;
+        }
+    }
+    SendLoginJob();
 }
 
 CGalaxyATMSystemPlugin::LoginState CGalaxyATMSystemPlugin::MyLogin(std::wstring* message) const
@@ -1010,14 +1082,11 @@ const CGalaxyATMSystemPlugin::SavedLogin& CGalaxyATMSystemPlugin::SavedIdentity(
                 else
                     parts.back() += *p;
             }
-            parts.resize(4);
+            parts.resize(2);
             m_savedLogin.cid = DecodeSetting(parts[0]);
             m_savedLogin.surname = DecodeSetting(parts[1]);
-            m_savedLogin.firstName = DecodeSetting(parts[2]);
-            m_savedLogin.patronymic = DecodeSetting(parts[3]);
             Log::Info("auth", "saved login read from the settings: CID " + Log::Utf8(m_savedLogin.cid)
-                + ", \"" + Log::Utf8(m_savedLogin.surname + L" " + m_savedLogin.firstName
-                    + L" " + m_savedLogin.patronymic) + "\"");
+                + ", \"" + Log::Utf8(m_savedLogin.surname) + "\"");
         }
     }
     return m_savedLogin;
@@ -1027,9 +1096,8 @@ void CGalaxyATMSystemPlugin::SaveIdentity(const SavedLogin& id)
 {
     m_savedLoginRead = true;
     m_savedLogin = id;
-    SaveDataToSettings(kLoginSetting, "вход в КСА: CID и ФИО, введённые один раз",
-        (EncodeSetting(id.cid) + "|" + EncodeSetting(id.surname) + "|"
-            + EncodeSetting(id.firstName) + "|" + EncodeSetting(id.patronymic)).c_str());
+    SaveDataToSettings(kLoginSetting, "вход в КСА: CID и фамилия, введённые один раз",
+        (EncodeSetting(id.cid) + "|" + EncodeSetting(id.surname)).c_str());
     Log::Info("auth", "login saved to the settings - it will not be asked for again");
 }
 
@@ -1153,14 +1221,28 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
         }
     }
 
-    m_squawk.SetPosition(SquawkReady(false) ? MyPosition() : "");
+    const bool unlocked = Unlocked();
+    m_squawk.SetPosition(unlocked && SquawkReady(false) ? MyPosition() : "");
 
     int ct = GetConnectionType();
     std::string position = MyPosition();
     if ((ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !position.empty())
     {
-        if (position != m_identityAskedFor || Counter % 60 == 0)
+        const int period = ListedOnNetwork() ? kNamePollSeconds : kFeedPollSeconds;
+        if (position != m_identityAskedFor || Counter % period == 0)
             StartIdentityFetch(position);
+    }
+    RetryLoginIfDue();
+
+    const bool justUnlocked = unlocked && !m_wasUnlocked;
+    m_wasUnlocked = unlocked;
+    if (!unlocked)
+        return;
+    if (justUnlocked)
+    {
+        Log::Info("auth", "logged in - loading METAR, SIGMET, ATIS, AUP and NOTAM");
+        m_gotLiveMetar = false;
+        StartAllFetches();
     }
 
     ApplySquawkAnswers();
@@ -1364,6 +1446,8 @@ void CGalaxyATMSystemPlugin::OnGetTagItem(
 {
     *pColorCode = EuroScopePlugIn::TAG_COLOR_DEFAULT;
     sItemString[0] = '\0';
+    if (!Unlocked())
+        return;
 
     if (pFontSize != NULL && *pFontSize > 0.0
         && ItemCode != TAG_ITEM_SQUAWK && ItemCode != TAG_ITEM_SQUAWK_SET)
@@ -1789,6 +1873,8 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
 
 void CGalaxyATMSystemPlugin::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)
 {
+    if (!Unlocked())
+        return;
     HandleSquawkFunction(FunctionId, sItemString, Area, "plugin");
 }
 
@@ -1869,7 +1955,7 @@ void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPla
             return;
     }
 
-    if (!IsSquawkCode(code) || !SquawkReady(false))
+    if (!IsSquawkCode(code) || !Unlocked() || !SquawkReady(false))
         return;
 
     auto held = m_squawk.Assignments();
@@ -2029,7 +2115,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
 CGalaxyATMSystemRadarScreen::~CGalaxyATMSystemRadarScreen()
 {
     g_screens.erase(this);
-    m_cflOpen = m_spdOpen = m_xfrOpen = m_ftOpen = false;
+    m_cflOpen = m_spdOpen = m_xfrOpen = m_ftOpen = m_atisOpen = false;
     m_ftEntry.Close();
     UpdateWheelHook();
     m_rcEntry.Close();
@@ -2366,6 +2452,19 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
     SyncAuth();
 
+    if (!Authorized())
+    {
+        m_rulerPressPending = false;
+        m_rulerArmed = false;
+        m_rulerPlacing = false;
+        m_zoneInfoIndex = -1;
+        m_sigmetInfoIndex = -1;
+        m_hotRects.clear();
+    }
+
+    if (Phase != REFRESH_PHASE_AFTER_LISTS && !Authorized())
+        return;
+
     UpdateZoneActivity();
 
     m_sigmets = Plugin()->Sigmets();
@@ -2391,17 +2490,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
         if (m_areaShiftDown || m_zoneInfoIndex >= 0)
             RegisterZoneObjects();
         RegisterSigmetObjects();
-
-        if (!Authorized())
-        {
-            m_rulerPressPending = false;
-            m_rulerArmed = false;
-            m_rulerPlacing = false;
-            DrawWakeArcs(hDC);
-            DrawTargetSymbols(hDC);
-            DrawFormulars(hDC, true);
-            return;
-        }
 
         if (m_rulerPressPending)
         {
@@ -2515,8 +2603,6 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
             CGalaxyATMSystemPlugin::SavedLogin id;
             id.cid = m_loginValues[LF_CID];
             id.surname = m_loginValues[LF_SURNAME];
-            id.firstName = m_loginValues[LF_FIRST_NAME];
-            id.patronymic = m_loginValues[LF_PATRONYMIC];
             Plugin()->SaveIdentity(id);
 
             CloseLoginWindow();
@@ -2566,17 +2652,28 @@ void CGalaxyATMSystemRadarScreen::OnRefresh(HDC hDC, int Phase)
 
 namespace
 {
-    const std::vector<int>& CflLevels()
+    const int kCflClearedApproach = 1;
+    const int kCflVisualApproach = 2;
+
+    bool IsApproachClearance(int value)
     {
-        static std::vector<int> levels;
+        return value == kCflClearedApproach || value == kCflVisualApproach;
+    }
+
+    const std::vector<int>& CflLevels(bool withApproaches)
+    {
+        static std::vector<int> levels, withApp;
         if (levels.empty())
         {
             for (int fl = 510; fl > 410; fl -= 20)
                 levels.push_back(fl);
             for (int fl = 410; fl >= 10; fl -= 10)
                 levels.push_back(fl);
+            withApp = levels;
+            withApp.push_back(kCflClearedApproach);
+            withApp.push_back(kCflVisualApproach);
         }
-        return levels;
+        return withApproaches ? withApp : levels;
     }
     const int kCflRows = 9;
 
@@ -2684,13 +2781,35 @@ namespace
 
     const ULONGLONG kCoordResultMs = 5000;
 
-    std::string ExitPointFor(CFlightPlan& fp)
+    bool CoordinationHolds(int state)
     {
+        return state == COORDINATION_STATE_ACCEPTED || state == COORDINATION_STATE_MANUAL_ACCEPTED;
+    }
+
+    std::string NextRoutePoint(CFlightPlan& fp)
+    {
+        CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
+        const int count = route.GetPointsNumber();
+        if (count <= 0)
+            return "";
+        int index = max(route.GetPointsAssignedIndex(), route.GetPointsCalculatedIndex() + 1);
+        index = max(0, min(count - 1, index));
+        const char* name = route.GetPointName(index);
+        return name != NULL ? name : "";
+    }
+
+    std::string ExitPointFor(CFlightPlan& fp, const std::string& agreed = "", bool firExit = false)
+    {
+        if (!agreed.empty())
+            return agreed;
         const char* copx = fp.GetExitCoordinationPointName();
-        if (fp.GetExitCoordinationNameState() == COORDINATION_STATE_NONE || copx == NULL || *copx == '\0')
+        if (!CoordinationHolds(fp.GetExitCoordinationNameState()) || copx == NULL || *copx == '\0')
         {
+            const char* fir = firExit ? fp.GetNextFirCopxPointName() : NULL;
             const char* next = fp.GetNextCopxPointName();
-            if (next != NULL && *next != '\0')
+            if (fir != NULL && *fir != '\0')
+                copx = fir;
+            else if (next != NULL && *next != '\0')
                 copx = next;
         }
         return copx != NULL ? copx : "";
@@ -2702,14 +2821,16 @@ namespace
         return !fp.GetTrackingControllerIsMe() && tracking != NULL && *tracking != '\0';
     }
 
-    int XflOf(CFlightPlan& fp)
+    int XflOf(CFlightPlan& fp, int agreedFt = 0)
     {
-        if (TrackedByOther(fp) && fp.GetEntryCoordinationAltitudeState() != COORDINATION_STATE_NONE
+        if (agreedFt > 0)
+            return agreedFt;
+        if (TrackedByOther(fp) && CoordinationHolds(fp.GetEntryCoordinationAltitudeState())
             && fp.GetEntryCoordinationAltitude() > 0)
             return fp.GetEntryCoordinationAltitude();
-        if (fp.GetExitCoordinationAltitudeState() != COORDINATION_STATE_NONE && fp.GetExitCoordinationAltitude() > 0)
+        if (CoordinationHolds(fp.GetExitCoordinationAltitudeState()) && fp.GetExitCoordinationAltitude() > 0)
             return fp.GetExitCoordinationAltitude();
-        if (!fp.GetTrackingControllerIsMe() && fp.GetEntryCoordinationAltitudeState() != COORDINATION_STATE_NONE
+        if (!fp.GetTrackingControllerIsMe() && CoordinationHolds(fp.GetEntryCoordinationAltitudeState())
             && fp.GetEntryCoordinationAltitude() > 0)
             return fp.GetEntryCoordinationAltitude();
         return fp.GetFinalAltitude();
@@ -3555,7 +3676,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             const ULONGLONG now = GetTickCount64();
             const int exitState = fp.GetExitCoordinationAltitudeState();
             const int entryState = fp.GetEntryCoordinationAltitudeState();
-            auto track = [now](CoordWatch& w, int s, int fl, const char* point = NULL)
+            auto track = [now, &st, &callsign](CoordWatch& w, int s, int fl, const char* point = NULL)
             {
                 if ((s == COORDINATION_STATE_REQUESTED_BY_ME || s == COORDINATION_STATE_REQUESTED_BY_OTHER)
                     && point != NULL)
@@ -3564,10 +3685,30 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     && (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME || w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
                     && s != COORDINATION_STATE_REQUESTED_BY_ME && s != COORDINATION_STATE_REQUESTED_BY_OTHER)
                 {
-                    w.result = s;
+                    const std::string nowPoint = point != NULL ? point : "";
+                    const bool valueKept = point != NULL ? _stricmp(nowPoint.c_str(), w.pointName.c_str()) == 0
+                                                         : fl == w.levelFt;
+                    if (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.myReply != 0)
+                        w.result = w.myReply;
+                    else if (s == COORDINATION_STATE_ACCEPTED || s == COORDINATION_STATE_MANUAL_ACCEPTED
+                        || s == COORDINATION_STATE_REFUSED)
+                        w.result = s;
+                    else
+                        w.result = valueKept ? COORDINATION_STATE_ACCEPTED : COORDINATION_STATE_REFUSED;
                     w.resultAt = now;
                     w.wasMine = (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME);
+                    const bool accepted = w.result != COORDINATION_STATE_REFUSED;
+                    if (accepted && point != NULL && !w.pointName.empty())
+                        st.agreedCopx = w.pointName;
+                    else if (accepted && point == NULL && w.levelFt > 0)
+                        st.agreedXflFt = w.levelFt;
+                    Log::Info("formular", callsign + ": coordination " + (point != NULL ? "DCT " + w.pointName
+                        : "level " + std::to_string(w.levelFt)) + " state " + std::to_string(w.lastState)
+                        + " -> " + std::to_string(s) + ", now " + (point != NULL ? nowPoint : std::to_string(fl))
+                        + (accepted ? ", agreed" : ", refused"));
                 }
+                if (s != COORDINATION_STATE_REQUESTED_BY_OTHER)
+                    w.myReply = 0;
                 w.lastState = s;
                 if (s == COORDINATION_STATE_REQUESTED_BY_ME || s == COORDINATION_STATE_REQUESTED_BY_OTHER)
                     w.levelFt = fl;
@@ -3588,6 +3729,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
             auto show = [&](const CoordWatch& w, bool exit, bool point)
             {
+                if (!point && w.levelFt <= 0)
+                    return false;
                 COLORREF ink;
                 bool mine;
                 if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME || w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
@@ -3597,8 +3740,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 }
                 else if (w.result != 0 && now - w.resultAt < kCoordResultMs)
                 {
-                    const bool accepted = w.result == COORDINATION_STATE_ACCEPTED
-                        || w.result == COORDINATION_STATE_MANUAL_ACCEPTED;
+                    const bool accepted = w.result != COORDINATION_STATE_REFUSED;
                     ink = accepted ? Theme::FormularGreen : Theme::DistressText;
                     mine = w.wasMine;
                 }
@@ -3622,9 +3764,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 coordLines.push_back(coordLine);
                 return true;
             };
-            if (!show(st.exitCoord, true, false))
-                show(st.entryCoord, false, false);
-            if (!show(st.exitPoint, true, true))
+            const bool levelShown = show(st.exitCoord, true, false) || show(st.entryCoord, false, false);
+            if (!levelShown && !show(st.exitPoint, true, true))
                 show(st.entryPoint, false, true);
         }
 
@@ -3634,13 +3775,13 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             CFlightPlanData fpd = fp.GetFlightPlanData();
 
             std::vector<FormularRun> exitLine;
-            int xfl = XflOf(fp);
+            int xfl = AgreedXfl(fp);
             const bool pickingXfl = m_cflOpen && m_cflPicksExitLevel && m_cflCallsign == callsign;
             exitLine.push_back({ xfl > 0 ? Widen(FormatAltitudeUnit(xfl, altUnit).c_str())
                                          : std::wstring(L"XFL"),
                 pickingXfl ? Theme::Text : base, &kFnXfl,
                 pickingXfl ? Theme::FormularHoverTarget : CLR_INVALID });
-            const std::string copx = ExitPointFor(fp);
+            const std::string copx = AgreedCopx(fp);
             exitLine.push_back({ !copx.empty() ? Widen(copx.c_str()) : std::wstring(L"COPX"),
                 base, &kFnCopx });
             extra.push_back(exitLine);
@@ -3732,11 +3873,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 if (app)
                 {
                     std::vector<FormularRun> exitLine;
-                    int xfl = XflOf(fp);
+                    int xfl = AgreedXfl(fp);
                     exitLine.push_back({ xfl > 0 ? Widen(FormatAltitudeUnit(xfl, altUnit).c_str())
                                                  : std::wstring(L"XFL"), base, &kFnXfl });
-                    const char* copx = fp.GetExitCoordinationPointName();
-                    exitLine.push_back({ (copx != NULL && *copx != '\0') ? Widen(copx) : std::wstring(L"COPX"),
+                    const std::string copx = AgreedCopx(fp);
+                    exitLine.push_back({ !copx.empty() ? Widen(copx.c_str()) : std::wstring(L"COPX"),
                         base, &kFnCopx });
                     int ias = 0, machX100 = 0;
                     if (CalculatedIasMach(rt.GetGS(), pos.GetFlightLevel(), ias, machX100))
@@ -4229,12 +4370,12 @@ void CGalaxyATMSystemRadarScreen::OpenCflPicker(const char* callsign, bool xfl)
     if (!fp.IsValid())
         return;
 
-    int fl = (xfl ? XflOf(fp) : fp.GetControllerAssignedData().GetClearedAltitude()) / 100;
+    int fl = (xfl ? AgreedXfl(fp) : fp.GetControllerAssignedData().GetClearedAltitude()) / 100;
     if (xfl && fl <= 2)
         fl = fp.GetControllerAssignedData().GetClearedAltitude() / 100;
     if (fl <= 2)
         fl = fp.GetCorrelatedRadarTarget().GetPosition().GetFlightLevel() / 100;
-    const std::vector<int>& levels = CflLevels();
+    const std::vector<int>& levels = CflLevels(!xfl);
     size_t best = 0;
     for (size_t i = 0; i < levels.size(); i++)
         if (abs(levels[i] - fl) < abs(levels[best] - fl))
@@ -4271,9 +4412,22 @@ void CGalaxyATMSystemRadarScreen::CloseCflPicker()
 
 void CGalaxyATMSystemRadarScreen::ScrollCfl(int rows)
 {
-    const int total = (int)((CflLevels().size() + 1) / 2);
+    const int total = (int)((CflLevels(!m_cflPicksExitLevel).size() + 1) / 2);
     m_cflTopRow = max(0, min(total - kCflRows, m_cflTopRow + rows));
     RequestRefresh();
+}
+
+int CGalaxyATMSystemRadarScreen::AgreedXfl(CFlightPlan& fp)
+{
+    auto it = m_formulars.find(fp.GetCallsign());
+    return XflOf(fp, it != m_formulars.end() ? it->second.agreedXflFt : 0);
+}
+
+std::string CGalaxyATMSystemRadarScreen::AgreedCopx(CFlightPlan& fp)
+{
+    auto it = m_formulars.find(fp.GetCallsign());
+    return ExitPointFor(fp, it != m_formulars.end() ? it->second.agreedCopx : std::string(),
+        CurrentFormularKind() == FormularKind::Ctr);
 }
 
 void CGalaxyATMSystemRadarScreen::ApplyCfl(int fl)
@@ -4285,10 +4439,13 @@ void CGalaxyATMSystemRadarScreen::ApplyCfl(int fl)
         const std::string partner = CoordPartner(GetPlugIn(), fp);
         const char* next = partner.c_str();
         std::string copx;
-        if (entry && fp.GetEntryCoordinationPointName() != NULL)
+        if (entry && CoordinationHolds(fp.GetEntryCoordinationPointState())
+            && fp.GetEntryCoordinationPointName() != NULL)
             copx = fp.GetEntryCoordinationPointName();
         if (copx.empty())
-            copx = ExitPointFor(fp);
+            copx = AgreedCopx(fp);
+        if (copx.empty())
+            copx = NextRoutePoint(fp);
         if (next == NULL || *next == '\0')
             Log::Warn("formular", m_cflCallsign + ": no next sector to coordinate XFL with");
         else if (copx.empty())
@@ -4299,7 +4456,7 @@ void CGalaxyATMSystemRadarScreen::ApplyCfl(int fl)
     }
     else if (fp.IsValid() && fl > 0)
     {
-        if (!fp.GetControllerAssignedData().SetClearedAltitude(fl * 100))
+        if (!fp.GetControllerAssignedData().SetClearedAltitude(IsApproachClearance(fl) ? fl : fl * 100))
             Log::Warn("formular", m_cflCallsign + ": EuroScope refused CFL " + std::to_string(fl));
     }
     CloseCflPicker();
@@ -4316,7 +4473,7 @@ void CGalaxyATMSystemRadarScreen::ApplyCflText(const std::wstring& text)
             digits++;
         }
     }
-    if (digits >= 1 && digits <= 3)
+    if (digits >= 1 && digits <= 3 && !IsApproachClearance(fl))
         ApplyCfl(fl);
     else
         CloseCflPicker();
@@ -4399,7 +4556,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
     GetTextMetricsW(hDC, &tm);
     const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
     SIZE digits = { 0, 0 };
-    GetTextExtentPoint32W(hDC, L"000", 3, &digits);
+    GetTextExtentPoint32W(hDC, L"VAPP", 4, &digits);
     SIZE okSize = { 0, 0 };
     GetTextExtentPoint32W(hDC, L"Ok", 2, &okSize);
 
@@ -4430,7 +4587,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
     HBRUSH black = CreateSolidBrush(RGB(0, 0, 0));
     FillRect(hDC, &list, black);
 
-    const std::vector<int>& levels = CflLevels();
+    const std::vector<int>& levels = CflLevels(!m_cflPicksExitLevel);
     HBRUSH hoverFill = CreateSolidBrush(Theme::HoverFill);
     HPEN cellPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
     m_cflCells.clear();
@@ -4453,7 +4610,12 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
             Rectangle(hDC, cell.left, cell.top, cell.right + (col == 0 ? 1 : 0), cell.bottom + 1);
 
             wchar_t text[8];
-            swprintf_s(text, L"%03d", levels[idx]);
+            if (levels[idx] == kCflClearedApproach)
+                wcscpy_s(text, L"CA");
+            else if (levels[idx] == kCflVisualApproach)
+                wcscpy_s(text, L"VAPP");
+            else
+                swprintf_s(text, L"%03d", levels[idx]);
             RECT textR = { cell.left + lineH / 2, cell.top, cell.right, cell.bottom };
             SetTextColor(hDC, Theme::Text);
             DrawTextW(hDC, text, -1, &textR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -4514,7 +4676,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
     HBRUSH fieldFill = CreateSolidBrush(Theme::CflField);
     FillRect(hDC, &field, fieldFill);
     DeleteObject(fieldFill);
-    int cfl = (m_cflPicksExitLevel ? XflOf(fp) : fp.GetControllerAssignedData().GetClearedAltitude()) / 100;
+    int cfl = (m_cflPicksExitLevel ? AgreedXfl(fp) : fp.GetControllerAssignedData().GetClearedAltitude()) / 100;
     if (cfl > 0)
     {
         wchar_t text[8];
@@ -4544,7 +4706,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
 
 void CGalaxyATMSystemRadarScreen::UpdateWheelHook()
 {
-    const bool want = m_cflOpen || m_spdOpen || m_xfrOpen;
+    const bool want = m_cflOpen || m_spdOpen || m_xfrOpen || m_atisOpen;
     if (want)
     {
         g_wheelScreen = this;
@@ -4565,7 +4727,7 @@ void CGalaxyATMSystemRadarScreen::UpdateWheelHook()
 bool CGalaxyATMSystemRadarScreen::OnMouseWheel(int delta)
 {
     POINT cursor;
-    if (delta == 0 || !CursorRadarPoint(cursor))
+    if (delta == 0 || !Authorized() || !CursorRadarPoint(cursor))
         return false;
     const int rows = delta > 0 ? -max(1, delta / WHEEL_DELTA) : max(1, -delta / WHEEL_DELTA);
     if (m_cflOpen && PtInRect(&m_cflArea, cursor))
@@ -4581,6 +4743,12 @@ bool CGalaxyATMSystemRadarScreen::OnMouseWheel(int delta)
     if (m_xfrOpen && PtInRect(&m_xfrArea, cursor))
     {
         ScrollTransfer(rows);
+        return true;
+    }
+    if (m_atisOpen && PtInRect(&m_atisArea, cursor))
+    {
+        m_atisScrollPx = max(0, min(m_atisScrollMax, m_atisScrollPx + rows * kAtisLinePx));
+        RequestRefresh();
         return true;
     }
     return false;
@@ -5044,7 +5212,7 @@ void CGalaxyATMSystemRadarScreen::OpenCopxWindow(const char* callsign)
         return;
 
     m_xfrPositions.clear();
-    const std::string current = ExitPointFor(fp);
+    const std::string current = AgreedCopx(fp);
     int selected = -1;
     CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
     for (int i = 0; i < route.GetPointsNumber(); i++)
@@ -5689,10 +5857,24 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
 
     if (hit != NULL && fp.IsValid() && hit->fn == &kFnCoordReply)
     {
+        int reply = 0;
         if (button == BUTTON_LEFT)
+        {
             fp.AcceptCoordination();
+            reply = COORDINATION_STATE_ACCEPTED;
+        }
         else if (button == BUTTON_RIGHT)
+        {
             fp.RefuseCoordination();
+            reply = COORDINATION_STATE_REFUSED;
+        }
+        if (reply != 0)
+        {
+            FormularState& st = m_formulars[sCallsign];
+            for (CoordWatch* w : { &st.exitCoord, &st.entryCoord, &st.exitPoint, &st.entryPoint })
+                if (w->lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
+                    w->myReply = reply;
+        }
         RequestRefresh();
         return;
     }
@@ -6494,7 +6676,8 @@ void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
     RECT bgArea = m_panelArea;
     if (!m_collapsed && Authorized() && bgArea.bottom < ra.bottom)
         bgArea.bottom = ra.bottom;
-    Theme::FlatFill(hDC, bgArea, Theme::Background);
+    const int bgCorners = bgArea.bottom < ra.bottom ? Theme::CornerBottomLeft : Theme::CornersNone;
+    Theme::SmoothBox(hDC, bgArea, &Theme::Background, NULL, Theme::PanelCornerRadius, 1, bgCorners);
 
     int y = DrawHeader(hDC, m_panelArea.top);
     if (!m_collapsed && !Authorized())
@@ -6590,7 +6773,7 @@ void CGalaxyATMSystemRadarScreen::AutoLogin()
     }
 
     if (state != CGalaxyATMSystemPlugin::LoginState::Idle
-        || Plugin()->AccessSuspended() || !Plugin()->LiveConnection()
+        || Plugin()->AccessSuspended() || !Plugin()->LiveConnection() || !Plugin()->ListedOnNetwork()
         || Plugin()->GetConfig().SquawkServerUrl().empty())
         return;
 
@@ -6600,7 +6783,7 @@ void CGalaxyATMSystemRadarScreen::AutoLogin()
 
     m_autoLoginTried = true;
     Log::Info("auth", "LOGIN sent with the saved CID and name, without asking");
-    Plugin()->StartLogin(saved.cid, saved.surname, saved.firstName, saved.patronymic);
+    Plugin()->StartLogin(saved.cid, saved.surname);
 }
 
 void CGalaxyATMSystemRadarScreen::TickAuth()
@@ -6660,6 +6843,22 @@ void CGalaxyATMSystemRadarScreen::ShowNotice(const std::wstring& text)
 
 namespace
 {
+    void DrawScrollArrow(HDC hDC, const RECT& r, bool up, COLORREF ink)
+    {
+        const Gdiplus::REAL cx = (r.left + r.right) / 2.0f - 0.5f;
+        const Gdiplus::REAL cy = (r.top + r.bottom) / 2.0f - 0.5f;
+        const Gdiplus::REAL half = 4.0f, rise = up ? -2.5f : 2.5f;
+        const Gdiplus::PointF tip[] = {
+            Gdiplus::PointF(cx - half, cy - rise),
+            Gdiplus::PointF(cx + half, cy - rise),
+            Gdiplus::PointF(cx, cy + rise),
+        };
+        Gdiplus::Graphics g(hDC);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::SolidBrush brush(Theme::GdiColor(ink));
+        g.FillPolygon(&brush, tip, 3);
+    }
+
     void DrawCloseCross(HDC hDC, const RECT& close, COLORREF ink)
     {
         const int cx = (close.left + close.right) / 2, cy = (close.top + close.bottom) / 2;
@@ -6755,16 +6954,12 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    HRGN rgn = Theme::WinRegion(win);
-    SelectClipRgn(hDC, rgn);
-    Theme::FlatFill(hDC, win, Theme::MenuBarFill);
+    Theme::WinFill(hDC, win, Theme::MenuBarFill);
     RECT title = { win.left, win.top, win.right, win.top + kTitleH };
     Theme::DrawLine(hDC, title, Tr(L"Вход в систему КСА"), m_fonts.WinTitle, Theme::MenuText,
         DT_CENTER | DT_VCENTER);
     RECT body = { win.left + 5, title.bottom, win.right - 5, win.bottom - 5 };
-    Theme::OutlineBox(hDC, body, Theme::InsetFill, Theme::Border);
-    SelectClipRgn(hDC, NULL);
-    DeleteObject(rgn);
+    Theme::SmoothBox(hDC, body, &Theme::InsetFill, &Theme::Border, Theme::WinCornerRadius - 2);
     Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
 
     RECT close = { win.right - 26, title.top + 4, win.right - 8, title.bottom - 4 };
@@ -6785,8 +6980,8 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
         m_fonts.Body, Theme::Text, DT_LEFT | DT_VCENTER);
     y += kLine + kRowGap;
 
-    static const wchar_t* const kLabels[LF_COUNT] = { L"CID", L"Фамилия", L"Имя", L"Отчество" };
-    static const wchar_t* const kHints[LF_COUNT]  = { L"1234567", L"Иванов", L"Иван", L"если есть" };
+    static const wchar_t* const kLabels[LF_COUNT] = { L"CID", L"Фамилия" };
+    static const wchar_t* const kHints[LF_COUNT]  = { L"1234567", L"Иванов" };
     for (int i = 0; i < LF_COUNT; i++)
     {
         RECT label = { left, y, left + kLabelW, y + kFieldH };
@@ -6816,7 +7011,7 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     COLORREF statusColor = Theme::TextDim;
     if (sending)
     {
-        status = Tr(L"Проверка...");
+        status = message.empty() ? Tr(L"Проверка...") : message;
         statusColor = Theme::DuplicateText;
     }
     else if (!m_loginProblem.empty())
@@ -6824,10 +7019,20 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
         status = m_loginProblem;
         statusColor = Theme::DistressText;
     }
+    else if (!Plugin()->ListedOnNetwork())
+    {
+        status = Tr(L"Ждём данных от VATSIM...");
+        statusColor = Theme::DuplicateText;
+    }
     else if (state == CGalaxyATMSystemPlugin::LoginState::Failed)
     {
         status = message;
         statusColor = Theme::DistressText;
+    }
+    else
+    {
+        status = Tr(L"Данные получены, пожалуйста, авторизуйтесь");
+        statusColor = Theme::ReadyText;
     }
     RECT statusR = { left, y, right, y + kLine };
     Theme::DrawLine(hDC, statusR, status, m_fonts.Small, statusColor, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
@@ -6840,9 +7045,22 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
         for (const wchar_t* scheme : { L"http://", L"https://" })
             if (shown.compare(0, wcslen(scheme), scheme) == 0)
                 shown.erase(0, wcslen(scheme));
-        RECT linkR = { left, y, right, y + kLine };
-        Theme::DrawLine(hDC, linkR, Tr(L"Регистрация: ") + shown, m_fonts.Small, Theme::Text,
-            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+        const std::wstring caption = Tr(L"Регистрация: ");
+        RECT captionR = { left, y, right, y + kLine };
+        Theme::DrawLine(hDC, captionR, caption, m_fonts.Small, Theme::Text, DT_LEFT | DT_VCENTER);
+
+        const SIZE captionSize = Theme::MeasureText(hDC, m_fonts.Small, caption);
+        const SIZE linkSize = Theme::MeasureText(hDC, m_fonts.Small, shown);
+        RECT linkR = { left + captionSize.cx, y, min(right, left + captionSize.cx + linkSize.cx), y + kLine };
+        const bool hovered = Hot(linkR);
+        const COLORREF linkInk = hovered ? Theme::LinkHover : Theme::Link;
+        Theme::DrawLine(hDC, linkR, shown, m_fonts.Small, linkInk, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+        if (hovered)
+        {
+            const int baseline = (linkR.top + linkR.bottom + linkSize.cy) / 2;
+            RECT underline = { linkR.left, baseline - 1, linkR.right, baseline };
+            Theme::FlatFill(hDC, underline, linkInk);
+        }
         AddButton(hDC, SO_LOGIN_REGISTER, "LOGIN_REGISTER", linkR, Tr("Открыть страницу регистрации в браузере"));
     }
     y += kLine + kGap;
@@ -6969,15 +7187,18 @@ void CGalaxyATMSystemRadarScreen::SendLogin()
     {
         m_loginProblem = Tr(L"CID - это только цифры");
     }
-    else if (m_loginValues[LF_SURNAME].empty() || m_loginValues[LF_FIRST_NAME].empty())
+    else if (m_loginValues[LF_SURNAME].empty())
     {
-        m_loginProblem = Tr(L"Введите фамилию и имя");
+        m_loginProblem = Tr(L"Введите фамилию");
+    }
+    else if (!Plugin()->ListedOnNetwork())
+    {
+        m_loginProblem.clear();
     }
     else
     {
         m_loginProblem.clear();
-        Plugin()->StartLogin(cid, m_loginValues[LF_SURNAME], m_loginValues[LF_FIRST_NAME],
-            m_loginValues[LF_PATRONYMIC]);
+        Plugin()->StartLogin(cid, m_loginValues[LF_SURNAME]);
     }
     RequestRefresh();
 }
@@ -7350,13 +7571,13 @@ int CGalaxyATMSystemRadarScreen::DrawBlockAerodrome(HDC hDC, int y)
 void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
 {
     const int W = 370, H = 430;
-    const int kFrame   = 2;
-    const int kTitleH  = 21;
-    const int kSide    = 14;
-    const int kTrackW  = 18;
-    const int kEndBtn  = 16;
-    const int kButtonH = 21;
-    const int kButtonW = 60;
+    const int kTitleH    = 24;
+    const int kSide      = 10;
+    const int kTrackW    = 10;
+    const int kScrollGap = 4;
+    const int kEndBtn    = 12;
+    const int kButtonH   = 22;
+    const int kButtonW   = 60;
 
     RECT ra = GetRadarArea();
     if (!m_atisPositioned)
@@ -7383,70 +7604,38 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    HRGN winRgn = Theme::WinRegion(m_atisArea);
-    SelectClipRgn(hDC, winRgn);
+    Theme::WinFill(hDC, m_atisArea, Theme::MenuBarFill);
 
-    Theme::FlatFill(hDC, m_atisArea, Theme::WinBody);
-
-    RECT title = { m_atisArea.left + kFrame, m_atisArea.top + kFrame,
-                   m_atisArea.right - kFrame, m_atisArea.top + kFrame + kTitleH };
-    Theme::VGradient(hDC, title, Theme::WinTitleTop, Theme::WinTitleBot);
-
-    SelectClipRgn(hDC, NULL);
-    DeleteObject(winRgn);
-
+    RECT title = { m_atisArea.left, m_atisArea.top, m_atisArea.right, m_atisArea.top + kTitleH };
+    Theme::DrawLine(hDC, title, L"ATIS message", m_fonts.WinTitle, Theme::MenuText, DT_CENTER | DT_VCENTER);
     AddScreenObject(SO_ATIS_HEADER, "ATIS_HEADER", title, true, Tr("Перетащите окно АТИС"));
 
-    RECT titleEdge = { title.left, title.bottom, title.right, title.bottom + kFrame };
-    Theme::FlatFill(hDC, titleEdge, Theme::WinFrame);
+    RECT body = { m_atisArea.left + 5, title.bottom, m_atisArea.right - 5, m_atisArea.bottom - 5 };
+    Theme::SmoothBox(hDC, body, &Theme::InsetFill, &Theme::Border, Theme::WinCornerRadius - 2);
 
-    Theme::DrawLine(hDC, title, L"ATIS message", m_fonts.WinTitle, Theme::WinTitleText,
-        DT_CENTER | DT_VCENTER);
-
-    RECT close = { m_atisArea.right - kFrame - 24, title.top + 1,
-                   m_atisArea.right - kFrame - 4, title.bottom - 1 };
-    {
-        int cx = (close.left + close.right) / 2;
-        int cy = (close.top + close.bottom) / 2;
-        const int arm = 5;
-        HPEN pen = CreatePen(PS_SOLID, 2, Theme::WinTitleText);
-        HPEN old = (HPEN)SelectObject(hDC, pen);
-        MoveToEx(hDC, cx - arm, cy - arm, NULL);
-        LineTo(hDC, cx + arm + 1, cy + arm + 1);
-        MoveToEx(hDC, cx + arm, cy - arm, NULL);
-        LineTo(hDC, cx - arm - 1, cy + arm + 1);
-        SelectObject(hDC, old);
-        DeleteObject(pen);
-    }
+    RECT close = { m_atisArea.right - 26, title.top + 4, m_atisArea.right - 8, title.bottom - 4 };
+    DrawCloseCross(hDC, close, Theme::MenuText);
     AddButton(hDC, SO_ATIS_CLOSE, "ATIS_CLOSE", close, Tr("Закрыть"));
 
-    RECT index = { m_atisArea.left + kSide + 4, titleEdge.bottom + 14,
-                   m_atisArea.right - kSide, titleEdge.bottom + 36 };
-    Theme::DrawLine(hDC, index, L"Index:   " + Plugin()->AtisIndex(),
-        m_fonts.MonoBig, Theme::Text, DT_LEFT | DT_VCENTER);
+    RECT indexLabel = { body.left + kSide, body.top + 8, body.right - kSide, body.top + 30 };
+    const std::wstring indexCaption = L"Index:   ";
+    Theme::DrawLine(hDC, indexLabel, indexCaption, m_fonts.MonoBig, Theme::Text, DT_LEFT | DT_VCENTER);
+    RECT indexLetter = indexLabel;
+    indexLetter.left += Theme::MeasureText(hDC, m_fonts.MonoBig, indexCaption).cx;
+    Theme::DrawLine(hDC, indexLetter, Plugin()->AtisIndex(), m_fonts.MonoBig, Theme::AtisIndexText,
+        DT_LEFT | DT_VCENTER);
 
-    RECT ok = { m_atisArea.right - kSide - 9 - kButtonW,
-                m_atisArea.bottom - kFrame - 13 - kButtonH,
-                m_atisArea.right - kSide - 9, m_atisArea.bottom - kFrame - 13 };
-    Theme::FlatFill(hDC, ok, Theme::ButtonFace);
-    Theme::FlatFrame(hDC, ok, kFrame, Theme::WinFrame);
-    Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::ButtonText, DT_CENTER | DT_VCENTER);
+    RECT ok = { body.right - kSide - kButtonW, body.bottom - 10 - kButtonH, body.right - kSide, body.bottom - 10 };
+    Theme::OutlineBox(hDC, ok, Theme::MenuBarFill, Theme::MenuText);
+    Theme::DrawLine(hDC, ok, L"OK", m_fonts.Body, Theme::MenuText, DT_CENTER | DT_VCENTER);
     AddButton(hDC, SO_ATIS_OK, "ATIS_OK", ok, Tr("Закрыть"));
 
-    RECT panel = { m_atisArea.left + kSide, index.bottom + 17,
-                   m_atisArea.right - kSide, ok.top - 6 };
-    Theme::FlatFrame(hDC, panel, kFrame, Theme::WinFrame);
+    RECT panel = { body.left + kSide, indexLabel.bottom + 10, body.right - kSide, ok.top - 8 };
+    Theme::OutlineBox(hDC, panel, Theme::ControlFill, Theme::Border);
 
-    RECT inner = { panel.left + kFrame, panel.top + kFrame,
-                   panel.right - kFrame, panel.bottom - kFrame };
-    RECT track = { inner.right - kTrackW, inner.top, inner.right, inner.bottom };
-    RECT paper = { inner.left, inner.top, track.left - kFrame, inner.bottom };
-    RECT gutter = { paper.right, inner.top, track.left, inner.bottom };
-
-    Theme::FlatFill(hDC, paper, Theme::Paper);
-    Theme::FlatFill(hDC, gutter, Theme::WinFrame);
-
-    RECT textArea = { paper.left + 8, paper.top + 6, paper.right - 6, paper.bottom - 6 };
+    RECT track = { panel.right - kScrollGap - kTrackW, panel.top + kScrollGap,
+                   panel.right - kScrollGap, panel.bottom - kScrollGap };
+    RECT textArea = { panel.left + 8, panel.top + 6, track.left - 6, panel.bottom - 6 };
 
     const std::wstring atisText = Plugin()->AtisMessage();
 
@@ -7468,35 +7657,22 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
     scrolled.bottom = scrolled.top + totalH + 1;
 
     oldFont = (HFONT)SelectObject(hDC, m_fonts.Mono);
-    SetTextColor(hDC, Theme::PaperInk);
+    SetTextColor(hDC, Theme::Text);
     DrawTextW(hDC, atisText.c_str(), -1, &scrolled, DT_LEFT | DT_TOP | DT_WORDBREAK);
     SelectObject(hDC, oldFont);
 
     SelectClipRgn(hDC, NULL);
     DeleteObject(clip);
 
-    Theme::FlatFill(hDC, track, Theme::ScrollTrough);
-
     RECT btnUp = { track.left, track.top, track.right, track.top + kEndBtn };
     RECT btnDn = { track.left, track.bottom - kEndBtn, track.right, track.bottom };
     AddButton(hDC, SO_ATIS_LINE_UP, "ATIS_UP", btnUp, Tr("Прокрутить вверх"));
     AddButton(hDC, SO_ATIS_LINE_DN, "ATIS_DN", btnDn, Tr("Прокрутить вниз"));
+    DrawScrollArrow(hDC, btnUp, true, Theme::TextDim);
+    DrawScrollArrow(hDC, btnDn, false, Theme::TextDim);
 
-    for (const RECT* btn : { &btnUp, &btnDn })
-    {
-        int cx = (btn->left + btn->right) / 2;
-        int cy = (btn->top + btn->bottom) / 2;
-        RECT mark = { cx - 4, cy - 4, cx + 4, cy + 4 };
-        RECT hole = { cx - 1, cy - 1, cx + 2, cy + 2 };
-        Theme::FlatFill(hDC, mark, Theme::WinFrame);
-        Theme::FlatFill(hDC, hole, Theme::ScrollTrough);
-    }
-    RECT ruleUp = { track.left, btnUp.bottom, track.right, btnUp.bottom + kFrame };
-    RECT ruleDn = { track.left, btnDn.top - kFrame, track.right, btnDn.top };
-    Theme::FlatFill(hDC, ruleUp, Theme::WinFrame);
-    Theme::FlatFill(hDC, ruleDn, Theme::WinFrame);
-
-    RECT bar = { track.left, ruleUp.bottom, track.right, ruleDn.top };
+    RECT bar = { track.left, btnUp.bottom + 2, track.right, btnDn.top - 2 };
+    Theme::SmoothBox(hDC, bar, &Theme::InsetFill, NULL, (kTrackW + 1) / 2);
     int trackH = max(1, (int)(bar.bottom - bar.top));
     m_atisThumbH = (totalH > viewH) ? max(18, (int)((__int64)trackH * viewH / totalH)) : trackH;
     int thumbTop = bar.top;
@@ -7504,11 +7680,10 @@ void CGalaxyATMSystemRadarScreen::DrawAtisWindow(HDC hDC)
         thumbTop += (int)((__int64)(trackH - m_atisThumbH) * m_atisScrollPx / m_atisScrollMax);
 
     RECT thumb = { bar.left, thumbTop, bar.right, thumbTop + m_atisThumbH };
-    Theme::FlatFill(hDC, thumb, Theme::ScrollThumb);
-    Theme::FlatFrame(hDC, thumb, 1, Theme::ScrollEdge);
+    Theme::SmoothBox(hDC, thumb, &Theme::Active, NULL, (kTrackW + 1) / 2);
     AddScreenObject(SO_ATIS_SCROLLBAR, "ATIS_SCROLL", bar, true, Tr("Прокрутка текста АТИС"));
 
-    Theme::WinBorder(hDC, m_atisArea, kFrame, Theme::WinFrame);
+    Theme::WinBorder(hDC, m_atisArea, 2, Theme::WinFrame);
 
     RestoreDC(hDC, saved);
 }
@@ -7654,8 +7829,7 @@ void CGalaxyATMSystemRadarScreen::DrawAtisLetterWindow(HDC hDC)
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
 
-    Theme::FlatFill(hDC, m_atisLetterArea, Theme::ControlFill);
-    Theme::FlatFrame(hDC, m_atisLetterArea, kFrame, Theme::WinFrame);
+    Theme::OutlineBox(hDC, m_atisLetterArea, Theme::AtisStripFill, Theme::Border);
 
     int textLeft = m_atisLetterArea.left + kFrame + kPadX;
     RECT labelR = { textLeft, m_atisLetterArea.top, textLeft + szLabel.cx,
@@ -9346,7 +9520,7 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         const int h = m_cflTrack.bottom - m_cflTrack.top;
         if (h > 0)
         {
-            const int total = (int)((CflLevels().size() + 1) / 2) - kCflRows;
+            const int total = (int)((CflLevels(!m_cflPicksExitLevel).size() + 1) / 2) - kCflRows;
             const int row = (int)lround((double)(Pt.y - m_cflTrack.top) / h * total);
             ScrollCfl(row - m_cflTopRow);
         }
@@ -9468,14 +9642,13 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
                 Plugin()->ResetLogin();
 
                 const CGalaxyATMSystemPlugin::SavedLogin& saved = Plugin()->SavedIdentity();
-                const std::wstring* const from[LF_COUNT] = { &saved.cid, &saved.surname,
-                    &saved.firstName, &saved.patronymic };
+                const std::wstring* const from[LF_COUNT] = { &saved.cid, &saved.surname };
                 for (int field = 0; field < LF_COUNT; field++)
                     if (m_loginValues[field].empty())
                         m_loginValues[field] = *from[field];
 
                 int first = LF_COUNT - 1;
-                for (int field : { LF_CID, LF_SURNAME, LF_FIRST_NAME })
+                for (int field : { LF_CID, LF_SURNAME })
                 {
                     if (m_loginValues[field].empty())
                     {
@@ -9645,6 +9818,7 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_ATIS_LETTER_HEADER:
         m_atisOpen = !m_atisOpen;
         m_atisScrollPx = 0;
+        UpdateWheelHook();
         RequestRefresh();
         break;
     case SO_RC_SORT:
@@ -9705,6 +9879,7 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_ATIS_OK:
     case SO_ATIS_CLOSE:
         m_atisOpen = false;
+        UpdateWheelHook();
         RequestRefresh();
         break;
     case SO_ATIS_SCROLLBAR:
@@ -9712,11 +9887,11 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         RequestRefresh();
         break;
     case SO_ATIS_LINE_UP:
-        m_atisScrollPx = max(0, m_atisScrollPx - 18);
+        m_atisScrollPx = max(0, m_atisScrollPx - kAtisLinePx);
         RequestRefresh();
         break;
     case SO_ATIS_LINE_DN:
-        m_atisScrollPx = min(m_atisScrollMax, m_atisScrollPx + 18);
+        m_atisScrollPx = min(m_atisScrollMax, m_atisScrollPx + kAtisLinePx);
         RequestRefresh();
         break;
 
@@ -9811,8 +9986,6 @@ void CGalaxyATMSystemRadarScreen::ApplyRcFilter(int functionId, const std::wstri
 
 void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)
 {
-    Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
-
     if (FunctionId >= FN_LOGIN_FIELD && FunctionId < FN_LOGIN_FIELD + LF_COUNT)
     {
         const int field = FunctionId - FN_LOGIN_FIELD;
@@ -9823,6 +9996,11 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
         RequestRefresh();
         return;
     }
+
+    if (!Authorized())
+        return;
+
+    Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
     if (FunctionId == FN_RC_FILTER_CALLSIGN || FunctionId == FN_RC_FILTER_BEFORE
         || FunctionId == FN_RC_FILTER_AFTER)
@@ -10070,6 +10248,8 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
+    if (!Authorized() && cmd.compare(0, 9, ".formular") == 0)
+        return false;
     if (cmd == ".formular")
     {
         m_formularsVisible = !m_formularsVisible;

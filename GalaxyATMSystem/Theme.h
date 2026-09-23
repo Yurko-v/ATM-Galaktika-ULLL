@@ -2,6 +2,8 @@
 
 #include <windows.h>
 #include <string>
+#include <objidl.h>
+#include <gdiplus.h>
 
 #include "resource.h"
 
@@ -39,6 +41,7 @@ namespace Theme
 
     const COLORREF DistressText  = RGB(0xFF, 0x3B, 0x30);
     const COLORREF DuplicateText = RGB(0xFF, 0xD6, 0x00);
+    const COLORREF ReadyText     = RGB(0x00, 0xDC, 0x00);
 
     const COLORREF FormularSector = RGB(0x3E, 0x7F, 0xE0);
     const COLORREF FormularInbound = FormularSector;
@@ -82,10 +85,14 @@ namespace Theme
     const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);
 
     const COLORREF AtisIndexText = RGB(0x9E, 0xFF, 0x3D);
+    const COLORREF AtisStripFill = RGB(0x00, 0x00, 0x00);
 
     const COLORREF MenuBarFill      = Background;
     const COLORREF MenuText         = RGB(0xFF, 0xFF, 0xFF);
     const COLORREF MenuTextDisabled = RGB(0x9A, 0x9A, 0x9A);
+
+    const COLORREF Link      = RGB(0x8C, 0xC8, 0xFF);
+    const COLORREF LinkHover = RGB(0xC8, 0xE6, 0xFF);
 
     const COLORREF AuthGranted   = AtisIndexText;
 
@@ -361,19 +368,205 @@ namespace Theme
         }
     };
 
-    const int CornerRadius = 2;
+    const int CornerRadius = 4;
+    const int PanelCornerRadius = 10;
+
+    enum Corners { CornersAll = 0xF, CornersNone = 0x0 };
+    enum Corner { CornerTopLeft = 0x1, CornerTopRight = 0x2, CornerBottomRight = 0x4, CornerBottomLeft = 0x8 };
+
+    inline Gdiplus::Color GdiColor(COLORREF c)
+    {
+        return Gdiplus::Color(GetRValue(c), GetGValue(c), GetBValue(c));
+    }
+
+    class SmoothCanvas
+    {
+    public:
+        ~SmoothCanvas() { Release(); }
+
+        HDC Fit(int width, int height)
+        {
+            if (m_dc != NULL && width <= m_width && height <= m_height)
+                return m_dc;
+            const int w = max(width, m_width), h = max(height, m_height);
+            Release();
+            if (w <= 0 || h <= 0 || w > MaxSide || h > MaxSide)
+                return NULL;
+
+            BITMAPINFO bi = {};
+            bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+            bi.bmiHeader.biWidth = w;
+            bi.bmiHeader.biHeight = -h;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            void* bits = NULL;
+            HDC screen = GetDC(NULL);
+            m_dc = CreateCompatibleDC(screen);
+            m_bitmap = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+            ReleaseDC(NULL, screen);
+            if (m_dc == NULL || m_bitmap == NULL)
+            {
+                Release();
+                return NULL;
+            }
+            m_old = SelectObject(m_dc, m_bitmap);
+            m_graphics = new Gdiplus::Graphics(m_dc);
+            m_graphics->SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            m_width = w;
+            m_height = h;
+            return m_dc;
+        }
+
+        Gdiplus::Graphics* Graphics() const { return m_graphics; }
+
+        void Release()
+        {
+            delete m_graphics;
+            m_graphics = NULL;
+            if (m_dc != NULL && m_old != NULL)
+                SelectObject(m_dc, m_old);
+            if (m_bitmap != NULL)
+                DeleteObject(m_bitmap);
+            if (m_dc != NULL)
+                DeleteDC(m_dc);
+            m_dc = NULL;
+            m_bitmap = NULL;
+            m_old = NULL;
+            m_width = m_height = 0;
+        }
+
+    private:
+        static const int MaxSide = 8192;
+
+        HDC m_dc = NULL;
+        HBITMAP m_bitmap = NULL;
+        HGDIOBJ m_old = NULL;
+        Gdiplus::Graphics* m_graphics = NULL;
+        int m_width = 0, m_height = 0;
+    };
+
+    inline SmoothCanvas& SharedCanvas()
+    {
+        static SmoothCanvas canvas;
+        return canvas;
+    }
+
+    inline void DrawRoundedCorners(Gdiplus::Graphics& g, const RECT& r, const COLORREF* fill,
+        const COLORREF* stroke, int rad, int bw, const bool round[4])
+    {
+        const Gdiplus::REAL fd = (Gdiplus::REAL)(2 * rad);
+        const Gdiplus::REAL fl = r.left - 0.5f, ft = r.top - 0.5f;
+        const Gdiplus::REAL fr = r.right - 0.5f - fd, fb = r.bottom - 0.5f - fd;
+        const Gdiplus::REAL inset = (bw - 1) / 2.0f;
+        const Gdiplus::REAL sd = (Gdiplus::REAL)(2 * rad - bw);
+        const Gdiplus::REAL sl = r.left + inset, st = r.top + inset;
+        const Gdiplus::REAL sr = r.right - 1 - inset - sd, sb = r.bottom - 1 - inset - sd;
+        const Gdiplus::PointF fillAt[4] = { { fl, ft }, { fr, ft }, { fr, fb }, { fl, fb } };
+        const Gdiplus::PointF strokeAt[4] = { { sl, st }, { sr, st }, { sr, sb }, { sl, sb } };
+        const Gdiplus::REAL startAngle[4] = { 180, 270, 0, 90 };
+
+        if (fill != NULL)
+        {
+            Gdiplus::GraphicsPath pies;
+            for (int i = 0; i < 4; i++)
+                if (round[i])
+                    pies.AddPie(fillAt[i].X, fillAt[i].Y, fd, fd, startAngle[i], 90);
+            Gdiplus::SolidBrush brush(GdiColor(*fill));
+            g.FillPath(&brush, &pies);
+        }
+        if (bw > 0 && sd > 0)
+        {
+            Gdiplus::GraphicsPath arcs;
+            for (int i = 0; i < 4; i++)
+            {
+                if (!round[i])
+                    continue;
+                arcs.StartFigure();
+                arcs.AddArc(strokeAt[i].X, strokeAt[i].Y, sd, sd, startAngle[i], 90);
+            }
+            Gdiplus::Pen pen(GdiColor(*stroke), (Gdiplus::REAL)bw);
+            g.DrawPath(&pen, &arcs);
+        }
+    }
+
+    inline void DrawRoundedBox(HDC hDC, Gdiplus::Graphics* shared, const RECT& r, const COLORREF* fill,
+        const COLORREF* stroke, int rad, int bw, const bool round[4])
+    {
+        const int tl = round[0] ? rad : 0, tr = round[1] ? rad : 0;
+        const int br = round[2] ? rad : 0, bl = round[3] ? rad : 0;
+
+        auto band = [hDC](HBRUSH brush, int left, int top, int right, int bottom)
+        {
+            RECT part = { left, top, right, bottom };
+            if (right > left && bottom > top)
+                FillRect(hDC, &part, brush);
+        };
+
+        if (fill != NULL)
+        {
+            HBRUSH brush = CreateSolidBrush(*fill);
+            const int topH = max(tl, tr), bottomH = max(bl, br);
+            band(brush, r.left + tl, r.top, r.right - tr, r.top + topH);
+            band(brush, r.left, r.top + topH, r.right, r.bottom - bottomH);
+            band(brush, r.left + bl, r.bottom - bottomH, r.right - br, r.bottom);
+            DeleteObject(brush);
+        }
+        if (bw > 0)
+        {
+            HBRUSH brush = CreateSolidBrush(*stroke);
+            band(brush, r.left + tl, r.top, r.right - tr, r.top + bw);
+            band(brush, r.left + bl, r.bottom - bw, r.right - br, r.bottom);
+            band(brush, r.left, r.top + tl, r.left + bw, r.bottom - bl);
+            band(brush, r.right - bw, r.top + tr, r.right, r.bottom - br);
+            DeleteObject(brush);
+        }
+
+        if (!round[0] && !round[1] && !round[2] && !round[3])
+            return;
+
+        if (shared != NULL)
+        {
+            DrawRoundedCorners(*shared, r, fill, stroke, rad, bw, round);
+            shared->Flush(Gdiplus::FlushIntentionSync);
+            return;
+        }
+        Gdiplus::Graphics g(hDC);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        DrawRoundedCorners(g, r, fill, stroke, rad, bw, round);
+    }
+
+    inline void SmoothBox(HDC hDC, const RECT& r, const COLORREF* fill, const COLORREF* stroke,
+        int radius, int width = 1, int corners = CornersAll)
+    {
+        const int w = r.right - r.left, h = r.bottom - r.top;
+        if (w <= 0 || h <= 0)
+            return;
+
+        const int rad = max(0, min(radius, min(w, h) / 2));
+        const int bw = stroke != NULL ? max(0, width) : 0;
+        const bool round[4] = {
+            rad > 1 && (corners & CornerTopLeft) != 0,
+            rad > 1 && (corners & CornerTopRight) != 0,
+            rad > 1 && (corners & CornerBottomRight) != 0,
+            rad > 1 && (corners & CornerBottomLeft) != 0,
+        };
+
+        HDC canvas = (round[0] || round[1] || round[2] || round[3]) && r.left >= 0 && r.top >= 0
+            ? SharedCanvas().Fit(r.right, r.bottom) : NULL;
+        if (canvas == NULL)
+        {
+            DrawRoundedBox(hDC, NULL, r, fill, stroke, rad, bw, round);
+            return;
+        }
+
+        BitBlt(canvas, r.left, r.top, w, h, hDC, r.left, r.top, SRCCOPY);
+        DrawRoundedBox(canvas, SharedCanvas().Graphics(), r, fill, stroke, rad, bw, round);
+        BitBlt(hDC, r.left, r.top, w, h, canvas, r.left, r.top, SRCCOPY);
+    }
 
     inline void OutlineBox(HDC hDC, const RECT& r, COLORREF fill, COLORREF stroke)
     {
-        HBRUSH br = CreateSolidBrush(fill);
-        HBRUSH oldBr = (HBRUSH)SelectObject(hDC, br);
-        HPEN pen = CreatePen(PS_SOLID, 1, stroke);
-        HPEN oldPen = (HPEN)SelectObject(hDC, pen);
-        RoundRect(hDC, r.left, r.top, r.right, r.bottom, CornerRadius * 2, CornerRadius * 2);
-        SelectObject(hDC, oldPen);
-        DeleteObject(pen);
-        SelectObject(hDC, oldBr);
-        DeleteObject(br);
+        SmoothBox(hDC, r, &fill, &stroke, CornerRadius);
     }
 
     inline void FillBox(HDC hDC, const RECT& r, COLORREF fill)
@@ -425,16 +618,8 @@ namespace Theme
 
     inline void DrawRadio(HDC hDC, const RECT& r, bool selected)
     {
-        HBRUSH br = CreateSolidBrush(selected ? Active : ControlFill);
-        HBRUSH oldBr = (HBRUSH)SelectObject(hDC, br);
-        HPEN pen = CreatePen(PS_SOLID, 1, BorderStrong);
-        HPEN oldPen = (HPEN)SelectObject(hDC, pen);
-        int d = (r.right - r.left) * 7 / 10;
-        RoundRect(hDC, r.left, r.top, r.right, r.bottom, d, d);
-        SelectObject(hDC, oldPen);
-        DeleteObject(pen);
-        SelectObject(hDC, oldBr);
-        DeleteObject(br);
+        const COLORREF fill = selected ? Active : ControlFill;
+        SmoothBox(hDC, r, &fill, &BorderStrong, (r.right - r.left) * 7 / 20);
     }
 
     const int WinCornerRadius = 8;
@@ -447,14 +632,12 @@ namespace Theme
 
     inline void WinBorder(HDC hDC, const RECT& r, int width, COLORREF color)
     {
-        HPEN pen = CreatePen(PS_INSIDEFRAME, width, color);
-        HPEN oldPen = (HPEN)SelectObject(hDC, pen);
-        HBRUSH oldBr = (HBRUSH)SelectObject(hDC, GetStockObject(NULL_BRUSH));
-        RoundRect(hDC, r.left, r.top, r.right, r.bottom,
-            WinCornerRadius * 2, WinCornerRadius * 2);
-        SelectObject(hDC, oldBr);
-        SelectObject(hDC, oldPen);
-        DeleteObject(pen);
+        SmoothBox(hDC, r, NULL, &color, WinCornerRadius, width);
+    }
+
+    inline void WinFill(HDC hDC, const RECT& r, COLORREF fill)
+    {
+        SmoothBox(hDC, r, &fill, NULL, WinCornerRadius);
     }
 
     inline void FlatFill(HDC hDC, const RECT& r, COLORREF fill)

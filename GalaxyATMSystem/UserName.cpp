@@ -314,8 +314,7 @@ namespace
 }
 
 bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const std::string& position,
-    const std::wstring& cid, const std::wstring& surname, const std::wstring& firstName,
-    const std::wstring& patronymic, std::wstring& name, std::string& error)
+    const std::wstring& cid, const std::wstring& surname, std::wstring& name, std::string& error)
 {
     std::string url, pos, headers;
     if (!ServerRequestParts(baseUrl, apiKey, position, url, pos, headers))
@@ -325,8 +324,7 @@ bool SubmitLogin(const std::string& baseUrl, const std::string& apiKey, const st
     }
 
     std::string body = "{\"position\":\"" + pos + "\",\"cid\":" + JsonString(cid)
-        + ",\"surname\":" + JsonString(surname)
-        + ",\"first_name\":" + JsonString(firstName) + ",\"patronymic\":" + JsonString(patronymic) + "}";
+        + ",\"surname\":" + JsonString(surname) + "}";
     headers += "Content-Type: application/json\r\n";
 
     Net::HttpResponse response;
