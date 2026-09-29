@@ -169,6 +169,19 @@ void Config::Load(HINSTANCE hModule)
                 m_AtisIndex = v->AsString(m_AtisIndex);
             if (const Json::Value* v = atis->Find(L"Live"))
                 m_AtisLive = v->AsBool(m_AtisLive);
+            if (const Json::Value* v = atis->Find(L"Airports"))
+            {
+                if (v->kind == Json::Value::Kind::Array)
+                {
+                    m_AtisAirports.clear();
+                    for (const Json::Value& a : v->arr)
+                    {
+                        const std::wstring icao = ToUpper(a.AsString());
+                        if (icao.size() == 4)
+                            m_AtisAirports.push_back(icao);
+                    }
+                }
+            }
             if (const Json::Value* v = atis->Find(L"RefreshMinutes"))
                 m_AtisRefreshMin = (int)max(1LL, min(60LL, v->AsInt(m_AtisRefreshMin)));
             if (const Json::Value* v = atis->Find(L"RefreshSeconds"))

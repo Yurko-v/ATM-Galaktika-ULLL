@@ -22,6 +22,7 @@ public:
     bool IsCreated() const { return m_hwnd != NULL; }
     HWND Handle() const { return m_hwnd; }
     void Destroy();
+    static void ReleaseClass();
 
     HDC  BeginFrame(int w, int h);
     void EndFrame();

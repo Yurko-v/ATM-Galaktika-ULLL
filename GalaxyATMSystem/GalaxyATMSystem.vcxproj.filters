@@ -1,0 +1,275 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Core">
+      <UniqueIdentifier>{B23F242E-9BE2-5166-BC2B-B6DD43917AC6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Plugin">
+      <UniqueIdentifier>{EF8AFFDB-B289-5FB4-AEF9-36A015680874}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Screen">
+      <UniqueIdentifier>{94D2FE02-259D-53B3-B04D-7977C3753E14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Modules">
+      <UniqueIdentifier>{DC7E8B71-8D26-5EBD-A6CD-246328D11280}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Project">
+      <UniqueIdentifier>{BB4D4692-78B2-5BC9-A693-696C11DE5BB8}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="framework.h">
+      <Filter>Project</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Project</Filter>
+    </ClInclude>
+    <ClInclude Include="EuroScopePlugIn.h">
+      <Filter>Project</Filter>
+    </ClInclude>
+    <ClInclude Include="Theme.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Config.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Geometry.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Json.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Log.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Lang.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Net.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Sigmet.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Atis.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="UserName.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Zones.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Apw.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Squawk.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="TextEntry.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="RadarCursor.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="FloatWindow.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="GalaxyATMSystem.h" />
+    <ClInclude Include="Core\Base.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Common.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Drawing.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\FlightTracking.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Text.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Units.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Plugin\Plugin.h">
+      <Filter>Plugin</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\Airlines.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\Coordination.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\FormularItems.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\PanelLayout.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\Pickers.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\RadarScreen.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\ScreenCommon.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\SectorListLayout.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\TrackSymbols.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\WindowChrome.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Project</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="pch.cpp">
+      <Filter>Project</Filter>
+    </ClCompile>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>Project</Filter>
+    </ClCompile>
+    <ClCompile Include="Log.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Config.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Sigmet.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Atis.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="UserName.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Zones.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Apw.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Squawk.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="TextEntry.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="RadarCursor.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="FloatWindow.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\Feeds.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\FlightPlanEvents.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\Login.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\Plugin.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\SquawkAssign.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\Tags.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\AsrSettings.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\AtisWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\CflPicker.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Commands.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Controls.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Coordination.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Formular.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\FreeTextWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Input.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\LoginWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\MenuBar.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Panel.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\RadarScreen.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Refresh.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Ruler.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\SectorList.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\SigmetMap.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\SpeedWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\HeadingWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\RvsmWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Targets.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\TransferWindow.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\Vectors.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\ZoneMap.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="GalaxyATMSystem.rc">
+      <Filter>Project</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="EuroScope.ttf">
+      <Filter>Project</Filter>
+    </None>
+  </ItemGroup>
+</Project>

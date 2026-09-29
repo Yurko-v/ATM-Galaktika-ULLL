@@ -71,22 +71,16 @@ namespace
     }
 }
 
-bool ParseVatsimAtis(const std::string& body, const std::string& icao, AtisReport& out)
+namespace
 {
-    Json::Value root;
-    if (!Json::ParseUtf8(body, root) || root.kind != Json::Value::Kind::Object)
-        return false;
-
-    const Json::Value* list = root.Find(L"atis");
-    if (list == NULL || list->kind != Json::Value::Kind::Array)
-        return false;
-
+bool FindAtis(const Json::Value& list, const std::string& icao, AtisReport& out)
+{
     const std::wstring station = ToUpper(Json::Utf8ToWide(icao));
 
     int bestRank = -1;
     AtisReport best;
 
-    for (const Json::Value& entry : list->arr)
+    for (const Json::Value& entry : list.arr)
     {
         if (entry.kind != Json::Value::Kind::Object)
             continue;
@@ -143,24 +137,39 @@ bool ParseVatsimAtis(const std::string& body, const std::string& icao, AtisRepor
     out = best;
     return true;
 }
+}
 
-bool FetchVatsimAtis(const std::string& icao, AtisReport& out)
+bool ParseVatsimAtis(const std::string& body, const std::vector<std::string>& airports,
+    std::map<std::string, AtisReport>& out)
 {
-    if (icao.size() != 4)
+    Json::Value root;
+    if (!Json::ParseUtf8(body, root) || root.kind != Json::Value::Kind::Object)
         return false;
 
+    const Json::Value* list = root.Find(L"atis");
+    if (list == NULL || list->kind != Json::Value::Kind::Array)
+        return false;
+
+    out.clear();
+    for (const std::string& icao : airports)
+    {
+        AtisReport report;
+        if (icao.size() == 4 && FindAtis(*list, icao, report))
+            out[icao] = report;
+    }
+    return true;
+}
+
+bool FetchVatsimAtis(const std::vector<std::string>& airports, std::map<std::string, AtisReport>& out)
+{
     std::string body;
     if (!Net::HttpGet(kFeedUrl, body, kMaxBytes, kTimeoutMs))
         return false;
 
-    if (ParseVatsimAtis(body, icao, out))
+    if (ParseVatsimAtis(body, airports, out))
         return true;
 
-    Json::Value root;
-    if (!Json::ParseUtf8(body, root) || root.kind != Json::Value::Kind::Object || root.Find(L"atis") == NULL)
-        Log::Error("atis", std::string("feed ") + kFeedUrl + " has no \"atis\" list ("
-            + std::to_string(body.size()) + " bytes): " + Log::Snippet(body, 120));
-    else
-        Log::Info("atis", "no ATIS on the air for " + icao + " - the config's letter stands");
+    Log::Error("atis", std::string("feed ") + kFeedUrl + " has no \"atis\" list ("
+        + std::to_string(body.size()) + " bytes): " + Log::Snippet(body, 120));
     return false;
 }

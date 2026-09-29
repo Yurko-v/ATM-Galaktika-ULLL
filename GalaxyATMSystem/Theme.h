@@ -41,23 +41,25 @@ namespace Theme
 
     const COLORREF DistressText  = RGB(0xFF, 0x3B, 0x30);
     const COLORREF DuplicateText = RGB(0xFF, 0xD6, 0x00);
+    const COLORREF SeparationLoss = DistressText;
     const COLORREF ReadyText     = RGB(0x00, 0xDC, 0x00);
 
-    const COLORREF FormularSector = RGB(0x3E, 0x7F, 0xE0);
-    const COLORREF FormularInbound = FormularSector;
+    const COLORREF FormularInbound = RGB(0x3A, 0x96, 0xFF);
 
     const COLORREF FormularMapp = RGB(0xFF, 0x8C, 0x00);
 
-    const COLORREF FormularHighlight = RGB(0xD0, 0x60, 0x00);
 
     const COLORREF FormularWtc   = RGB(0xFF, 0x3B, 0x30);
+    const int      FormularWarningBrightnessPct = 65;
+    const COLORREF FormularPicked = RGB(0x68, 0xE0, 0xAD);
     const COLORREF FormularVfr   = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF FormularGreen = RGB(0x00, 0xDC, 0x00);
 
     const int TrackHistoryDots = 5;
 
     const COLORREF HeadingDragLine = RGB(0xE8, 0x8E, 0x2C);
-    const COLORREF CflFrame      = Background;
+    const COLORREF PopupFrameActive   = RGB(0x6C, 0xC0, 0xE8);
+    const COLORREF PopupFrameInactive = RGB(0xC8, 0xC8, 0xC8);
     const COLORREF CflCellLine   = RGB(0xB4, 0xB4, 0xB4);
     const COLORREF CflHover      = RGB(0x8C, 0x8C, 0x8C);
     const COLORREF CflField      = RGB(0x8A, 0x8F, 0x8A);
@@ -72,8 +74,13 @@ namespace Theme
     const COLORREF SpdButton    = RGB(0x8C, 0x8C, 0x88);
     const COLORREF SpdLine      = RGB(0xE6, 0xE6, 0xE6);
     const COLORREF SpdThumb     = RGB(0x9C, 0x9C, 0x9C);
+    const COLORREF RvsmBody     = RGB(0x5C, 0x7C, 0x55);
+    const COLORREF RvsmList     = RGB(0x1E, 0x1E, 0x20);
+    const COLORREF RvsmListEdge = RGB(0xD2, 0xD2, 0xCC);
+    const COLORREF RvsmTrack    = RGB(0xB4, 0xB6, 0xA8);
     const COLORREF XfrSelected  = RGB(0x3A, 0x3A, 0x3A);
     const COLORREF XfrTitleTop  = RGB(0x9C, 0xD8, 0xF2);
+    const COLORREF XfrTitleTopInactive = RGB(0xE4, 0xE4, 0xE4);
     const COLORREF XfrOutline   = RGB(0x3C, 0x84, 0xAC);
     const COLORREF XfrButtonTop    = RGB(0xA8, 0xA8, 0xA4);
     const COLORREF XfrButtonBottom = RGB(0x7C, 0x7C, 0x78);
@@ -93,8 +100,6 @@ namespace Theme
 
     const COLORREF Link      = RGB(0x8C, 0xC8, 0xFF);
     const COLORREF LinkHover = RGB(0xC8, 0xE6, 0xFF);
-
-    const COLORREF AuthGranted   = AtisIndexText;
 
     const COLORREF ListGround      = Background;
     const BYTE     ListGroundAlpha = 204;
@@ -120,12 +125,16 @@ namespace Theme
     const double   VectorTickGap     = 3.0;
 
     const float    VectorHeadWidth   = VectorWidth;
+    const float    ProtectionZoneWidth = 1.0f;
     const double   VectorHeadLength  = 7.0;
 
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcRadiusPx    = 20.0;
-    const double   WakeArcStepPx      = 10.0;
-    const double   WakeArcSweepDeg     = 60.0;
+    const double   WakeArcRadiusPx    = 21.0;
+    const float    RouteWidth         = 1.5f;
+    const COLORREF RouteColor         = RGB(0xFF, 0xFF, 0x00);
+    const double   RoutePointRadiusPx = 2.5;
+    const double   WakeArcStepPx      = 8.0;
+    const double   WakeArcSweepDeg     = 40.0;
 
     const COLORREF SigmetLine   = RGB(0x1C, 0x3C, 0xA0);
     const int      SigmetWidth  = 2;
@@ -379,6 +388,29 @@ namespace Theme
         return Gdiplus::Color(GetRValue(c), GetGValue(c), GetBValue(c));
     }
 
+    inline bool& AntiAliasOn()
+    {
+        static bool on = false;
+        return on;
+    }
+
+    inline Gdiplus::SmoothingMode Smoothing()
+    {
+        return AntiAliasOn() ? Gdiplus::SmoothingModeAntiAlias : Gdiplus::SmoothingModeNone;
+    }
+
+    class AntiAliased
+    {
+    public:
+        AntiAliased() : m_was(AntiAliasOn()) { AntiAliasOn() = true; }
+        ~AntiAliased() { AntiAliasOn() = m_was; }
+        AntiAliased(const AntiAliased&) = delete;
+        AntiAliased& operator=(const AntiAliased&) = delete;
+
+    private:
+        bool m_was;
+    };
+
     class SmoothCanvas
     {
     public:
@@ -531,7 +563,7 @@ namespace Theme
             return;
         }
         Gdiplus::Graphics g(hDC);
-        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetSmoothingMode(Smoothing());
         DrawRoundedCorners(g, r, fill, stroke, rad, bw, round);
     }
 
@@ -551,7 +583,7 @@ namespace Theme
             rad > 1 && (corners & CornerBottomLeft) != 0,
         };
 
-        HDC canvas = (round[0] || round[1] || round[2] || round[3]) && r.left >= 0 && r.top >= 0
+        HDC canvas = AntiAliasOn() && (round[0] || round[1] || round[2] || round[3]) && r.left >= 0 && r.top >= 0
             ? SharedCanvas().Fit(r.right, r.bottom) : NULL;
         if (canvas == NULL)
         {

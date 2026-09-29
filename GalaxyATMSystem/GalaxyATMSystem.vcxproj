@@ -119,8 +119,26 @@
     <ClInclude Include="Apw.h" />
     <ClInclude Include="Squawk.h" />
     <ClInclude Include="TextEntry.h" />
+    <ClInclude Include="RadarCursor.h" />
     <ClInclude Include="FloatWindow.h" />
     <ClInclude Include="GalaxyATMSystem.h" />
+    <ClInclude Include="Core\Base.h" />
+    <ClInclude Include="Core\Common.h" />
+    <ClInclude Include="Core\Drawing.h" />
+    <ClInclude Include="Core\FlightTracking.h" />
+    <ClInclude Include="Core\Text.h" />
+    <ClInclude Include="Core\Units.h" />
+    <ClInclude Include="Plugin\Plugin.h" />
+    <ClInclude Include="Screen\Airlines.h" />
+    <ClInclude Include="Screen\Coordination.h" />
+    <ClInclude Include="Screen\FormularItems.h" />
+    <ClInclude Include="Screen\PanelLayout.h" />
+    <ClInclude Include="Screen\Pickers.h" />
+    <ClInclude Include="Screen\RadarScreen.h" />
+    <ClInclude Include="Screen\ScreenCommon.h" />
+    <ClInclude Include="Screen\SectorListLayout.h" />
+    <ClInclude Include="Screen\TrackSymbols.h" />
+    <ClInclude Include="Screen\WindowChrome.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
@@ -138,8 +156,38 @@
     <ClCompile Include="Apw.cpp" />
     <ClCompile Include="Squawk.cpp" />
     <ClCompile Include="TextEntry.cpp" />
+    <ClCompile Include="RadarCursor.cpp" />
     <ClCompile Include="FloatWindow.cpp" />
-    <ClCompile Include="GalaxyATMSystem.cpp" />
+    <ClCompile Include="Plugin\Feeds.cpp" />
+    <ClCompile Include="Plugin\FlightPlanEvents.cpp" />
+    <ClCompile Include="Plugin\Login.cpp" />
+    <ClCompile Include="Plugin\Plugin.cpp" />
+    <ClCompile Include="Plugin\SquawkAssign.cpp" />
+    <ClCompile Include="Plugin\Tags.cpp" />
+    <ClCompile Include="Screen\AsrSettings.cpp" />
+    <ClCompile Include="Screen\AtisWindow.cpp" />
+    <ClCompile Include="Screen\CflPicker.cpp" />
+    <ClCompile Include="Screen\Commands.cpp" />
+    <ClCompile Include="Screen\Controls.cpp" />
+    <ClCompile Include="Screen\Coordination.cpp" />
+    <ClCompile Include="Screen\Formular.cpp" />
+    <ClCompile Include="Screen\FreeTextWindow.cpp" />
+    <ClCompile Include="Screen\Input.cpp" />
+    <ClCompile Include="Screen\LoginWindow.cpp" />
+    <ClCompile Include="Screen\MenuBar.cpp" />
+    <ClCompile Include="Screen\Panel.cpp" />
+    <ClCompile Include="Screen\RadarScreen.cpp" />
+    <ClCompile Include="Screen\Refresh.cpp" />
+    <ClCompile Include="Screen\Ruler.cpp" />
+    <ClCompile Include="Screen\SectorList.cpp" />
+    <ClCompile Include="Screen\SigmetMap.cpp" />
+    <ClCompile Include="Screen\SpeedWindow.cpp" />
+    <ClCompile Include="Screen\HeadingWindow.cpp" />
+    <ClCompile Include="Screen\RvsmWindow.cpp" />
+    <ClCompile Include="Screen\Targets.cpp" />
+    <ClCompile Include="Screen\TransferWindow.cpp" />
+    <ClCompile Include="Screen\Vectors.cpp" />
+    <ClCompile Include="Screen\ZoneMap.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="GalaxyATMSystem.rc" />

@@ -36,6 +36,7 @@ public:
     const std::wstring& AtisTextEn() const { return m_AtisTextEn; }
 
     bool AtisLive() const { return m_AtisLive; }
+    const std::vector<std::wstring>& AtisAirports() const { return m_AtisAirports; }
     int  AtisRefreshSeconds() const { return min(m_AtisRefreshSec, m_AtisRefreshMin * 60); }
 
     int  AtisTopOffset() const { return m_AtisTopOffset; }
@@ -89,6 +90,7 @@ private:
     std::wstring m_AtisTextEn;
     std::wstring m_AtisMessage = L"ATIS TEXT NOT CONFIGURED - edit GalaxyATMSystem.json";
     bool m_AtisLive = true;
+    std::vector<std::wstring> m_AtisAirports = { L"ULOO", L"ULOL", L"ULPB", L"ULWW", L"ULWC" };
     int  m_AtisRefreshMin = 60;
     int  m_AtisRefreshSec = 20;
     int  m_AtisTopOffset = 22;

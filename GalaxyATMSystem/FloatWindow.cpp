@@ -46,6 +46,11 @@ bool FloatWindow::Create(HWND owner)
     return true;
 }
 
+void FloatWindow::ReleaseClass()
+{
+    UnregisterClassW(kClassName, ThisModule());
+}
+
 void FloatWindow::Destroy()
 {
     if (m_hwnd != NULL)
@@ -77,16 +82,21 @@ HDC FloatWindow::BeginFrame(int w, int h)
     {
         HDC screen = GetDC(NULL);
         HBITMAP bitmap = CreateCompatibleBitmap(screen, w, h);
-        if (m_memDC == NULL)
-        {
+        if (bitmap != NULL && m_memDC == NULL)
             m_memDC = CreateCompatibleDC(screen);
-            m_oldBitmap = SelectObject(m_memDC, bitmap);
-        }
-        else
-        {
-            SelectObject(m_memDC, bitmap);
-        }
+        const DWORD error = GetLastError();
         ReleaseDC(NULL, screen);
+        if (bitmap == NULL || m_memDC == NULL)
+        {
+            if (bitmap != NULL)
+                DeleteObject(bitmap);
+            Log::Error("float", "no bitmap for the sector list window - " + Log::SystemError(error));
+            return NULL;
+        }
+
+        HGDIOBJ previous = SelectObject(m_memDC, bitmap);
+        if (m_oldBitmap == NULL)
+            m_oldBitmap = previous;
 
         if (m_bitmap != NULL)
             DeleteObject(m_bitmap);

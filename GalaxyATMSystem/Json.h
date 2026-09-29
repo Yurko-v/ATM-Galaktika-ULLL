@@ -211,9 +211,13 @@ namespace Json
                         case L'b':  out += L'\b'; break;
                         case L'f':  out += L'\f'; break;
                         case L'u':
-                            if (m_pos + 4 < m_s.size())
+                            if (m_pos + 4 >= m_s.size() || !iswxdigit(m_s[m_pos + 1]) || !iswxdigit(m_s[m_pos + 2])
+                                || !iswxdigit(m_s[m_pos + 3]) || !iswxdigit(m_s[m_pos + 4]))
+                                return false;
                             {
-                                out += (wchar_t)wcstol(m_s.substr(m_pos + 1, 4).c_str(), nullptr, 16);
+                                const wchar_t code = (wchar_t)wcstol(m_s.substr(m_pos + 1, 4).c_str(), nullptr, 16);
+                                if (code != L'\0')
+                                    out += code;
                                 m_pos += 4;
                             }
                             break;

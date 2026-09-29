@@ -316,6 +316,15 @@ ApwResult ApwCheck(const std::vector<Zone>& zones,
         if (!z.active || !z.warns)
             continue;
 
+        const double south = (z.minLat - lat0) * kNmPerDegLat;
+        const double north = (z.maxLat - lat0) * kNmPerDegLat;
+        const double west = (z.minLon - lon0) * nmPerLon;
+        const double east = (z.maxLon - lon0) * nmPerLon;
+        const double dx = max(0.0, max(west, -east));
+        const double dy = max(0.0, max(south, -north));
+        if (sqrt(dx * dx + dy * dy) > reach)
+            continue;
+
         int lowFt = z.lowFt, highFt = z.highFt;
         if (TrackIsExempt(z.exempt, track))
         {
@@ -325,15 +334,6 @@ ApwResult ApwCheck(const std::vector<Zone>& zones,
             if (highFt < lowFt)
                 continue;
         }
-
-        const double south = (z.minLat - lat0) * kNmPerDegLat;
-        const double north = (z.maxLat - lat0) * kNmPerDegLat;
-        const double west = (z.minLon - lon0) * nmPerLon;
-        const double east = (z.maxLon - lon0) * nmPerLon;
-        const double dx = max(0.0, max(west, -east));
-        const double dy = max(0.0, max(south, -north));
-        if (sqrt(dx * dx + dy * dy) > reach)
-            continue;
 
         const Zone& zone = zones[i];
         ring.clear();
