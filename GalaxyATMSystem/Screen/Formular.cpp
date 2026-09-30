@@ -309,7 +309,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     si = nextId;
             }
             const char* handoffTarget = fp.GetHandoffTargetControllerId();
-            if (fpState == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED && handoffTarget != NULL && *handoffTarget != '\0')
+            const bool handoff = fpState == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED
+                || fpState == FLIGHT_PLAN_STATE_TRANSFER_TO_ME_INITIATED;
+            if (handoff && handoffTarget != NULL && *handoffTarget != '\0')
                 ident.push_back({ Widen(current != NULL ? current : "") + kHandoffArrow + Widen(handoffTarget),
                     Theme::FormularHandoff, kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
             else if (!si.empty())
