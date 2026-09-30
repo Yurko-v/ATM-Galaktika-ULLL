@@ -74,10 +74,6 @@ namespace Theme
     const COLORREF SpdButton    = RGB(0x8C, 0x8C, 0x88);
     const COLORREF SpdLine      = RGB(0xE6, 0xE6, 0xE6);
     const COLORREF SpdThumb     = RGB(0x9C, 0x9C, 0x9C);
-    const COLORREF RvsmBody     = RGB(0x5C, 0x7C, 0x55);
-    const COLORREF RvsmList     = RGB(0x1E, 0x1E, 0x20);
-    const COLORREF RvsmListEdge = RGB(0xD2, 0xD2, 0xCC);
-    const COLORREF RvsmTrack    = RGB(0xB4, 0xB6, 0xA8);
     const COLORREF XfrSelected  = RGB(0x3A, 0x3A, 0x3A);
     const COLORREF XfrTitleTop  = RGB(0x9C, 0xD8, 0xF2);
     const COLORREF XfrTitleTopInactive = RGB(0xE4, 0xE4, 0xE4);
@@ -131,7 +127,7 @@ namespace Theme
     const float    WakeArcWidth     = 2.0f;
     const double   WakeArcRadiusPx    = 21.0;
     const float    RouteWidth         = 1.5f;
-    const COLORREF RouteColor         = RGB(0xFF, 0xFF, 0x00);
+    const COLORREF RouteColor         = RGB(0xF0, 0xD7, 0x5A);
     const double   RoutePointRadiusPx = 2.5;
     const double   WakeArcStepPx      = 8.0;
     const double   WakeArcSweepDeg     = 40.0;

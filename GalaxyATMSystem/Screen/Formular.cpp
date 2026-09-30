@@ -972,6 +972,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     const bool transferWasOpen = m_xfrOpen && !m_xfrPicksRoutePoint && m_xfrCallsign == sCallsign;
     const bool copxWasOpen = m_xfrOpen && m_xfrPicksRoutePoint && m_xfrCallsign == sCallsign;
     const bool coordWasOpen = m_coordOpen && m_coordCallsign == sCallsign;
+    const bool freeTextWasOpen = m_ftOpen && m_ftCallsign == sCallsign;
     if (m_coordOpen)
         CloseCoordWindow();
     if (m_cflOpen)
@@ -1027,6 +1028,14 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     {
         if (!copxWasOpen)
             OpenCopxWindow(sCallsign);
+        RequestRefresh();
+        return;
+    }
+
+    if (hit != NULL && fp.IsValid() && (hit->fn == &kFnAtyp || hit->fn == &kFnAppAtyp) && button == BUTTON_RIGHT)
+    {
+        if (!freeTextWasOpen)
+            OpenFreeTextWindow(sCallsign);
         RequestRefresh();
         return;
     }

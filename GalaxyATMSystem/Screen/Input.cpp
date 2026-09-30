@@ -71,16 +71,16 @@ bool CGalaxyATMSystemRadarScreen::OnMouseWheel(int delta)
     if (delta == 0 || !Authorized())
         return false;
     const int rows = delta > 0 ? -max(1, delta / WHEEL_DELTA) : max(1, -delta / WHEEL_DELTA);
-    if (m_rcFloating && ScrollSectorList(rows))
-        return true;
     POINT cursor;
-    if (!CursorRadarPoint(cursor))
-        return false;
-    if (m_cflOpen && PtInRect(&m_cflArea, cursor))
+    if (m_cflOpen && CflCursor(cursor) && PtInRect(&m_cflArea, cursor))
     {
         ScrollCfl(rows);
         return true;
     }
+    if (m_rcFloating && ScrollSectorList(rows))
+        return true;
+    if (!CursorRadarPoint(cursor))
+        return false;
     if (m_spdOpen && PtInRect(&m_spdArea, cursor))
     {
         ScrollSpeed(rows);
@@ -354,6 +354,9 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_CFL_FIELD:
         m_cflEntryPending = true;
         m_cflPendingTick = GetTickCount64();
+        if (m_cflInList && m_rcFloating)
+            m_cflView = m_rcFloat.Handle();
+        else
         {
             POINT cursor;
             HWND view = NULL;
@@ -686,8 +689,10 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         if (!picked.IsValid() || Button != BUTTON_LEFT)
             break;
         OpenCflPicker(sObjectId, true);
-        if (!m_rcClickFromFloat)
-            m_cflAnchor = { m_rcArea.left, Area.top, m_rcArea.right, Area.bottom };
+        m_cflAnchor = Area;
+        m_cflInList = true;
+        if (m_rcClickFromFloat)
+            m_cflView = m_rcFloat.Handle();
         RequestRefresh();
         break;
     }
@@ -797,6 +802,12 @@ void CGalaxyATMSystemRadarScreen::OnDoubleClickScreenObject(int ObjectType, cons
     m_panelDirty = true;
     if (ObjectType == SO_RULER_LINE && Button == BUTTON_LEFT)
         RemoveRulerNear(Pt);
+    if (ObjectType == SO_XFR_ROW && Button == BUTTON_LEFT && m_xfrOpen && m_xfrPicksRoutePoint)
+    {
+        m_xfrSelected = atoi(sObjectId);
+        m_xfrEntry.Close();
+        ApplyTransfer();
+    }
 }
 
 void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sItemString, POINT Pt, RECT Area)

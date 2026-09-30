@@ -145,7 +145,7 @@ void CGalaxyATMSystemRadarScreen::DrawRvsmWindow(HDC hDC)
 
     fill(area, PopupFrame(m_rvsmPlacement));
     RECT body = { area.left + border, area.top + titleH, area.right - border, area.bottom - border };
-    fill(body, Theme::RvsmBody);
+    fill(body, Theme::SpdBody);
 
     SelectObject(hDC, GetTitleFont());
     RECT title = { area.left + border * 2, area.top, area.right - titleH, area.top + titleH };
@@ -163,8 +163,8 @@ void CGalaxyATMSystemRadarScreen::DrawRvsmWindow(HDC hDC)
     y += rowH + gap;
 
     RECT listBox = { x0, y, x1, y + listH };
-    fill(listBox, Theme::RvsmList);
-    frame(listBox, Theme::RvsmListEdge);
+    fill(listBox, RGB(0, 0, 0));
+    frame(listBox, Theme::SpdLine);
     RECT list = { listBox.left + line, listBox.top + line, listBox.right - line - scrollW, listBox.bottom - line };
     for (int i = 0; i < kRvsmStatusCount; i++)
     {
@@ -180,20 +180,17 @@ void CGalaxyATMSystemRadarScreen::DrawRvsmWindow(HDC hDC)
         AddHotButton(hDC, SO_RVSM_ROW, id, row, "");
     }
 
-    RECT track = { list.right, list.top, listBox.right - line, list.bottom };
-    fill(track, Theme::RvsmTrack);
+    RECT track = { list.right, listBox.top, listBox.right, listBox.bottom };
+    frame(track, Theme::SpdLine);
     RECT up = { track.left, track.top, track.right, track.top + scrollW };
     RECT down = { track.left, track.bottom - scrollW, track.right, track.bottom };
-    RECT thumb = { track.left, up.bottom, track.right, up.bottom + scrollW };
-    fill(thumb, Theme::RvsmList);
     for (const RECT* b : { &up, &down })
     {
-        fill(*b, Theme::RvsmList);
-        frame(*b, Theme::RvsmTrack);
+        frame(*b, Theme::SpdLine);
         const int m = max(1, scrollW / 6);
         RECT mark = { (b->left + b->right) / 2 - m, (b->top + b->bottom) / 2 - m,
                       (b->left + b->right) / 2 + m, (b->top + b->bottom) / 2 + m };
-        frame(mark, Theme::RvsmListEdge);
+        frame(mark, Theme::SpdLine);
     }
 
     RestoreDC(hDC, saved);

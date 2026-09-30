@@ -383,13 +383,22 @@ void CGalaxyATMSystemRadarScreen::DrawSpeedWindow(HDC hDC)
     for (int i = 0; i < 3; i++)
     {
         RECT row = { x0, y, x1, y + rowH };
-        const int cy = (row.top + row.bottom) / 2;
-        HBRUSH b = CreateSolidBrush(i == m_spdMode ? Theme::Text : Theme::SpdBody);
-        HGDIOBJ ob = SelectObject(hDC, b), op = SelectObject(hDC, linePen);
-        Ellipse(hDC, x0, cy - dot / 2, x0 + dot, cy + dot / 2);
-        SelectObject(hDC, ob);
-        SelectObject(hDC, op);
-        DeleteObject(b);
+        {
+            const Gdiplus::REAL left = x0 + 0.5f, top = (row.top + row.bottom - dot) / 2.0f + 0.5f;
+            const Gdiplus::REAL side = (Gdiplus::REAL)dot, round = dot / 2.5f;
+            Gdiplus::GraphicsPath box;
+            box.AddArc(left, top, round, round, 180.0f, 90.0f);
+            box.AddArc(left + side - round, top, round, round, 270.0f, 90.0f);
+            box.AddArc(left + side - round, top + side - round, round, round, 0.0f, 90.0f);
+            box.AddArc(left, top + side - round, round, round, 90.0f, 90.0f);
+            box.CloseFigure();
+            Gdiplus::Graphics g(hDC);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            Gdiplus::SolidBrush face(Theme::GdiColor(i == m_spdMode ? Theme::Text : Theme::SpdBody));
+            Gdiplus::Pen edge(Theme::GdiColor(Theme::SpdLine), (Gdiplus::REAL)line);
+            g.FillPath(&face, &box);
+            g.DrawPath(&edge, &box);
+        }
         RECT tr = { x0 + dot + rowH / 5, row.top, x1, row.bottom };
         text(tr, modes[i], Theme::Text, DT_LEFT);
         char id[4];

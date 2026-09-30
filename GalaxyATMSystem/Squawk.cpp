@@ -30,6 +30,7 @@ namespace
 
     const size_t kMaxQueue = 100;
     const size_t kMaxAnswers = 200;
+    const char* const kConflictError = "conflict";
 }
 
 SquawkClient::~SquawkClient()
@@ -264,7 +265,7 @@ void SquawkClient::Run()
                 m_pending.erase(pending);
             if (answer.error.empty())
                 m_errors.erase(answer.callsign);
-            else
+            else if (request.byUser || answer.error == kConflictError)
                 m_errors[answer.callsign] = answer.error;
             if (m_answers.size() < kMaxAnswers)
                 m_answers.push_back(std::move(answer));

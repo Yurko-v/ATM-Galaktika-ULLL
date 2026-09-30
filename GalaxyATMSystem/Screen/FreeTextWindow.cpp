@@ -115,8 +115,10 @@ void CGalaxyATMSystemRadarScreen::DrawFreeTextWindow(HDC hDC)
 
     const int border = max(2, L / 8);
     const int line = max(1, L / 12);
-    const int width = L * 9;
     const int titleH = L * 6 / 5;
+    const std::wstring caption = L"Edit Free Text - " + Widen(m_ftCallsign.c_str());
+    const int width = max(L * 9, (int)Theme::MeasureText(hDC, GetSpeedFont(), caption.c_str()).cx
+        + titleH + 3 * border + L / 2);
     const int pad = L / 4;
     const int rowH = L * 6 / 5;
     const int height = titleH + pad + rowH + pad + rowH + pad + border;
@@ -169,7 +171,6 @@ void CGalaxyATMSystemRadarScreen::DrawFreeTextWindow(HDC hDC)
     SelectObject(hDC, GetSpeedFont());
     RECT close = { area.right - titleH, area.top, area.right - border, area.top + titleH };
     RECT title = { area.left + border * 2, area.top, close.left, area.top + titleH };
-    const std::wstring caption = L"Edit Free Text - " + Widen(m_ftCallsign.c_str());
     text(title, caption.c_str(), DT_LEFT);
     text(close, L"\x00D7", DT_CENTER);
     AddScreenObject(SO_FT_CLOSE, "FT_CLOSE", close, false, "");

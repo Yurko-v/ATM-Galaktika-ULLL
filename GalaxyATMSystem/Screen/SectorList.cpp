@@ -491,8 +491,10 @@ void CGalaxyATMSystemRadarScreen::DrawSectorList(HDC hDC, RECT area, int scale, 
     }
     RcObject(SO_RC_RESIZE, "RC_RESIZE", grip, true, Tr("Потяните, чтобы изменить размер"));
 
-    m_rcDrawingFloat = false;
     RestoreDC(hDC, saved);
+    if (m_cflOpen && m_cflInList)
+        DrawCflPicker(hDC, area);
+    m_rcDrawingFloat = false;
 }
 
 namespace

@@ -23,6 +23,7 @@ void CGalaxyATMSystemRadarScreen::OpenCflPicker(const char* callsign, bool xfl)
     m_cflOpen = true;
     m_cflPlacement = PopupPlacement();
     m_cflAnchor = { 0, 0, 0, 0 };
+    m_cflInList = false;
     m_cflPicksExitLevel = xfl;
     m_cflCallsign = callsign;
     m_cflTopRow = 0;
@@ -111,14 +112,15 @@ void CGalaxyATMSystemRadarScreen::TickCflPicker()
         return;
 
     auto label = m_formulars.find(m_cflCallsign);
-    if (label == m_formulars.end() || label->second.items.empty())
+    const bool labelShown = label != m_formulars.end() && !label->second.items.empty();
+    if (m_cflInList ? !m_rcOpen : !labelShown)
     {
         CloseCflPicker();
         return;
     }
 
     POINT cursor;
-    const bool onRadar = CursorRadarPoint(cursor);
+    const bool onRadar = CflCursor(cursor);
     TrackPopupActive(m_cflPlacement, m_cflArea, onRadar, cursor);
 
     int hover = -1;
@@ -137,7 +139,7 @@ void CGalaxyATMSystemRadarScreen::TickCflPicker()
     if (down && !m_cflButtonsDown)
     {
         const bool inside = onRadar
-            && (PtInRect(&m_cflArea, cursor) || PtInRect(&label->second.area, cursor));
+            && (PtInRect(&m_cflArea, cursor) || PtInRect(m_cflInList ? &m_cflAnchor : &label->second.area, cursor));
         if (!inside && !m_cflEntry.IsOpen())
         {
             m_cflButtonsDown = down;
@@ -166,12 +168,35 @@ void CGalaxyATMSystemRadarScreen::TickCflPicker()
     }
 }
 
-void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
+bool CGalaxyATMSystemRadarScreen::CflCursor(POINT& out)
+{
+    if (!(m_cflInList && m_rcFloating))
+        return CursorRadarPoint(out);
+    if (!m_rcFloat.Visible() || !GetCursorPos(&out) || WindowFromPoint(out) != m_rcFloat.Handle())
+        return false;
+    return ScreenToClient(m_rcFloat.Handle(), &out) != FALSE;
+}
+
+void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC, const RECT& bounds)
 {
     auto label = m_formulars.find(m_cflCallsign);
-    const bool anchored = m_cflAnchor.right > m_cflAnchor.left;
-    if (!anchored && (label == m_formulars.end() || label->second.items.empty()))
+    if (!m_cflInList && (label == m_formulars.end() || label->second.items.empty()))
         return;
+    const bool toFloat = m_cflInList && m_rcDrawingFloat;
+    auto object = [&](int type, const char* id, const RECT& r)
+    {
+        if (m_cflInList)
+            RcObject(type, id, r, false, "");
+        else
+            AddScreenObject(type, id, r, false, "");
+    };
+    auto button = [&](int type, const char* id, const RECT& r)
+    {
+        if (toFloat)
+            RcObject(type, id, r, false, "");
+        else
+            AddHotButton(hDC, type, id, r, "");
+    };
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_cflCallsign.c_str());
     if (!fp.IsValid())
         return;
@@ -197,16 +222,20 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
     const int width = pad + listW + 2 + scrollW + pad;
     const int height = pad + listH + pad + cellH + pad;
 
-    const RECT& box = anchored ? m_cflAnchor : label->second.area;
-    RECT ra = GetRadarArea();
+    const RECT& box = m_cflInList ? m_cflAnchor : label->second.area;
     int left = box.right + 1;
-    if (left + width > ra.right)
+    if (left + width > bounds.right)
         left = box.left - 1 - width;
-    const RECT area = PlacePopup(m_cflPlacement, left, max(ra.top, min(box.top, ra.bottom - height)), width, height);
+    const int wantTop = max(bounds.top, min(box.top, bounds.bottom - height));
+    const RECT area = m_cflInList ? RECT{ left, wantTop, left + width, wantTop + height }
+                                  : PlacePopup(m_cflPlacement, left, wantTop, width, height);
     left = area.left;
     const int top = area.top;
     m_cflArea = area;
-    AddScreenObject(SO_CFL_WINDOW, "CFL_WINDOW", area, true, "");
+    if (m_cflInList)
+        object(SO_CFL_WINDOW, "CFL_WINDOW", area);
+    else
+        AddScreenObject(SO_CFL_WINDOW, "CFL_WINDOW", area, true, "");
 
     HBRUSH frame = CreateSolidBrush(PopupFrame(m_cflPlacement));
     FillRect(hDC, &area, frame);
@@ -254,7 +283,7 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
             {
                 char id[8];
                 sprintf_s(id, "%d", levels[idx]);
-                AddScreenObject(SO_CFL_LEVEL, id, hit, false, "");
+                object(SO_CFL_LEVEL, id, hit);
                 m_cflCells.push_back(std::make_pair(hit, levels[idx]));
             }
         }
@@ -290,9 +319,9 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
         FillRect(hDC, &thumb, tb);
         DeleteObject(tb);
     }
-    AddScreenObject(SO_CFL_TRACK, "CFL_TRACK", inner, false, "");
-    AddHotButton(hDC, SO_CFL_UP, "CFL_UP", up, "");
-    AddHotButton(hDC, SO_CFL_DOWN, "CFL_DOWN", down, "");
+    object(SO_CFL_TRACK, "CFL_TRACK", inner);
+    button(SO_CFL_UP, "CFL_UP", up);
+    button(SO_CFL_DOWN, "CFL_DOWN", down);
     DeleteObject(line);
     DeleteObject(black);
 
@@ -314,16 +343,16 @@ void CGalaxyATMSystemRadarScreen::DrawCflPicker(HDC hDC)
         SetTextColor(hDC, Theme::CflFieldText);
         DrawTextW(hDC, text, -1, &textR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
-    AddHotButton(hDC, SO_CFL_FIELD, "CFL_FIELD", field, "");
+    button(SO_CFL_FIELD, "CFL_FIELD", field);
 
-    HBRUSH okFill = CreateSolidBrush(Hot(ok) ? Theme::HoverFill : Theme::CflButton);
+    HBRUSH okFill = CreateSolidBrush(!toFloat && Hot(ok) ? Theme::HoverFill : Theme::CflButton);
     HPEN okPen = CreatePen(PS_SOLID, 1, Theme::CflCellLine);
     SelectObject(hDC, okFill);
     SelectObject(hDC, okPen);
     RoundRect(hDC, ok.left, ok.top, ok.right, ok.bottom, 6, 6);
     SetTextColor(hDC, Theme::Text);
     DrawTextW(hDC, L"Ok", -1, &ok, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    AddScreenObject(SO_CFL_OK, "CFL_OK", ok, false, "");
+    object(SO_CFL_OK, "CFL_OK", ok);
 
     RestoreDC(hDC, saved);
     DeleteObject(okFill);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/Common.h"
+#include "Screen/Airspace.h"
 
 namespace Galaxy
 {
@@ -63,14 +64,16 @@ namespace Galaxy
         return passed;
     }
 
-    inline std::string ExitPointFor(CFlightPlan& fp, const std::string& agreed = "", bool firExit = false)
+    inline std::string ExitPointFor(CFlightPlan& fp, const std::string& agreed = "", bool zoneExit = false)
     {
         static std::set<std::string> reported;
         const char* coordinated = fp.GetExitCoordinationPointName();
+        const std::string zone = zoneExit ? ZoneExitPoint(fp) : std::string();
         const struct { const char* name; const char* source; } candidates[] = {
             { agreed.c_str(), "agreed" },
             { CoordinationHolds(fp.GetExitCoordinationNameState()) ? coordinated : NULL, "exit coordination" },
-            { firExit ? fp.GetNextFirCopxPointName() : NULL, "next FIR COPX" },
+            { zone.c_str(), "zone exit" },
+            { zoneExit ? fp.GetNextFirCopxPointName() : NULL, "next FIR COPX" },
             { fp.GetNextCopxPointName(), "next COPX" },
             { coordinated, "exit point" },
         };

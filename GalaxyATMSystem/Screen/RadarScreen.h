@@ -306,11 +306,6 @@ private:
     };
     bool m_xfrOpen = false;
     PopupPlacement m_xfrPlacement;
-    static const ULONGLONG kXfrVerdictRecheckMs = 1000;
-    std::string m_xfrVerdictPoint;
-    std::string m_xfrVerdictCallsign;
-    ULONGLONG m_xfrVerdictTick = 0;
-    bool m_xfrVerdictDirect = false;
     bool m_xfrPicksRoutePoint = false;
     std::string m_xfrCallsign;
     std::vector<XfrPosition> m_xfrPositions;
@@ -374,6 +369,7 @@ private:
     PopupPlacement m_cflPlacement;
     bool m_cflPicksExitLevel = false;
     RECT m_cflAnchor = { 0, 0, 0, 0 };
+    bool m_cflInList = false;
     std::string m_cflCallsign;
     int  m_cflTopRow = 0;
     int  m_cflHoverLevel = -1;
@@ -389,7 +385,8 @@ private:
     TextEntry m_cflEntry;
     void OpenCflPicker(const char* callsign, bool xfl = false);
     void CloseCflPicker();
-    void DrawCflPicker(HDC hDC);
+    void DrawCflPicker(HDC hDC, const RECT& bounds);
+    bool CflCursor(POINT& out);
     void ApplyCfl(int fl);
     void ApplyCflText(const std::wstring& text);
     void ScrollCfl(int rows);
@@ -700,6 +697,7 @@ private:
 
     int  m_rulerButton;
     bool m_rulerButtonDown;
+    bool m_rulerHotkeyDown = false;
 
     bool m_rulerPressPending;
     bool m_rulerArmed;

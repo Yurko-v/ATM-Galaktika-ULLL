@@ -213,8 +213,8 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
         }
         if (m_coordOpen)
             Timed(PerfSection::CoordWindow, [&] { DrawCoordWindow(hDC); });
-        if (m_cflOpen)
-            DrawCflPicker(hDC);
+        if (m_cflOpen && !m_cflInList)
+            DrawCflPicker(hDC, GetRadarArea());
         if (m_spdOpen)
             DrawSpeedWindow(hDC);
         if (m_ahdgOpen)

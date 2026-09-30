@@ -11,6 +11,7 @@ namespace Galaxy
         int topFt = 0;
         std::vector<std::string> owners;
         std::vector<CPosition> ring;
+        double area = 0.0;
     };
 
     enum class PointZone { Mine, Junction, Unowned, Other, Unknown };
@@ -160,6 +161,17 @@ namespace Galaxy
         return best;
     }
 
+    inline double RingArea(const std::vector<CPosition>& ring)
+    {
+        double twice = 0.0;
+        for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
+        {
+            const double k = cos((ring[i].m_Latitude + ring[j].m_Latitude) * M_PI / 360.0);
+            twice += (ring[j].m_Longitude - ring[i].m_Longitude) * k * (ring[j].m_Latitude + ring[i].m_Latitude);
+        }
+        return fabs(twice) / 2.0;
+    }
+
     inline const std::vector<AirspaceSector>& AirspaceSectors()
     {
         static std::vector<AirspaceSector> sectors;
@@ -244,6 +256,7 @@ namespace Galaxy
                     border.push_back(found->second);
             }
             entry.first.ring = ChainBorder(border);
+            entry.first.area = RingArea(entry.first.ring);
             if (entry.first.ring.size() >= 3)
                 sectors.push_back(entry.first);
         }
@@ -285,6 +298,79 @@ namespace Galaxy
             best = min(best, sqrt(cx * cx + cy * cy));
         }
         return best;
+    }
+
+    inline const AirspaceSector* SectorAt(const CPosition& p, int altFt)
+    {
+        const AirspaceSector* best = NULL;
+        for (const AirspaceSector& s : AirspaceSectors())
+        {
+            if (s.owners.empty() || altFt < s.bottomFt || altFt >= s.topFt || !InsideRing(s.ring, p))
+                continue;
+            if (best == NULL || s.area < best->area)
+                best = &s;
+        }
+        return best;
+    }
+
+    inline bool InsideZoneOf(const std::string& owner, const CPosition& p, int altFt)
+    {
+        for (const AirspaceSector& s : AirspaceSectors())
+        {
+            if (s.owners.empty() || s.owners[0] != owner || altFt < s.bottomFt || altFt >= s.topFt)
+                continue;
+            if (InsideRing(s.ring, p) || DistanceToRingNm(s.ring, p) <= kJunctionNm)
+                return true;
+        }
+        return false;
+    }
+
+    inline const ULONGLONG kZoneExitRecheckMs = 2000;
+    inline const size_t kZoneExitMemoLimit = 1024;
+
+    inline std::string ZoneExitPoint(CFlightPlan& fp)
+    {
+        struct Memo
+        {
+            std::string point;
+            ULONGLONG tick;
+        };
+        static std::map<std::string, Memo> memo;
+        const ULONGLONG now = GetTickCount64();
+        const std::string callsign = fp.GetCallsign();
+        auto known = memo.find(callsign);
+        if (known != memo.end() && now - known->second.tick < kZoneExitRecheckMs)
+            return known->second.point;
+        if (memo.size() > kZoneExitMemoLimit)
+            memo.clear();
+
+        std::string point;
+        CRadarTarget rt = fp.GetCorrelatedRadarTarget();
+        CRadarTargetPositionData pos = rt.IsValid() ? rt.GetPosition() : fp.GetFPTrackPosition();
+        const int altFt = pos.IsValid() ? pos.GetFlightLevel() : 0;
+        const AirspaceSector* here = pos.IsValid() ? SectorAt(pos.GetPosition(), altFt) : NULL;
+        if (here != NULL)
+        {
+            CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
+            std::string lastInside;
+            for (int i = max(0, route.GetPointsCalculatedIndex()); i < route.GetPointsNumber(); i++)
+            {
+                if (!InsideZoneOf(here->owners[0], route.GetPointPosition(i), altFt))
+                {
+                    point = lastInside;
+                    break;
+                }
+                const char* name = route.GetPointName(i);
+                if (name != NULL && *name != '\0')
+                    lastInside = name;
+            }
+        }
+
+        if (known == memo.end() || known->second.point != point)
+            Log::Info("formular", callsign + ": exit from the zone of " + (here != NULL ? here->owners[0] : std::string("-"))
+                + " is " + (point.empty() ? std::string("unknown") : point));
+        memo[callsign] = { point, now };
+        return point;
     }
 
     inline std::string SectorOwner(const AirspaceSector& s, const std::set<std::string>& online)

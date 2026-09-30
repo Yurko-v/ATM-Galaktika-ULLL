@@ -75,6 +75,9 @@ std::string CGalaxyATMSystemPlugin::MyPosition() const
 
 std::string CGalaxyATMSystemPlugin::AssignedSquawk(const CFlightPlan& fp) const
 {
+    const char* assigned = fp.GetControllerAssignedData().GetSquawk();
+    if (assigned != NULL && IsSquawkCode(assigned))
+        return assigned;
     if (m_squawk.Enabled())
     {
         auto held = m_squawk.Assignments();
@@ -82,8 +85,7 @@ std::string CGalaxyATMSystemPlugin::AssignedSquawk(const CFlightPlan& fp) const
         if (it != held->end())
             return it->second;
     }
-    const char* assigned = fp.GetControllerAssignedData().GetSquawk();
-    return assigned != NULL ? assigned : "";
+    return "";
 }
 
 COLORREF CGalaxyATMSystemPlugin::SquawkColor(const CFlightPlan& fp, CRadarTarget rt,

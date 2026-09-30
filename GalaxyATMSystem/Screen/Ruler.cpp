@@ -3,6 +3,11 @@
 
 using namespace Galaxy;
 
+namespace
+{
+    const int kRulerHotkey = 'Q';
+}
+
 bool CGalaxyATMSystemRadarScreen::FindNearbyTarget(POINT pt, std::string& callsignOut)
 {
     const double thresholdPx = 20.0;
@@ -197,7 +202,6 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
             m_hdgDragCancelled = false;
     }
 
-    if (m_rulerButton != 0)
     {
         HWND fg = GetForegroundWindow();
         DWORD pid = 0;
@@ -206,13 +210,17 @@ void CGalaxyATMSystemRadarScreen::PollRulerButton()
         if (pid != GetCurrentProcessId())
         {
             m_rulerButtonDown = false;
+            m_rulerHotkeyDown = false;
             return;
         }
 
-        bool down = (GetAsyncKeyState(m_rulerButton) & 0x8000) != 0;
-        if (down && !m_rulerButtonDown)
+        const bool button = m_rulerButton != 0 && (GetAsyncKeyState(m_rulerButton) & 0x8000) != 0;
+        const bool hotkey = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0
+            && (GetAsyncKeyState(kRulerHotkey) & 0x8000) != 0;
+        if ((button && !m_rulerButtonDown) || (hotkey && !m_rulerHotkeyDown))
             m_rulerPressPending = true;
-        m_rulerButtonDown = down;
+        m_rulerButtonDown = button;
+        m_rulerHotkeyDown = hotkey;
     }
 
     if (m_rulerPressPending || m_rulerArmed || m_rulerPlacing)

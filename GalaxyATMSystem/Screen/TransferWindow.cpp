@@ -411,25 +411,8 @@ void CGalaxyATMSystemRadarScreen::DrawTransferWindow(HDC hDC)
     y += listH + R / 3;
 
     SelectObject(hDC, GetSpeedFont());
-    bool direct = false;
-    if (m_xfrPicksRoutePoint && m_xfrSelected >= 0 && m_xfrSelected < (int)m_xfrPositions.size())
-    {
-        const std::string& point = m_xfrPositions[m_xfrSelected].callsign;
-        const ULONGLONG now = GetTickCount64();
-        if (m_xfrVerdictPoint != point || m_xfrVerdictCallsign != m_xfrCallsign
-            || now - m_xfrVerdictTick >= kXfrVerdictRecheckMs)
-        {
-            CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_xfrCallsign.c_str());
-            m_xfrVerdictDirect = PointDirectable(fp, point);
-            m_xfrVerdictPoint = point;
-            m_xfrVerdictCallsign = m_xfrCallsign;
-            m_xfrVerdictTick = now;
-        }
-        direct = m_xfrVerdictDirect;
-    }
-    const wchar_t* labels[2] = { !m_xfrPicksRoutePoint ? L"\x041F\x0435\x0440\x0435\x0434\x0430\x0442\x044C"
-                                 : direct ? L"\x0421\x043F\x0440\x044F\x043C\x0438\x0442\x044C"
-                                 : L"\x0421\x043E\x0433\x043B\x0430\x0441\x043E\x0432\x0430\x0442\x044C",
+    const wchar_t* labels[2] = { m_xfrPicksRoutePoint ? L"\x0421\x043F\x0440\x044F\x043C\x0438\x0442\x044C"
+                                 : L"\x041F\x0435\x0440\x0435\x0434\x0430\x0442\x044C",
                                  L"\x041E\x0442\x0434\x0430\x0442\x044C" };
     const int shift = R / 6;
     for (int i = 0; i < (m_xfrPicksRoutePoint ? 1 : 2); i++)
