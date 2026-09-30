@@ -806,7 +806,13 @@ void CGalaxyATMSystemRadarScreen::OnDoubleClickScreenObject(int ObjectType, cons
     {
         m_xfrSelected = atoi(sObjectId);
         m_xfrEntry.Close();
-        ApplyTransfer();
+        CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_xfrCallsign.c_str());
+        if (fp.IsValid() && m_xfrSelected >= 0 && m_xfrSelected < (int)m_xfrPositions.size()
+            && PointDirectable(fp, m_xfrPositions[m_xfrSelected].callsign))
+            ApplyTransfer();
+        else
+            Log::Info("formular", m_xfrCallsign + ": double click outside my sector only selects the point");
+        RequestRefresh();
     }
 }
 
