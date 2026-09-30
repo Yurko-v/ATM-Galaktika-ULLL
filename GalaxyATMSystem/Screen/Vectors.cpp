@@ -9,12 +9,10 @@ COLORREF CGalaxyATMSystemRadarScreen::GetTagColorForFlightPlan(CFlightPlan fp)
         return RGB(150, 150, 150);
 
     int state = fp.GetState();
-    if (state == FLIGHT_PLAN_STATE_ASSUMED)
+    if (state == FLIGHT_PLAN_STATE_ASSUMED || state == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED)
         return RGB(255, 255, 255);
     if (state == FLIGHT_PLAN_STATE_TRANSFER_TO_ME_INITIATED)
         return RGB(0, 255, 255);
-    if (state == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED)
-        return RGB(255, 128, 0);
     return RGB(150, 150, 150);
 }
 

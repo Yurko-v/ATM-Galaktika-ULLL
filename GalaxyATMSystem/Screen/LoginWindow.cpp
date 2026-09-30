@@ -135,6 +135,12 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     const int W = 420;
     const int H = kTitleH + kPad + kLine + kRowGap + LF_COUNT * (kFieldH + kRowGap) + 2 * kLine + kGap + kBtnH + kPad;
 
+    if (m_loginCollapsed)
+    {
+        DrawCollapsedLogin(hDC);
+        return;
+    }
+
     RECT ra = GetRadarArea();
     if (!m_loginPositioned)
     {
@@ -161,10 +167,13 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
 
     RECT close = { win.right - 26, title.top + 4, win.right - 8, title.bottom - 4 };
     DrawCloseCross(hDC, close, Theme::MenuText);
+    RECT collapse = { close.left - 22, close.top, close.left - 4, close.bottom };
+    DrawCollapseBar(hDC, collapse, Theme::MenuText);
 
     AddScreenObject(SO_LOGIN_WINDOW, "LOGIN_WINDOW", win, false, "");
     AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", title, true, Tr("Перетащите окно"));
     AddButton(hDC, SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, Tr("Закрыть"));
+    AddButton(hDC, SO_LOGIN_COLLAPSE, "LOGIN_COLLAPSE", collapse, Tr("Свернуть"));
 
     std::wstring message;
     const CGalaxyATMSystemPlugin::LoginState state = Plugin()->MyLogin(&message);
@@ -274,6 +283,53 @@ void CGalaxyATMSystemRadarScreen::DrawLoginWindow(HDC hDC)
     if (m_entryField >= 0)
         m_entry.Move(m_loginFields[m_entryField]);
     m_loginDrawnTick = GetTickCount64();
+}
+
+void CGalaxyATMSystemRadarScreen::DrawCollapsedLogin(HDC hDC)
+{
+    const int kTitleH = 24, kButtonsW = 52, kPad = 10;
+    const std::wstring caption = Tr(L"Вход в систему КСА");
+    const int W = (int)Theme::MeasureText(hDC, m_fonts.WinTitle, caption).cx + 2 * kPad + kButtonsW;
+    const int H = kTitleH + 4;
+
+    RECT ra = GetRadarArea();
+    if (!m_loginCollapsedPlaced)
+    {
+        m_loginCollapsedArea.left = m_loginArea.left;
+        m_loginCollapsedArea.top = m_loginArea.top;
+        m_loginCollapsedPlaced = true;
+    }
+    m_loginCollapsedArea.left   = max(ra.left, min(m_loginCollapsedArea.left, ra.right - W));
+    m_loginCollapsedArea.top    = max(ra.top, min(m_loginCollapsedArea.top, ra.bottom - H));
+    m_loginCollapsedArea.right  = m_loginCollapsedArea.left + W;
+    m_loginCollapsedArea.bottom = m_loginCollapsedArea.top + H;
+    const RECT win = m_loginCollapsedArea;
+
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+    Theme::WinFill(hDC, win, Theme::MenuBarFill);
+    Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
+
+    RECT close = { win.right - 26, win.top + 6, win.right - 8, win.bottom - 6 };
+    DrawCloseCross(hDC, close, Theme::MenuText);
+    RECT expand = { close.left - 22, close.top, close.left - 4, close.bottom };
+    DrawExpandBox(hDC, expand, Theme::MenuText);
+    RECT title = { win.left + kPad, win.top, expand.left, win.bottom };
+    Theme::DrawLine(hDC, title, caption, m_fonts.WinTitle, Theme::MenuText, DT_LEFT | DT_VCENTER);
+
+    RECT header = { win.left, win.top, expand.left, win.bottom };
+    AddScreenObject(SO_LOGIN_HEADER, "LOGIN_HEADER", header, true, Tr("Перетащите окно"));
+    AddButton(hDC, SO_LOGIN_COLLAPSE, "LOGIN_EXPAND", expand, Tr("Развернуть"));
+    AddButton(hDC, SO_LOGIN_CLOSE, "LOGIN_CLOSE", close, Tr("Закрыть"));
+    RestoreDC(hDC, saved);
+    m_loginDrawnTick = GetTickCount64();
+}
+
+void CGalaxyATMSystemRadarScreen::ToggleLoginCollapsed()
+{
+    CommitEntry();
+    m_loginCollapsed = !m_loginCollapsed;
+    RequestRefresh();
 }
 
 void CGalaxyATMSystemRadarScreen::EditLoginField(int field)
@@ -396,5 +452,6 @@ void CGalaxyATMSystemRadarScreen::CloseLoginWindow()
     m_entryField = -1;
     m_loginProblem.clear();
     m_loginWindowOpen = false;
+    m_loginCollapsed = false;
     RequestRefresh();
 }

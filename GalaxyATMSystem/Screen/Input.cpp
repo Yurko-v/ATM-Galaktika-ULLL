@@ -502,6 +502,9 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_LOGIN_CLOSE:
         CloseLoginWindow();
         break;
+    case SO_LOGIN_COLLAPSE:
+        ToggleLoginCollapsed();
+        break;
     case SO_LOGIN_FIELD:
         EditLoginField(atoi(sObjectId));
         break;
@@ -829,6 +832,12 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
 
     Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
 
+    if (FunctionId == FN_COPX_CANCEL || FunctionId == FN_COPX_MANCOORD)
+    {
+        DecideCopx(FunctionId == FN_COPX_MANCOORD, Pt, Area);
+        return;
+    }
+
     if (FunctionId == FN_RC_FILTER_CALLSIGN || FunctionId == FN_RC_FILTER_BEFORE
         || FunctionId == FN_RC_FILTER_AFTER)
     {
@@ -1066,7 +1075,7 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
     else if (ObjectType == SO_ATIS_LETTER_HEADER)
         target = &m_atisLetterArea;
     else if (ObjectType == SO_LOGIN_HEADER)
-        target = &m_loginArea;
+        target = m_loginCollapsed ? &m_loginCollapsedArea : &m_loginArea;
     else
         return;
 

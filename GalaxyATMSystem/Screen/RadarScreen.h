@@ -183,6 +183,7 @@ private:
         const FormularFn* fn;
         std::string text;
     };
+    enum class CoordDecision { None, Cancelled, Manual };
     struct CoordWatch
     {
         int lastState = 0;
@@ -192,6 +193,7 @@ private:
         ULONGLONG resultAt = 0;
         bool wasMine = false;
         int myReply = 0;
+        CoordDecision decision = CoordDecision::None;
     };
     struct FormularState
     {
@@ -214,6 +216,9 @@ private:
     std::map<std::string, FormularState> m_formulars;
     int AgreedXfl(EuroScopePlugIn::CFlightPlan& fp);
     std::string AgreedCopx(EuroScopePlugIn::CFlightPlan& fp);
+    std::string m_copxMenuCallsign;
+    bool OpenCopxDecisionMenu(EuroScopePlugIn::CFlightPlan& fp, const RECT& area);
+    void DecideCopx(bool manual, POINT pt, RECT area);
 
     POINT m_hotCursor = { 0, 0 };
     bool  m_hotValid = false;
@@ -534,8 +539,13 @@ private:
     RECT m_loginFields[LF_COUNT];
     RECT m_loginArea;
     bool m_loginPositioned;
+    bool m_loginCollapsed = false;
+    RECT m_loginCollapsedArea = { 0, 0, 0, 0 };
+    bool m_loginCollapsedPlaced = false;
     ULONGLONG m_loginDrawnTick;
     void DrawLoginWindow(HDC hDC);
+    void DrawCollapsedLogin(HDC hDC);
+    void ToggleLoginCollapsed();
     void CloseLoginWindow();
     void SendLogin();
 
@@ -790,6 +800,7 @@ const int SO_MENU_BAR     = 91;
 const int SO_LOGIN_WINDOW   = 93;
 const int SO_LOGIN_FIELD    = 94;
 const int SO_LOGIN_SEND     = 95;
+const int SO_LOGIN_COLLAPSE = 96;
 const int SO_LOGIN_HEADER   = 97;
 const int SO_LOGIN_CLOSE    = 98;
 const int SO_LOGIN_REGISTER = 99;
@@ -864,3 +875,5 @@ const int FN_LOGIN_FIELD    = 310;
 const int FN_RC_FILTER_CALLSIGN = 305;
 const int FN_RC_FILTER_BEFORE   = 306;
 const int FN_RC_FILTER_AFTER    = 307;
+const int FN_COPX_CANCEL        = 320;
+const int FN_COPX_MANCOORD      = 321;

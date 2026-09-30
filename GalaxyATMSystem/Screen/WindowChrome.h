@@ -20,6 +20,28 @@ namespace Galaxy
         g.FillPolygon(&brush, tip, 3);
     }
 
+    inline void DrawCollapseBar(HDC hDC, const RECT& r, COLORREF ink)
+    {
+        const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+        const int arm = 5;
+        RECT bar = { cx - arm, cy + 2, cx + arm + 1, cy + 4 };
+        HBRUSH brush = CreateSolidBrush(ink);
+        FillRect(hDC, &bar, brush);
+        DeleteObject(brush);
+    }
+
+    inline void DrawExpandBox(HDC hDC, const RECT& r, COLORREF ink)
+    {
+        const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+        const int arm = 5;
+        RECT box = { cx - arm, cy - arm, cx + arm + 1, cy + arm + 1 };
+        HBRUSH brush = CreateSolidBrush(ink);
+        FrameRect(hDC, &box, brush);
+        RECT top = { box.left, box.top, box.right, box.top + 2 };
+        FillRect(hDC, &top, brush);
+        DeleteObject(brush);
+    }
+
     inline void DrawCloseCross(HDC hDC, const RECT& close, COLORREF ink)
     {
         const int cx = (close.left + close.right) / 2, cy = (close.top + close.bottom) / 2;

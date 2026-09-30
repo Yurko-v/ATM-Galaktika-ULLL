@@ -52,6 +52,8 @@ namespace Lang
             { L"Доступ приостановлен",           L"Access suspended" },
             { L"Уведомление",                    L"Notice" },
             { L"Закрыть",                        L"Close" },
+            { L"Свернуть",                       L"Collapse" },
+            { L"Развернуть",                     L"Expand" },
             { L"Согласование",                   L"Coordination" },
             { L"Принять согласование",           L"Accept the coordination" },
             { L"Отклонить согласование",         L"Reject the coordination" },

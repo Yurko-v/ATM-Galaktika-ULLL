@@ -292,7 +292,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 if (nextId != NULL && *nextId != '\0')
                     si = nextId;
             }
-            if (!si.empty())
+            const char* handoffTarget = fp.GetHandoffTargetControllerId();
+            if (fpState == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED && handoffTarget != NULL && *handoffTarget != '\0')
+                ident.push_back({ Widen(((current != NULL ? current : "") + std::string("->") + handoffTarget).c_str()),
+                    Theme::FormularHandoff, kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
+            else if (!si.empty())
                 ident.push_back({ Widen(si.c_str()), base,
                     kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
             if (ctrLabel && !expanded)
@@ -430,6 +434,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             const int entryState = fp.GetEntryCoordinationAltitudeState();
             auto track = [now, &st, &callsign](CoordWatch& w, bool exit, int s, int fl, const char* point = NULL)
             {
+                if (s == COORDINATION_STATE_REQUESTED_BY_ME && w.lastState != COORDINATION_STATE_REQUESTED_BY_ME)
+                    w.decision = CoordDecision::None;
                 if ((s == COORDINATION_STATE_REQUESTED_BY_ME || s == COORDINATION_STATE_REQUESTED_BY_OTHER)
                     && point != NULL)
                     w.pointName = point;
@@ -440,16 +446,25 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     const std::string nowPoint = point != NULL ? point : "";
                     const bool valueKept = point != NULL ? _stricmp(nowPoint.c_str(), w.pointName.c_str()) == 0
                                                          : fl == w.levelFt;
-                    if (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.myReply != 0)
+                    if (w.decision == CoordDecision::Cancelled)
+                        w.result = COORDINATION_STATE_REFUSED;
+                    else if (w.decision == CoordDecision::Manual)
+                        w.result = COORDINATION_STATE_MANUAL_ACCEPTED;
+                    else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.myReply != 0)
                         w.result = w.myReply;
                     else if (s == COORDINATION_STATE_ACCEPTED || s == COORDINATION_STATE_MANUAL_ACCEPTED
                         || s == COORDINATION_STATE_REFUSED)
                         w.result = s;
                     else
                         w.result = valueKept ? COORDINATION_STATE_ACCEPTED : COORDINATION_STATE_REFUSED;
-                    w.resultAt = now;
+                    const bool cancelled = w.decision == CoordDecision::Cancelled;
+                    if (w.decision == CoordDecision::None)
+                        w.resultAt = now;
+                    if (cancelled)
+                        w.result = 0;
+                    w.decision = CoordDecision::None;
                     w.wasMine = (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME);
-                    const bool accepted = w.result != COORDINATION_STATE_REFUSED;
+                    const bool accepted = !cancelled && w.result != COORDINATION_STATE_REFUSED;
                     if (accepted && point != NULL && !w.pointName.empty())
                         (exit ? st.agreedCopx : st.agreedEntryPoint) = w.pointName;
                     else if (accepted && point == NULL && w.levelFt > 0)
@@ -457,7 +472,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     Log::Info("formular", callsign + ": coordination " + (point != NULL ? "DCT " + w.pointName
                         : "level " + std::to_string(w.levelFt)) + " state " + std::to_string(w.lastState)
                         + " -> " + std::to_string(s) + ", now " + (point != NULL ? nowPoint : std::to_string(fl))
-                        + (accepted ? ", agreed" : ", refused"));
+                        + (cancelled ? ", cancelled here" : accepted ? ", agreed" : ", refused"));
                 }
                 if (s != COORDINATION_STATE_REQUESTED_BY_OTHER)
                     w.myReply = 0;
@@ -488,7 +503,18 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     return false;
                 COLORREF ink;
                 bool mine;
-                if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME || w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
+                if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::Cancelled)
+                {
+                    return false;
+                }
+                else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::Manual)
+                {
+                    if (now - w.resultAt >= kCoordResultMs)
+                        return false;
+                    ink = Theme::FormularGreen;
+                    mine = true;
+                }
+                else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME || w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
                 {
                     ink = Theme::DuplicateText;
                     mine = (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME);
@@ -1045,7 +1071,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
 
     if (hit != NULL && fp.IsValid() && hit->fn == &kFnCopx && button == BUTTON_RIGHT)
     {
-        if (!copxWasOpen)
+        if (!copxWasOpen && !OpenCopxDecisionMenu(fp, hit->rect))
             OpenCopxWindow(sCallsign);
         RequestRefresh();
         return;

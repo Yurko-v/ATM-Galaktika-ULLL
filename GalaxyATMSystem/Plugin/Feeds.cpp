@@ -52,6 +52,9 @@ std::vector<std::string> CGalaxyATMSystemPlugin::AtisAirportsOnAir() const
             && std::find(out.begin(), out.end(), icao) == out.end())
             out.push_back(icao);
     }
+    for (const auto& live : m_atisLive)
+        if (live.first != home && std::find(out.begin(), out.end(), live.first) == out.end())
+            out.push_back(live.first);
     return out;
 }
 
@@ -109,10 +112,24 @@ void CGalaxyATMSystemPlugin::StartAtisFetch()
         return;
 
     std::vector<std::string> airports;
-    if (!AirportIcao().empty())
-        airports.push_back(AirportIcao());
+    std::set<std::string> listed;
+    auto add = [&](const std::string& icao)
+    {
+        if (icao.size() == 4 && listed.insert(icao).second)
+            airports.push_back(icao);
+    };
+    add(AirportIcao());
     for (const std::wstring& airport : m_config.AtisAirports())
-        airports.push_back(Narrow(airport));
+        add(Narrow(airport));
+    for (CSectorElement e = SectorFileElementSelectFirst(SECTOR_ELEMENT_AIRPORT); e.IsValid();
+         e = SectorFileElementSelectNext(e, SECTOR_ELEMENT_AIRPORT))
+    {
+        const char* name = e.GetName();
+        std::string icao;
+        for (const char* p = name; p != NULL && *p != '\0' && icao.size() < 5; p++)
+            icao += (char)toupper((unsigned char)*p);
+        add(icao);
+    }
     if (airports.empty())
         return;
 

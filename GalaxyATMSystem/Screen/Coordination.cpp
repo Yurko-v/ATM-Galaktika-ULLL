@@ -76,6 +76,59 @@ bool CGalaxyATMSystemRadarScreen::SendCoordination(CFlightPlan& fp, const std::s
     return true;
 }
 
+bool CGalaxyATMSystemRadarScreen::OpenCopxDecisionMenu(CFlightPlan& fp, const RECT& area)
+{
+    const std::string callsign = fp.GetCallsign();
+    FormularState& st = m_formulars[callsign];
+    const bool entry = TrackedByOther(fp);
+    const CoordWatch& w = entry ? st.entryPoint : st.exitPoint;
+    const std::string& agreed = entry ? st.agreedEntryPoint : st.agreedCopx;
+    const bool pending = w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::None;
+    const bool holds = !agreed.empty() && !PointPassed(fp, agreed.c_str());
+    if (!pending && !holds)
+        return false;
+
+    m_copxMenuCallsign = callsign;
+    GetPlugIn()->OpenPopupList(area, "COPX", 1);
+    GetPlugIn()->AddPopupListElement("Cancel", "", FN_COPX_CANCEL);
+    GetPlugIn()->AddPopupListElement("ManCoord", "", FN_COPX_MANCOORD, false, POPUP_ELEMENT_NO_CHECKBOX, !pending);
+    return true;
+}
+
+void CGalaxyATMSystemRadarScreen::DecideCopx(bool manual, POINT pt, RECT area)
+{
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_copxMenuCallsign.c_str());
+    if (!fp.IsValid())
+        return;
+    FormularState& st = m_formulars[m_copxMenuCallsign];
+    const bool entry = TrackedByOther(fp);
+    CoordWatch& w = entry ? st.entryPoint : st.exitPoint;
+    std::string& agreed = entry ? st.agreedEntryPoint : st.agreedCopx;
+    const bool pending = w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::None;
+
+    if (manual && pending)
+    {
+        StartTagFunction(m_copxMenuCallsign.c_str(), NULL, 0, w.pointName.c_str(), NULL,
+            TAG_ITEM_FUNCTION_ACCEPT_MANUAL_COORDINATION, pt, area);
+        w.decision = CoordDecision::Manual;
+        w.result = COORDINATION_STATE_MANUAL_ACCEPTED;
+        w.resultAt = GetTickCount64();
+        w.wasMine = true;
+        agreed = w.pointName;
+        Log::Info("formular", m_copxMenuCallsign + ": DCT " + w.pointName + " coordinated manually");
+    }
+    else if (!manual)
+    {
+        if (pending)
+            w.decision = CoordDecision::Cancelled;
+        w.result = 0;
+        Log::Info("formular", m_copxMenuCallsign + ": coordination DCT "
+            + (pending ? w.pointName : agreed) + " cancelled");
+        agreed.clear();
+    }
+    RequestRefresh();
+}
+
 bool CGalaxyATMSystemRadarScreen::PointDirectable(CFlightPlan& fp, const std::string& point, std::string* ownerId)
 {
     if (ownerId != NULL)

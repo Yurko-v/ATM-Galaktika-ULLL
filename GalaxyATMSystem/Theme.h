@@ -54,6 +54,7 @@ namespace Theme
     const COLORREF FormularPicked = RGB(0x68, 0xE0, 0xAD);
     const COLORREF FormularVfr   = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF FormularGreen = RGB(0x00, 0xDC, 0x00);
+    const COLORREF FormularHandoff = DuplicateText;
 
     const int TrackHistoryDots = 5;
 
