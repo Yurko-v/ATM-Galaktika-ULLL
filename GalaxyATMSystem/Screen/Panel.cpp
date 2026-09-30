@@ -148,6 +148,13 @@ void CGalaxyATMSystemRadarScreen::DrawPanel(HDC hDC)
     m_panelArea.left = ra.right - width;
     m_panelArea.top = m_collapsed ? PanelTop() : PanelTop() + MenuBarHeight();
     m_panelArea.bottom = m_panelArea.top + height;
+    if (m_collapsed)
+    {
+        const int dx = max((int)(ra.left - m_panelArea.left), min((int)m_collapsedShift.x, 0));
+        const int dy = max(0, min((int)m_collapsedShift.y, (int)(ra.bottom - m_panelArea.bottom)));
+        m_collapsedShift = { dx, dy };
+        OffsetRect(&m_panelArea, dx, dy);
+    }
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
@@ -197,6 +204,13 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
     DeleteObject(pen);
     AddButton(hDC, SO_PANEL_COLLAPSE, "PANEL_COLLAPSE", toggle,
         m_collapsed ? Tr("Развернуть панель") : Tr("Свернуть панель"));
+    if (m_collapsed)
+    {
+        const RECT beside = { m_panelArea.left, m_panelArea.top, toggle.left, m_panelArea.bottom };
+        const RECT below = { toggle.left, toggle.bottom, m_panelArea.right, m_panelArea.bottom };
+        AddScreenObject(SO_PANEL_DRAG, "PANEL_DRAG", beside, true, Tr("Перетащите окно"));
+        AddScreenObject(SO_PANEL_DRAG, "PANEL_DRAG", below, true, Tr("Перетащите окно"));
+    }
 
     SYSTEMTIME st;
     GetSystemTime(&st);

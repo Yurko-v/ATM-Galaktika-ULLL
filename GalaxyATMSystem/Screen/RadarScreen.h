@@ -586,6 +586,9 @@ private:
     RECT  m_panelArea;
     bool  m_visible;
     bool  m_collapsed;
+    POINT m_collapsedShift = { 0, 0 };
+    bool  m_collapsedDragging = false;
+    POINT m_collapsedGrab = { 0, 0 };
 
     enum class AuthState { LoggedOut, LoggedIn };
     AuthState m_authState;
@@ -932,6 +935,7 @@ const int SO_RULER_CANVAS  = 40;
 const int SO_MAP_MENU      = 170;
 const int SO_MAP_MENU_ITEM = 171;
 const int SO_MAP_CANVAS    = 172;
+const int SO_PANEL_DRAG    = 173;
 const int SO_RULER_LINE    = 41;
 const int SO_RULER_LABEL   = 42;
 

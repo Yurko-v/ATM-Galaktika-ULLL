@@ -904,6 +904,22 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
 {
     if (ObjectType == SO_VV_SLIDER)
         m_panelDirty = true;
+    if (ObjectType == SO_PANEL_DRAG)
+    {
+        if (!m_collapsedDragging)
+        {
+            m_collapsedDragging = true;
+            m_collapsedGrab = { Pt.x - m_panelArea.left, Pt.y - m_panelArea.top };
+        }
+        const RECT ra = GetRadarArea();
+        m_collapsedShift = { Pt.x - m_collapsedGrab.x - (ra.right - kCollapsedWidth),
+                             Pt.y - m_collapsedGrab.y - PanelTop() };
+        if (Released)
+            m_collapsedDragging = false;
+        m_panelDirty = true;
+        RequestRefresh();
+        return;
+    }
     if (ObjectType == SO_FORMULAR_AHDG)
     {
         const bool leftHeld = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;

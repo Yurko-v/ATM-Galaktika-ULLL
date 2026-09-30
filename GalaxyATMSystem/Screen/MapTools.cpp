@@ -483,7 +483,7 @@ void CGalaxyATMSystemRadarScreen::DrawMapSketches(HDC hDC)
         const POINT at = ConvertCoordFromPositionToPixel(m_mapTexts[i].at);
         const SIZE size = Theme::MeasureText(hDC, font, m_mapTexts[i].text);
         RECT r = { at.x, at.y - size.cy / 2, at.x + size.cx + 1, at.y + size.cy / 2 + 1 };
-        Theme::DrawLine(hDC, r, m_mapTexts[i].text, font, Theme::MapSketch, DT_LEFT | DT_VCENTER | DT_NOCLIP);
+        Theme::DrawLine(hDC, r, m_mapTexts[i].text, font, Theme::MapText, DT_LEFT | DT_VCENTER | DT_NOCLIP);
     }
     RestoreDC(hDC, saved);
 }
