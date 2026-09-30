@@ -258,6 +258,9 @@
     <ClCompile Include="Screen\CallsignMenu.cpp">
       <Filter>Screen</Filter>
     </ClCompile>
+    <ClCompile Include="Screen\InfoLine.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
     <ClCompile Include="Screen\MapTools.cpp">
       <Filter>Screen</Filter>
     </ClCompile>

@@ -244,6 +244,7 @@ private:
     bool CallsignMenuItemEnabled(CallsignMenuItem item);
     void RunCallsignMenuItem(CallsignMenuItem item);
     void DrawCallsignMenu(HDC hDC);
+    void ShowEsInfoLine(EuroScopePlugIn::CFlightPlan& fp, HWND view);
     void TickCallsignMenu();
 
     POINT m_hotCursor = { 0, 0 };
