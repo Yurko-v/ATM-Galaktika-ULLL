@@ -33,7 +33,6 @@ namespace Galaxy
         COLORREF color;
         const FormularFn* fn;
         COLORREF back = CLR_INVALID;
-        bool fullBright = false;
     };
 
     inline const char* const kTopSky = "TopSky plugin";

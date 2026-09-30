@@ -195,11 +195,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         std::vector<FormularRun> warnings;
         if (simulator && correlated)
             warnings.push_back({ fp.GetSimulated() ? L"{*}" : L"{}", base, &kFnSimulation });
-        const RvsmStatus rvsm = correlated ? RvsmStatusOf(fp) : RvsmStatus::Approved;
-        if (rvsm == RvsmStatus::NotApproved)
-            warnings.push_back({ L"N", Theme::RvsmMark, NULL, CLR_INVALID, true });
-        else if (rvsm == RvsmStatus::Exempt)
-            warnings.push_back({ L"E", Theme::RvsmMark, NULL, CLR_INVALID, true });
         if (sq != NULL)
         {
             auto dup = codeCount.find(sq);
@@ -284,8 +279,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             warnings.push_back({ L"V", Theme::FormularVfr, NULL });
 
         for (FormularRun& run : warnings)
-            if (!run.fullBright)
-                run.color = RGB(GetRValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
+            run.color = RGB(GetRValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
                 GetGValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
                 GetBValue(run.color) * Theme::FormularWarningBrightnessPct / 100);
 
@@ -405,8 +399,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 base, correlated ? &kFnGs : NULL });
         if (english && !expanded)
             levels.push_back({ L"\x221A", base, NULL });
-        if (ctrLabel && expanded && correlated && RvsmStatusOf(fp) == RvsmStatus::Approved)
-            levels.push_back({ L"R", base, NULL });
+        if (ctrLabel && expanded && correlated)
+        {
+            const RvsmStatus rvsm = RvsmStatusOf(fp);
+            if (rvsm == RvsmStatus::Approved)
+                levels.push_back({ L"R", base, NULL });
+            else if (rvsm == RvsmStatus::NotApproved)
+                levels.push_back({ L"N", Theme::RvsmMark, NULL });
+            else if (rvsm == RvsmStatus::Exempt)
+                levels.push_back({ L"E", Theme::RvsmMark, NULL });
+        }
 
         std::wstring ahdgText, aspText, arcText;
         if (correlated)
