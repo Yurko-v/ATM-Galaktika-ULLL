@@ -152,6 +152,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
             if (it != g_pollTimers.end())
             {
                 it->second->PollRulerButton();
+                it->second->PollRouteClearKey();
                 it->second->AutoLogin();
                 it->second->TickEntry();
             }

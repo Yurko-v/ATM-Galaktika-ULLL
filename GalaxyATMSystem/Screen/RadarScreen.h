@@ -439,7 +439,11 @@ private:
     void DrawTargetVectors(HDC hDC);
     void DrawWakeArcs(HDC hDC);
     std::set<std::string> m_routeShown;
+    bool m_routeClearKeyDown = false;
+    bool m_entryOpenBeforeKey = false;
     void DrawRoutes(HDC hDC);
+    bool AnyEntryOpen() const;
+    void PollRouteClearKey();
     struct VectorLabel
     {
         POINT mark;
