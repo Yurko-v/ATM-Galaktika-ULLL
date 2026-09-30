@@ -141,17 +141,31 @@ void CGalaxyATMSystemRadarScreen::ApplyTransfer()
     {
         std::string owner;
         if (!fp.IsValid() || target.empty())
+        {
             Log::Warn("formular", m_xfrCallsign + ": no point to coordinate DCT to");
-        else if (!PointDirectable(fp, target, &owner))
-            SendCoordination(fp, target, 0, owner);
-        else if (fp.GetControllerAssignedData().SetDirectToPointName(target.c_str()))
-            Log::Info("formular", m_xfrCallsign + ": DCT " + target + " inside my sector");
+        }
         else
-            CoordinationFailed(m_xfrCallsign, L"EuroScope \x043D\x0435 \x0432\x044B\x043F\x043E\x043B\x043D\x0438\x043B \x0441\x043F\x0440\x044F\x043C\x043B\x0435\x043D\x0438\x0435",
-                "DCT " + target + " refused by EuroScope");
+        {
+            PointDirectable(fp, target, &owner);
+            SendCoordination(fp, target, 0, owner);
+        }
     }
     else if (fp.IsValid() && !target.empty() && !fp.InitiateHandoff(target.c_str()))
         Log::Warn("formular", m_xfrCallsign + ": EuroScope refused handoff to " + target);
+    CloseTransferWindow();
+}
+
+void CGalaxyATMSystemRadarScreen::DirectToTransferPoint(int index)
+{
+    if (index < 0 || index >= (int)m_xfrPositions.size())
+        return;
+    const std::string point = m_xfrPositions[index].callsign;
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_xfrCallsign.c_str());
+    if (fp.IsValid() && fp.GetControllerAssignedData().SetDirectToPointName(point.c_str()))
+        Log::Info("formular", m_xfrCallsign + ": DCT " + point);
+    else
+        CoordinationFailed(m_xfrCallsign, L"EuroScope \x043D\x0435 \x0432\x044B\x043F\x043E\x043B\x043D\x0438\x043B \x0441\x043F\x0440\x044F\x043C\x043B\x0435\x043D\x0438\x0435",
+            "DCT " + point + " refused by EuroScope");
     CloseTransferWindow();
 }
 
@@ -411,7 +425,7 @@ void CGalaxyATMSystemRadarScreen::DrawTransferWindow(HDC hDC)
     y += listH + R / 3;
 
     SelectObject(hDC, GetSpeedFont());
-    const wchar_t* labels[2] = { m_xfrPicksRoutePoint ? L"\x0421\x043F\x0440\x044F\x043C\x0438\x0442\x044C"
+    const wchar_t* labels[2] = { m_xfrPicksRoutePoint ? L"\x0421\x043E\x0433\x043B\x0430\x0441\x043E\x0432\x0430\x0442\x044C"
                                  : L"\x041F\x0435\x0440\x0435\x0434\x0430\x0442\x044C",
                                  L"\x041E\x0442\x0434\x0430\x0442\x044C" };
     const int shift = R / 6;

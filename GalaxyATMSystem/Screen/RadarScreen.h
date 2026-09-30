@@ -331,6 +331,7 @@ private:
     void DrawTransferWindow(HDC hDC);
     void ScrollTransfer(int rows);
     void ApplyTransfer();
+    void DirectToTransferPoint(int index);
     void ReleaseTransfer();
     void TickTransferWindow();
 
