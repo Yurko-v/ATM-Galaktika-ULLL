@@ -398,12 +398,14 @@ private:
     void ScrollCfl(int rows);
     void TickCflPicker();
     HWND m_popupView = NULL;
-    bool WantsWheel() const { return m_cflOpen || m_spdOpen || m_ahdgOpen || m_xfrOpen || m_atisOpen || m_visible; }
+    bool WantsWheel() const { return m_cflOpen || m_spdOpen || m_ahdgOpen || m_xfrOpen || m_atisOpen || m_visible
+        || m_authState == AuthState::LoggedIn; }
     void UpdateWheelHook();
     bool WheelDropdown(POINT cursor, int rows);
 public:
     bool OnMouseWheel(int delta);
     bool OnSideButton();
+    bool OnMouseButton(WPARAM message, POINT screenPt);
     static void ReleaseWheelHook();
     void Shutdown();
 private:
@@ -450,6 +452,73 @@ private:
     void DrawRoutes(HDC hDC);
     bool AnyEntryOpen() const;
     void PollRouteClearKey();
+
+    struct MapText
+    {
+        EuroScopePlugIn::CPosition at;
+        std::wstring text;
+    };
+    struct MapLine
+    {
+        std::vector<EuroScopePlugIn::CPosition> points;
+    };
+    struct MapCircle
+    {
+        EuroScopePlugIn::CPosition center;
+        int radiusKm = 0;
+    };
+    enum class MapTool { None, Line, Circle };
+    enum class MapMenuItem { ClearRoutes, Measure, RemoveMeasures, AddText, EditText, DeleteText,
+                             AddLine, DeleteLine, ClearLines, Circle, Count };
+    std::vector<MapText> m_mapTexts;
+    std::vector<MapLine> m_mapLines;
+    std::vector<MapCircle> m_mapCircles;
+    MapTool m_mapTool = MapTool::None;
+    MapLine m_mapLineDraft;
+    int m_mapCircleEditing = -1;
+    bool m_mapMenuOpen = false;
+    POINT m_mapMenuAt = { 0, 0 };
+    EuroScopePlugIn::CPosition m_mapMenuPos;
+    RECT m_mapMenuArea = { 0, 0, 0, 0 };
+    bool m_mapMenuButtonsDown = true;
+    HWND m_mapView = NULL;
+    int m_mapTextEditing = -1;
+    EuroScopePlugIn::CPosition m_mapTextPos;
+    TextEntry m_mapEntry;
+    bool m_mapEntryPending = false;
+    ULONGLONG m_mapEntryPendingTick = 0;
+    ULONGLONG m_mapDrawnTick = 0;
+    RECT m_mapEntryRect = { 0, 0, 0, 0 };
+    std::wstring m_mapEntryText;
+    bool m_rightDown = false;
+    bool m_rightMoved = false;
+    POINT m_rightDownScreen = { 0, 0 };
+    POINT m_rightDownClient = { 0, 0 };
+    HWND m_rightDownView = NULL;
+    ULONGLONG m_rightDownTick = 0;
+    bool m_rightClickPending = false;
+    ULONGLONG m_rightUpTick = 0;
+    ULONGLONG m_lastObjectClickTick = 0;
+    bool m_panning = false;
+    POINT m_panStart = { 0, 0 };
+    EuroScopePlugIn::CPosition m_panLeftDown, m_panRightUp;
+    double m_panLonPerPx = 0.0, m_panLatPerPx = 0.0;
+    void TickMapTools();
+    void DrawMapSketches(HDC hDC);
+    void DrawMapMenu(HDC hDC);
+    void OpenMapMenu(POINT at, HWND view);
+    void CloseMapMenu();
+    bool MapMenuItemEnabled(MapMenuItem item);
+    void RunMapMenuItem(MapMenuItem item);
+    int  NearestMapText(POINT pt, double thresholdPx);
+    bool NearestMapShape(POINT pt, double thresholdPx, int& line, int& circle);
+    void OpenMapTextEntry(int index);
+    void CommitMapText();
+    void FinishMapTool();
+    void MapCanvasClick(POINT pt, int button);
+    bool WheelMapCircle(int rows);
+    bool RightClickOnEmptyRadar(POINT pt);
+    std::vector<POINT> MapCirclePath(const MapCircle& c);
     struct VectorLabel
     {
         POINT mark;
@@ -860,6 +929,9 @@ const int SO_FORMULAR      = 89;
 const int SO_FORMULAR_AHDG = 92;
 
 const int SO_RULER_CANVAS  = 40;
+const int SO_MAP_MENU      = 170;
+const int SO_MAP_MENU_ITEM = 171;
+const int SO_MAP_CANVAS    = 172;
 const int SO_RULER_LINE    = 41;
 const int SO_RULER_LABEL   = 42;
 

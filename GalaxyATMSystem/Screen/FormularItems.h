@@ -151,6 +151,28 @@ namespace Galaxy
         g.FillPolygon(&brush, head, 4);
     }
 
+    const wchar_t kHandoffArrow = L'\x2192';
+
+    inline void DrawHandoffArrow(Gdiplus::Graphics& g, const RECT& slot, COLORREF ink)
+    {
+        const Gdiplus::REAL h = (Gdiplus::REAL)(slot.bottom - slot.top);
+        const Gdiplus::REAL cy = slot.top + h * 0.55f;
+        const Gdiplus::REAL left = slot.left + h * 0.08f, right = slot.right - h * 0.08f;
+        const Gdiplus::REAL headW = min((right - left) * 0.5f, h * 0.34f);
+        const Gdiplus::REAL halfH = h * 0.2f;
+
+        Gdiplus::Pen shaft(Theme::GdiColor(ink), max(1.5f, h / 9.0f));
+        g.DrawLine(&shaft, left, cy, right - headW * 0.72f, cy);
+        const Gdiplus::PointF head[] = {
+            Gdiplus::PointF(right, cy),
+            Gdiplus::PointF(right - headW, cy - halfH),
+            Gdiplus::PointF(right - headW * 0.72f, cy),
+            Gdiplus::PointF(right - headW, cy + halfH),
+        };
+        Gdiplus::SolidBrush brush(Theme::GdiColor(ink));
+        g.FillPolygon(&brush, head, 4);
+    }
+
     inline char TopSkySpeedModifier(const CFlightPlanControllerAssignedData& assigned)
     {
         const char* annotation = assigned.GetFlightStripAnnotation(kTopSkySpeedAnnotation);

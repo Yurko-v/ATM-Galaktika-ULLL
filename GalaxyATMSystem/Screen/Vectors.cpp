@@ -228,7 +228,8 @@ void CGalaxyATMSystemRadarScreen::DrawTargetVectors(HDC hDC)
 
 bool CGalaxyATMSystemRadarScreen::AnyEntryOpen() const
 {
-    for (const TextEntry* entry : { &m_spdEntry, &m_ahdgEntry, &m_xfrEntry, &m_ftEntry, &m_cflEntry, &m_entry, &m_rcEntry })
+    for (const TextEntry* entry : { &m_spdEntry, &m_ahdgEntry, &m_xfrEntry, &m_ftEntry, &m_cflEntry, &m_entry, &m_rcEntry,
+                                    &m_mapEntry })
         if (entry->IsOpen())
             return true;
     return false;
@@ -242,7 +243,16 @@ void CGalaxyATMSystemRadarScreen::PollRouteClearKey()
         GetWindowThreadProcessId(fg, &pid);
     const bool down = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
     const bool entryOpen = AnyEntryOpen();
-    if (down && !m_routeClearKeyDown && !entryOpen && !m_entryOpenBeforeKey && !m_routeShown.empty())
+    const bool pressed = down && !m_routeClearKeyDown && !entryOpen && !m_entryOpenBeforeKey;
+    if (pressed && m_mapMenuOpen)
+    {
+        CloseMapMenu();
+    }
+    else if (pressed && m_mapTool != MapTool::None)
+    {
+        FinishMapTool();
+    }
+    else if (pressed && !m_routeShown.empty())
     {
         Log::Info("formular", "ESC: routes hidden for " + std::to_string(m_routeShown.size()) + " aircraft");
         m_routeShown.clear();

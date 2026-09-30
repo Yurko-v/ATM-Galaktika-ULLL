@@ -117,6 +117,8 @@ namespace Theme
 
     const COLORREF Ruler        = RGB(0xE0, 0xC9, 0x9A);
     const float    RulerWidth   = 1.0f;
+    const COLORREF MapSketch    = RGB(0x9C, 0xD8, 0xF2);
+    const float    MapSketchWidth = 1.5f;
 
     const float    VectorWidth       = 1.7f;
     const double   VectorTickGap     = 3.0;

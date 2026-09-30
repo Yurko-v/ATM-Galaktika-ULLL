@@ -195,12 +195,20 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
                 m_rulerPlacing ? Tr("ЛКМ - конец линейки, ПКМ - отмена")
                                : Tr("ЛКМ - начало линейки, ПКМ - отмена"));
         }
+        else if (m_mapTool != MapTool::None)
+        {
+            AddScreenObject(SO_MAP_CANVAS, "MAP_CANVAS", GetRadarArea(), false,
+                m_mapTool == MapTool::Line ? Tr("ЛКМ - точка линии, ПКМ - закончить")
+                                           : Tr("Колесо - радиус, ЛКМ/ПКМ - готово"));
+        }
+        const bool sketching = m_rulerArmed || m_rulerPlacing || m_mapTool != MapTool::None;
 
         {
             Theme::AntiAliased smoothVectors;
             Timed(PerfSection::WakeArcs, [&] { DrawWakeArcs(hDC); });
             if (!m_routeShown.empty())
                 DrawRoutes(hDC);
+            DrawMapSketches(hDC);
 
             if (m_vecDistEnabled || m_vecTimeEnabled || m_vecByPlan)
                 Timed(PerfSection::TargetVectors, [&] { DrawTargetVectors(hDC); });
@@ -209,7 +217,7 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
         Timed(PerfSection::TargetSymbols, [&] { DrawTargetSymbols(hDC); });
         {
             Theme::AntiAliased smoothFormulars;
-            Timed(PerfSection::Formulars, [&] { DrawFormulars(hDC, !(m_rulerArmed || m_rulerPlacing)); });
+            Timed(PerfSection::Formulars, [&] { DrawFormulars(hDC, !sketching); });
         }
         if (m_coordOpen)
             Timed(PerfSection::CoordWindow, [&] { DrawCoordWindow(hDC); });
@@ -289,6 +297,8 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
 
             if (m_openDropdown != DropdownKind::None)
                 DrawDropdownList(hDC);
+            if (m_mapMenuOpen)
+                DrawMapMenu(hDC);
         });
     }
 

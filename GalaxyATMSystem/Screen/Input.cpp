@@ -20,6 +20,11 @@ namespace
         if (code == HC_ACTION && (wp == WM_XBUTTONDOWN || wp == WM_XBUTTONDBLCLK) && g_wheelScreen != NULL
             && g_wheelScreen->OnSideButton())
             return 1;
+        if (code == HC_ACTION && g_wheelScreen != NULL
+            && (wp == WM_MBUTTONDOWN || wp == WM_MBUTTONUP || wp == WM_MOUSEMOVE
+                || wp == WM_RBUTTONDOWN || wp == WM_RBUTTONUP)
+            && g_wheelScreen->OnMouseButton(wp, ((const MOUSEHOOKSTRUCT*)lp)->pt))
+            return 1;
         return CallNextHookEx(g_wheelHook, code, wp, lp);
     }
 }
@@ -71,6 +76,8 @@ bool CGalaxyATMSystemRadarScreen::OnMouseWheel(int delta)
     if (delta == 0 || !Authorized())
         return false;
     const int rows = delta > 0 ? -max(1, delta / WHEEL_DELTA) : max(1, -delta / WHEEL_DELTA);
+    if (WheelMapCircle(rows))
+        return true;
     POINT cursor;
     if (m_cflOpen && CflCursor(cursor) && PtInRect(&m_cflArea, cursor))
     {
@@ -155,8 +162,21 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     POINT Pt, RECT Area, int Button)
 {
     m_panelDirty = true;
+    m_lastObjectClickTick = GetTickCount64();
     switch (ObjectType)
     {
+    case SO_MAP_MENU:
+        return;
+    case SO_MAP_MENU_ITEM:
+    {
+        const int item = atoi(sObjectId);
+        if (item >= 0 && item < (int)MapMenuItem::Count)
+            RunMapMenuItem((MapMenuItem)item);
+        return;
+    }
+    case SO_MAP_CANVAS:
+        MapCanvasClick(Pt, Button);
+        return;
     case SO_FT_WINDOW:
         return;
     case SO_COORD_WINDOW:

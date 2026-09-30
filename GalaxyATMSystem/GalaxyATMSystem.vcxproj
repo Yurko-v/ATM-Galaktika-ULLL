@@ -186,6 +186,7 @@
     <ClCompile Include="Screen\RvsmWindow.cpp" />
     <ClCompile Include="Screen\Targets.cpp" />
     <ClCompile Include="Screen\TransferWindow.cpp" />
+    <ClCompile Include="Screen\MapTools.cpp" />
     <ClCompile Include="Screen\Vectors.cpp" />
     <ClCompile Include="Screen\ZoneMap.cpp" />
   </ItemGroup>

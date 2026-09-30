@@ -81,7 +81,19 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (known != m_runWidths.end())
             return known->second;
         SIZE sz = { 0, 0 };
-        GetTextExtentPoint32W(hDC, text.c_str(), (int)text.size(), &sz);
+        const size_t arrowAt = text.find(kHandoffArrow);
+        if (arrowAt == std::wstring::npos)
+        {
+            GetTextExtentPoint32W(hDC, text.c_str(), (int)text.size(), &sz);
+        }
+        else
+        {
+            SIZE part = { 0, 0 };
+            GetTextExtentPoint32W(hDC, text.c_str(), (int)arrowAt, &part);
+            sz.cx = part.cx + lineH;
+            GetTextExtentPoint32W(hDC, text.c_str() + arrowAt + 1, (int)(text.size() - arrowAt - 1), &part);
+            sz.cx += part.cx;
+        }
         m_runWidths.emplace(text, (int)sz.cx);
         return (int)sz.cx;
     };
@@ -112,10 +124,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         POINT from, to;
         COLORREF color;
     };
+    enum class ArrowKind { Up, Down, Handoff };
     struct PendingArrow
     {
         RECT slot;
-        bool up;
+        ArrowKind kind;
         COLORREF ink;
     };
     std::vector<PendingLeader> leaders;
@@ -135,7 +148,12 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         }
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
         for (const PendingArrow& a : arrows)
-            DrawTrendArrow(g, a.slot, a.up, a.ink);
+        {
+            if (a.kind == ArrowKind::Handoff)
+                DrawHandoffArrow(g, a.slot, a.ink);
+            else
+                DrawTrendArrow(g, a.slot, a.kind == ArrowKind::Up, a.ink);
+        }
         leaders.clear();
         arrows.clear();
     };
@@ -294,7 +312,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
             const char* handoffTarget = fp.GetHandoffTargetControllerId();
             if (fpState == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED && handoffTarget != NULL && *handoffTarget != '\0')
-                ident.push_back({ Widen(((current != NULL ? current : "") + std::string("->") + handoffTarget).c_str()),
+                ident.push_back({ Widen(current != NULL ? current : "") + kHandoffArrow + Widen(handoffTarget),
                     Theme::FormularHandoff, kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
             else if (!si.empty())
                 ident.push_back({ Widen(si.c_str()), base,
@@ -841,7 +859,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 const COLORREF ink = back != CLR_INVALID ? Theme::Text
                     : rcPicked ? Theme::FormularPicked
                     : (boxed && run.color == base) ? Theme::Text : run.color;
-                const bool special = run.text == L"\x221A" || run.text == L"\x2191" || run.text == L"\x2193";
+                const size_t handoffArrowAt = run.text.find(kHandoffArrow);
+                const bool special = run.text == L"\x221A" || run.text == L"\x2191" || run.text == L"\x2193"
+                    || handoffArrowAt != std::wstring::npos;
                 const bool plain = back == CLR_INVALID && !special;
                 if (!plain || (!group.empty() && groupInk != ink))
                     flushGroup();
@@ -878,7 +898,18 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 else if (run.text == L"\x2191" || run.text == L"\x2193")
                 {
                     const RECT slot = { x, y, x + runWidths[l][r], y + lineH };
-                    arrows.push_back({ slot, run.text == L"\x2191", ink });
+                    arrows.push_back({ slot, run.text == L"\x2191" ? ArrowKind::Up : ArrowKind::Down, ink });
+                }
+                else if (handoffArrowAt != std::wstring::npos)
+                {
+                    SIZE before = { 0, 0 };
+                    GetTextExtentPoint32W(hDC, run.text.c_str(), (int)handoffArrowAt, &before);
+                    SetTextColor(hDC, ink);
+                    TextOutW(hDC, x, y, run.text.c_str(), (int)handoffArrowAt);
+                    const RECT slot = { x + before.cx, y, x + before.cx + lineH, y + lineH };
+                    arrows.push_back({ slot, ArrowKind::Handoff, ink });
+                    TextOutW(hDC, slot.right, y, run.text.c_str() + handoffArrowAt + 1,
+                        (int)(run.text.size() - handoffArrowAt - 1));
                 }
 
                 FormularItem item;

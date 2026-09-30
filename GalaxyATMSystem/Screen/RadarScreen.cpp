@@ -153,6 +153,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
             {
                 it->second->PollRulerButton();
                 it->second->PollRouteClearKey();
+                it->second->TickMapTools();
                 it->second->AutoLogin();
                 it->second->TickEntry();
             }
@@ -165,7 +166,8 @@ void CGalaxyATMSystemRadarScreen::Shutdown()
 {
     m_cflOpen = m_spdOpen = m_ahdgOpen = m_rvsmOpen = m_xfrOpen = m_ftOpen = m_coordOpen = m_atisOpen = false;
     m_visible = false;
-    for (TextEntry* entry : { &m_spdEntry, &m_ahdgEntry, &m_xfrEntry, &m_ftEntry, &m_cflEntry, &m_entry, &m_rcEntry })
+    for (TextEntry* entry : { &m_spdEntry, &m_ahdgEntry, &m_xfrEntry, &m_ftEntry, &m_cflEntry, &m_entry, &m_rcEntry,
+                              &m_mapEntry })
         entry->Close();
     UpdateWheelHook();
     m_rcFloat.Destroy();
