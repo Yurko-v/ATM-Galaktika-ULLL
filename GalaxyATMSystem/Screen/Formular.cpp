@@ -399,10 +399,10 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 base, correlated ? &kFnGs : NULL });
         if (english && !expanded)
             levels.push_back({ L"\x221A", base, NULL });
-        if (ctrLabel && expanded && correlated)
+        if (ctrLabel && correlated)
         {
             const RvsmStatus rvsm = RvsmStatusOf(fp);
-            if (rvsm == RvsmStatus::Approved)
+            if (rvsm == RvsmStatus::Approved && expanded)
                 levels.push_back({ L"R", base, NULL });
             else if (rvsm == RvsmStatus::NotApproved)
                 levels.push_back({ L"N", Theme::RvsmMark, NULL });
