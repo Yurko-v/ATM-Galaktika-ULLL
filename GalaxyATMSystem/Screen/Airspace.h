@@ -355,7 +355,8 @@ namespace Galaxy
             std::string lastInside;
             for (int i = max(0, route.GetPointsCalculatedIndex()); i < route.GetPointsNumber(); i++)
             {
-                if (!InsideZoneOf(here->owners[0], route.GetPointPosition(i), altFt))
+                const int profileFt = route.GetPointCalculatedProfileAltitude(i);
+                if (!InsideZoneOf(here->owners[0], route.GetPointPosition(i), profileFt > 0 ? profileFt : altFt))
                 {
                     point = lastInside;
                     break;

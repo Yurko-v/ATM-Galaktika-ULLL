@@ -57,7 +57,7 @@ namespace Lang
             { L"Очистить маршрут",               L"Clear route" },
             { L"Измерить",                       L"Measure" },
             { L"Убрать измерители",              L"Remove rulers" },
-            { L"Добавить текст...",              L"Add text..." },
+            { L"Добавить текст",                 L"Add text" },
             { L"Изменить текст",                 L"Edit text" },
             { L"Удалить текст",                  L"Delete text" },
             { L"Добавить линию",                 L"Add line" },
