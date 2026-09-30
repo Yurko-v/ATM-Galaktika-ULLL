@@ -84,6 +84,8 @@ public:
 
     bool IsEnglish(const std::string& callsign) const { return m_english.count(callsign) != 0; }
     void ToggleEnglish(EuroScopePlugIn::CFlightPlan fp);
+    bool IsSharedMarked(const std::string& callsign) const { return m_sharedMarked.count(callsign) != 0; }
+    void ToggleSharedMarker(EuroScopePlugIn::CFlightPlan fp);
 
     void HandleSquawkFunction(int FunctionId, const char* sItemString, RECT Area, const char* source);
 
@@ -232,6 +234,8 @@ private:
     std::map<std::string, std::string> m_squawkSetByUs;
 
     std::set<std::string> m_english;
+    std::set<std::string> m_sharedMarked;
+    bool BroadcastScratchMark(EuroScopePlugIn::CFlightPlan fp, const char* mark, bool on);
 
     std::string m_squawkMenuCallsign;
     RECT m_squawkMenuArea = { 0, 0, 0, 0 };

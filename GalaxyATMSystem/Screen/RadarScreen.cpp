@@ -12,6 +12,7 @@ void CGalaxyATMSystemRadarScreen::ForgetGone(const std::set<std::string>& live)
     KeepOnly(m_rvsmStatus, live);
     KeepOnly(m_rcLastInSector, live);
     KeepOnly(m_rcPicked, live);
+    KeepOnly(m_closedPlans, live);
 }
 
 CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()

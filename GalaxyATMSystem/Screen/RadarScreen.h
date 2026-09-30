@@ -231,6 +231,21 @@ private:
     void DrawCoordDecisionMenu(HDC hDC);
     void TickCoordDecisionMenu();
 
+    enum class CallsignMenuItem { Correlate, Uncorrelate, Release, ClosePlan, PlanToTarget, EditPlan, ChangeCode,
+                                  SharedMarker, MyMarker, Count };
+    bool m_csMenuOpen = false;
+    std::string m_csMenuCallsign;
+    RECT m_csMenuAnchor = { 0, 0, 0, 0 };
+    RECT m_csMenuArea = { 0, 0, 0, 0 };
+    bool m_csMenuButtonsDown = true;
+    std::set<std::string> m_closedPlans;
+    void OpenCallsignMenu(const char* callsign, const RECT& anchor);
+    void CloseCallsignMenu();
+    bool CallsignMenuItemEnabled(CallsignMenuItem item);
+    void RunCallsignMenuItem(CallsignMenuItem item);
+    void DrawCallsignMenu(HDC hDC);
+    void TickCallsignMenu();
+
     POINT m_hotCursor = { 0, 0 };
     bool  m_hotValid = false;
     int   m_hotIndex = -1;
@@ -513,11 +528,13 @@ private:
     void TickMapTools();
     void DrawMapSketches(HDC hDC);
     void DrawMapMenu(HDC hDC);
+    enum class MenuCheck { None, Off, On };
     struct PanelMenuRow
     {
         const wchar_t* label;
         bool enabled;
         bool separatorAfter;
+        MenuCheck check = MenuCheck::None;
     };
     RECT DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title, const std::vector<PanelMenuRow>& rows,
         int windowType, int itemType);
@@ -953,6 +970,8 @@ const int SO_MAP_CANVAS    = 172;
 const int SO_PANEL_DRAG    = 173;
 const int SO_COORD_MENU      = 174;
 const int SO_COORD_MENU_ITEM = 175;
+const int SO_CS_MENU         = 176;
+const int SO_CS_MENU_ITEM    = 177;
 const int SO_RULER_LINE    = 41;
 const int SO_RULER_LABEL   = 42;
 

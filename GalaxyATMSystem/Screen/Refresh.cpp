@@ -301,6 +301,8 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
                 DrawMapMenu(hDC);
             if (m_coordMenuOpen)
                 DrawCoordDecisionMenu(hDC);
+            if (m_csMenuOpen)
+                DrawCallsignMenu(hDC);
         });
     }
 

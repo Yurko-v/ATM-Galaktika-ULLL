@@ -177,7 +177,15 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         MapCanvasClick(Pt, Button);
         return;
     case SO_COORD_MENU:
+    case SO_CS_MENU:
         return;
+    case SO_CS_MENU_ITEM:
+    {
+        const int item = atoi(sObjectId);
+        if (item >= 0 && item < (int)CallsignMenuItem::Count)
+            RunCallsignMenuItem((CallsignMenuItem)item);
+        return;
+    }
     case SO_COORD_MENU_ITEM:
         DecideCoordination(atoi(sObjectId) == 1);
         return;

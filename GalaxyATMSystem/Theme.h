@@ -52,6 +52,7 @@ namespace Theme
     const COLORREF FormularWtc   = RGB(0xFF, 0x3B, 0x30);
     const int      FormularWarningBrightnessPct = 65;
     const COLORREF FormularPicked = RGB(0x68, 0xE0, 0xAD);
+    const COLORREF FormularShared = RGB(0xE4, 0xEC, 0xFF);
     const COLORREF FormularVfr   = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF FormularGreen = RGB(0x00, 0xDC, 0x00);
     const COLORREF FormularHandoff = DuplicateText;

@@ -130,6 +130,7 @@ void CGalaxyATMSystemRadarScreen::TickMapTools()
     }
 
     TickCoordDecisionMenu();
+    TickCallsignMenu();
 
     if (m_mapMenuOpen)
     {
@@ -475,7 +476,8 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t
     int height = titleH + 2 * border + 2 * pad;
     for (const PanelMenuRow& row : rows)
     {
-        width = max(width, (int)Theme::MeasureText(hDC, font, Tr(row.label)).cx + 2 * padX + 2 * border + 2 * pad);
+        const int checkW = row.check != MenuCheck::None ? lineH * 11 / 10 : 0;
+        width = max(width, (int)Theme::MeasureText(hDC, font, Tr(row.label)).cx + checkW + 2 * padX + 2 * border + 2 * pad);
         height += rowH + (row.separatorAfter ? separatorH : 0);
     }
 
@@ -535,7 +537,17 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t
                 fill(row, Theme::XfrSelected);
             AddScreenObject(itemType, std::to_string(i).c_str(), row, false, "");
         }
-        const RECT text = { row.left + padX, row.top, row.right - padX, row.bottom };
+        RECT text = { row.left + padX, row.top, row.right - padX, row.bottom };
+        if (rows[i].check != MenuCheck::None)
+        {
+            const int side = lineH * 3 / 5;
+            const RECT box = { text.left, (row.top + row.bottom - side) / 2, text.left + side, (row.top + row.bottom + side) / 2 };
+            if (rows[i].check == MenuCheck::On)
+                fill(box, rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled);
+            else
+                frame(box, rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled);
+            text.left = box.right + lineH / 2;
+        }
         Theme::DrawLine(hDC, text, Tr(rows[i].label), font,
             rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
         y += rowH;

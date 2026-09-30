@@ -180,7 +180,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         const std::string callsign = cs;
         const bool expanded = !m_formularHover.empty() && m_formularHover == callsign;
         const bool rcPicked = !expanded && m_rcPicked.count(callsign) != 0;
-        if ((expanded || rcPicked) != (pass == 1))
+        const bool sharedPicked = !expanded && !rcPicked && plugin->IsSharedMarked(callsign);
+        if ((expanded || rcPicked || sharedPicked) != (pass == 1))
             continue;
 
         const ApwResult& apw = plugin->ApwForTarget(rt);
@@ -284,8 +285,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 GetBValue(run.color) * Theme::FormularWarningBrightnessPct / 100);
 
         std::vector<FormularRun> ident;
-        ident.push_back({ Widen(callsign.c_str()), base,
-            correlated ? &kFnCallsign : NULL });
+        ident.push_back({ Widen(callsign.c_str()), base, &kFnCallsign });
         if (correlated)
         {
             if (!ctrLabel)
@@ -822,7 +822,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         POINT leaderFrom, leaderTo;
         if (ClipLeaderToText(tp, aim, rows, boxed ? 4.0 : 6.0, leaderFrom, leaderTo))
             leaders.push_back({ leaderFrom, leaderTo,
-                rcPicked ? Theme::FormularPicked : boxed ? Theme::Text : tagColor });
+                rcPicked ? Theme::FormularPicked : sharedPicked ? Theme::FormularShared
+                : boxed ? Theme::Text : tagColor });
 
         if (boxed)
         {
@@ -866,6 +867,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 }
                 const COLORREF ink = back != CLR_INVALID ? Theme::Text
                     : rcPicked ? Theme::FormularPicked
+                    : sharedPicked ? Theme::FormularShared
                     : (boxed && run.color == base) ? Theme::Text : run.color;
                 const size_t handoffArrowAt = run.text.find(kHandoffArrow);
                 const bool special = run.text == L"\x221A" || run.text == L"\x2191" || run.text == L"\x2193"
@@ -1073,6 +1075,8 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         CloseFreeTextWindow();
     if (m_coordMenuOpen)
         CloseCoordDecisionMenu();
+    if (m_csMenuOpen)
+        CloseCallsignMenu();
 
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
     if (fp.IsValid())
@@ -1093,6 +1097,14 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
             break;
         }
     }
+
+    if (hit != NULL && hit->fn == &kFnCallsign && button == BUTTON_RIGHT)
+    {
+        OpenCallsignMenu(sCallsign, hit->rect);
+        return;
+    }
+    if (hit != NULL && hit->fn == &kFnCallsign && !(fp.IsValid() && fp.GetCorrelatedRadarTarget().IsValid()))
+        return;
 
     if (hit != NULL && fp.IsValid() && hit->fn == &kFnCfl && button == BUTTON_LEFT)
     {

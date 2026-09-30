@@ -255,6 +255,9 @@
     <ClCompile Include="Screen\TransferWindow.cpp">
       <Filter>Screen</Filter>
     </ClCompile>
+    <ClCompile Include="Screen\CallsignMenu.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
     <ClCompile Include="Screen\MapTools.cpp">
       <Filter>Screen</Filter>
     </ClCompile>

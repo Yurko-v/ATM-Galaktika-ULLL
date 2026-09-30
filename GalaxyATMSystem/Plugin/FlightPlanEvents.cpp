@@ -13,6 +13,54 @@ void CGalaxyATMSystemPlugin::OnFunctionCall(int FunctionId, const char* sItemStr
 namespace
 {
     const char* const kEnglishMark = "GAL/EN";
+    const char* const kSharedMarkerMark = "GAL/MK";
+
+    bool ReadScratchMark(const char* scratch, const char* mark, bool& on)
+    {
+        const size_t n = strlen(mark);
+        if (scratch == NULL || strncmp(scratch, mark, n) != 0 || scratch[n] != '/')
+            return false;
+        on = scratch[n + 1] == '1';
+        return true;
+    }
+
+    bool TrackedBySomeoneElse(CFlightPlan& fp, std::string& tracker)
+    {
+        const char* tracking = fp.GetTrackingControllerId();
+        tracker = tracking != NULL ? tracking : "";
+        return !fp.GetTrackingControllerIsMe() && !tracker.empty();
+    }
+}
+
+bool CGalaxyATMSystemPlugin::BroadcastScratchMark(CFlightPlan fp, const char* mark, bool on)
+{
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+    const std::string scratch = cad.GetScratchPadString();
+    const std::string msg = std::string(mark) + (on ? "/1" : "/0");
+    const bool sent = cad.SetScratchPadString(msg.c_str());
+    cad.SetScratchPadString(scratch.c_str());
+    return sent;
+}
+
+void CGalaxyATMSystemPlugin::ToggleSharedMarker(CFlightPlan fp)
+{
+    if (!fp.IsValid())
+        return;
+    const std::string callsign = fp.GetCallsign();
+    const bool on = !IsSharedMarked(callsign);
+    if (on)
+        m_sharedMarked.insert(callsign);
+    else
+        m_sharedMarked.erase(callsign);
+
+    std::string tracker;
+    if (TrackedBySomeoneElse(fp, tracker))
+    {
+        Log::Info("formular", callsign + ": shared marker set only locally, tracked by " + tracker);
+        return;
+    }
+    if (!BroadcastScratchMark(fp, kSharedMarkerMark, on))
+        Log::Error("formular", callsign + ": shared marker broadcast refused by EuroScope");
 }
 
 void CGalaxyATMSystemPlugin::ToggleEnglish(CFlightPlan fp)
@@ -26,21 +74,16 @@ void CGalaxyATMSystemPlugin::ToggleEnglish(CFlightPlan fp)
     else
         m_english.erase(callsign);
 
-    const char* tracking = fp.GetTrackingControllerId();
-    if (!fp.GetTrackingControllerIsMe() && tracking != NULL && *tracking != '\0')
+    std::string tracker;
+    if (TrackedBySomeoneElse(fp, tracker))
     {
-        Log::Info("formular", callsign + ": English mark set only locally, tracked by " + tracking);
+        Log::Info("formular", callsign + ": English mark set only locally, tracked by " + tracker);
         return;
     }
 
-    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
-    cad.SetFlightStripAnnotation(kEnglishAnnotation, on ? kEnglishMark : "");
-
-    const std::string scratch = cad.GetScratchPadString();
-    const std::string msg = std::string(kEnglishMark) + (on ? "/1" : "/0");
-    if (!cad.SetScratchPadString(msg.c_str()))
+    fp.GetControllerAssignedData().SetFlightStripAnnotation(kEnglishAnnotation, on ? kEnglishMark : "");
+    if (!BroadcastScratchMark(fp, kEnglishMark, on))
         Log::Error("formular", callsign + ": English mark broadcast refused by EuroScope");
-    cad.SetScratchPadString(scratch.c_str());
 }
 
 void CGalaxyATMSystemPlugin::OnFlightPlanFlightStripPushed(CFlightPlan FlightPlan,
@@ -206,13 +249,20 @@ void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPla
     if (DataType == CTR_DATA_TYPE_SCRATCH_PAD_STRING && FlightPlan.IsValid())
     {
         const char* scratch = FlightPlan.GetControllerAssignedData().GetScratchPadString();
-        const size_t n = strlen(kEnglishMark);
-        if (scratch != NULL && strncmp(scratch, kEnglishMark, n) == 0 && scratch[n] == '/')
+        bool on = false;
+        if (ReadScratchMark(scratch, kEnglishMark, on))
         {
-            if (scratch[n + 1] == '1')
+            if (on)
                 m_english.insert(FlightPlan.GetCallsign());
             else
                 m_english.erase(FlightPlan.GetCallsign());
+        }
+        if (ReadScratchMark(scratch, kSharedMarkerMark, on))
+        {
+            if (on)
+                m_sharedMarked.insert(FlightPlan.GetCallsign());
+            else
+                m_sharedMarked.erase(FlightPlan.GetCallsign());
         }
         return;
     }

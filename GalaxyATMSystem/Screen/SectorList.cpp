@@ -112,6 +112,8 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
             continue;
 
         const std::string callsign = fp.GetCallsign();
+        if (m_closedPlans.count(callsign) != 0)
+            continue;
         const int entryMin = fp.GetSectorEntryMinutes();
         const ULONGLONG nowTick = GetTickCount64();
         if (entryMin >= 0)
