@@ -78,6 +78,16 @@ namespace Galaxy
     const int kSideButton = BUTTON_RIGHT + 1;
 
     inline const FormularFn kFnCoordReply    = { NULL,    0,   NULL,    0,   NULL,    0    };
+    inline const FormularFn kFnCoordExitLevel  = { NULL,  0,   NULL,    0,   NULL,    0    };
+    inline const FormularFn kFnCoordEntryLevel = { NULL,  0,   NULL,    0,   NULL,    0    };
+    inline const FormularFn kFnCoordExitPoint  = { NULL,  0,   NULL,    0,   NULL,    0    };
+    inline const FormularFn kFnCoordEntryPoint = { NULL,  0,   NULL,    0,   NULL,    0    };
+
+    inline bool IsMyCoordFn(const FormularFn* fn)
+    {
+        return fn == &kFnCoordExitLevel || fn == &kFnCoordEntryLevel
+            || fn == &kFnCoordExitPoint || fn == &kFnCoordEntryPoint;
+    }
 
     inline const double kProtectionZoneKm = 10.0;
 

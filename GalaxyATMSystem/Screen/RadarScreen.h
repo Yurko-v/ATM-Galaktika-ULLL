@@ -216,9 +216,20 @@ private:
     std::map<std::string, FormularState> m_formulars;
     int AgreedXfl(EuroScopePlugIn::CFlightPlan& fp);
     std::string AgreedCopx(EuroScopePlugIn::CFlightPlan& fp);
-    std::string m_copxMenuCallsign;
-    bool OpenCopxDecisionMenu(EuroScopePlugIn::CFlightPlan& fp, const RECT& area);
-    void DecideCopx(bool manual, POINT pt, RECT area);
+    enum class CoordTarget { ExitLevel, EntryLevel, ExitPoint, EntryPoint };
+    bool m_coordMenuOpen = false;
+    std::string m_coordMenuCallsign;
+    CoordTarget m_coordMenuTarget = CoordTarget::ExitPoint;
+    RECT m_coordMenuAnchor = { 0, 0, 0, 0 };
+    RECT m_coordMenuArea = { 0, 0, 0, 0 };
+    bool m_coordMenuButtonsDown = true;
+    CoordWatch& WatchOf(FormularState& st, CoordTarget target);
+    bool CoordDecisionAllowed(bool manual);
+    void OpenCoordDecisionMenu(const char* callsign, CoordTarget target, const RECT& anchor);
+    void CloseCoordDecisionMenu();
+    void DecideCoordination(bool manual);
+    void DrawCoordDecisionMenu(HDC hDC);
+    void TickCoordDecisionMenu();
 
     POINT m_hotCursor = { 0, 0 };
     bool  m_hotValid = false;
@@ -502,6 +513,13 @@ private:
     void TickMapTools();
     void DrawMapSketches(HDC hDC);
     void DrawMapMenu(HDC hDC);
+    struct PanelMenuRow
+    {
+        const wchar_t* label;
+        bool enabled;
+        bool separatorAfter;
+    };
+    RECT DrawPanelMenu(HDC hDC, POINT at, const std::vector<PanelMenuRow>& rows, int windowType, int itemType);
     void OpenMapMenu(POINT at, HWND view);
     void CloseMapMenu();
     bool MapMenuItemEnabled(MapMenuItem item);
@@ -932,6 +950,8 @@ const int SO_MAP_MENU      = 170;
 const int SO_MAP_MENU_ITEM = 171;
 const int SO_MAP_CANVAS    = 172;
 const int SO_PANEL_DRAG    = 173;
+const int SO_COORD_MENU      = 174;
+const int SO_COORD_MENU_ITEM = 175;
 const int SO_RULER_LINE    = 41;
 const int SO_RULER_LABEL   = 42;
 
@@ -947,5 +967,3 @@ const int FN_LOGIN_FIELD    = 310;
 const int FN_RC_FILTER_CALLSIGN = 305;
 const int FN_RC_FILTER_BEFORE   = 306;
 const int FN_RC_FILTER_AFTER    = 307;
-const int FN_COPX_CANCEL        = 320;
-const int FN_COPX_MANCOORD      = 321;

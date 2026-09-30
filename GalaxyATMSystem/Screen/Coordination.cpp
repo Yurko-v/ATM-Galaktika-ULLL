@@ -76,55 +76,93 @@ bool CGalaxyATMSystemRadarScreen::SendCoordination(CFlightPlan& fp, const std::s
     return true;
 }
 
-bool CGalaxyATMSystemRadarScreen::OpenCopxDecisionMenu(CFlightPlan& fp, const RECT& area)
+CGalaxyATMSystemRadarScreen::CoordWatch& CGalaxyATMSystemRadarScreen::WatchOf(FormularState& st, CoordTarget target)
 {
-    const std::string callsign = fp.GetCallsign();
-    FormularState& st = m_formulars[callsign];
-    const bool entry = TrackedByOther(fp);
-    const CoordWatch& w = entry ? st.entryPoint : st.exitPoint;
-    const std::string& agreed = entry ? st.agreedEntryPoint : st.agreedCopx;
-    const bool pending = w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::None;
-    const bool holds = !agreed.empty() && !PointPassed(fp, agreed.c_str());
-    if (!pending && !holds)
-        return false;
-
-    m_copxMenuCallsign = callsign;
-    GetPlugIn()->OpenPopupList(area, "COPX", 1);
-    GetPlugIn()->AddPopupListElement("Cancel", "", FN_COPX_CANCEL);
-    GetPlugIn()->AddPopupListElement("ManCoord", "", FN_COPX_MANCOORD, false, POPUP_ELEMENT_NO_CHECKBOX, !pending);
-    return true;
+    switch (target)
+    {
+    case CoordTarget::ExitLevel:  return st.exitCoord;
+    case CoordTarget::EntryLevel: return st.entryCoord;
+    case CoordTarget::ExitPoint:  return st.exitPoint;
+    default:                      return st.entryPoint;
+    }
 }
 
-void CGalaxyATMSystemRadarScreen::DecideCopx(bool manual, POINT pt, RECT area)
+bool CGalaxyATMSystemRadarScreen::CoordDecisionAllowed(bool manual)
 {
-    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_copxMenuCallsign.c_str());
-    if (!fp.IsValid())
-        return;
-    FormularState& st = m_formulars[m_copxMenuCallsign];
-    const bool entry = TrackedByOther(fp);
-    CoordWatch& w = entry ? st.entryPoint : st.exitPoint;
-    std::string& agreed = entry ? st.agreedEntryPoint : st.agreedCopx;
+    auto label = m_formulars.find(m_coordMenuCallsign);
+    if (label == m_formulars.end())
+        return false;
+    FormularState& st = label->second;
+    const CoordWatch& w = WatchOf(st, m_coordMenuTarget);
     const bool pending = w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::None;
-
-    if (manual && pending)
+    if (manual)
+        return pending;
+    switch (m_coordMenuTarget)
     {
-        StartTagFunction(m_copxMenuCallsign.c_str(), NULL, 0, w.pointName.c_str(), NULL,
-            TAG_ITEM_FUNCTION_ACCEPT_MANUAL_COORDINATION, pt, area);
+    case CoordTarget::ExitLevel:  return pending || st.agreedXflFt > 0;
+    case CoordTarget::EntryLevel: return pending || st.agreedEntryFt > 0;
+    case CoordTarget::ExitPoint:  return pending || !st.agreedCopx.empty();
+    default:                      return pending || !st.agreedEntryPoint.empty();
+    }
+}
+
+void CGalaxyATMSystemRadarScreen::OpenCoordDecisionMenu(const char* callsign, CoordTarget target, const RECT& anchor)
+{
+    m_coordMenuOpen = true;
+    m_coordMenuCallsign = callsign;
+    m_coordMenuTarget = target;
+    m_coordMenuAnchor = anchor;
+    m_coordMenuButtonsDown = true;
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::CloseCoordDecisionMenu()
+{
+    m_coordMenuOpen = false;
+    m_coordMenuArea = { 0, 0, 0, 0 };
+    RequestRefresh();
+}
+
+void CGalaxyATMSystemRadarScreen::DecideCoordination(bool manual)
+{
+    const bool allowed = CoordDecisionAllowed(manual);
+    CloseCoordDecisionMenu();
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_coordMenuCallsign.c_str());
+    if (!allowed || !fp.IsValid())
+        return;
+
+    FormularState& st = m_formulars[m_coordMenuCallsign];
+    CoordWatch& w = WatchOf(st, m_coordMenuTarget);
+    const bool point = m_coordMenuTarget == CoordTarget::ExitPoint || m_coordMenuTarget == CoordTarget::EntryPoint;
+    const bool exit = m_coordMenuTarget == CoordTarget::ExitPoint || m_coordMenuTarget == CoordTarget::ExitLevel;
+    const std::string request = point ? "DCT " + w.pointName : "level " + std::to_string(w.levelFt);
+
+    if (manual)
+    {
+        const POINT at = { (m_coordMenuAnchor.left + m_coordMenuAnchor.right) / 2, m_coordMenuAnchor.top };
+        StartTagFunction(m_coordMenuCallsign.c_str(), NULL, 0, point ? w.pointName.c_str() : "", NULL,
+            TAG_ITEM_FUNCTION_ACCEPT_MANUAL_COORDINATION, at, m_coordMenuAnchor);
         w.decision = CoordDecision::Manual;
         w.result = COORDINATION_STATE_MANUAL_ACCEPTED;
         w.resultAt = GetTickCount64();
         w.wasMine = true;
-        agreed = w.pointName;
-        Log::Info("formular", m_copxMenuCallsign + ": DCT " + w.pointName + " coordinated manually");
+        if (point)
+            (exit ? st.agreedCopx : st.agreedEntryPoint) = w.pointName;
+        else
+            (exit ? st.agreedXflFt : st.agreedEntryFt) = w.levelFt;
+        Log::Info("formular", m_coordMenuCallsign + ": " + request + " coordinated manually");
     }
-    else if (!manual)
+    else
     {
-        if (pending)
+        if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME && w.decision == CoordDecision::None)
             w.decision = CoordDecision::Cancelled;
         w.result = 0;
-        Log::Info("formular", m_copxMenuCallsign + ": coordination DCT "
-            + (pending ? w.pointName : agreed) + " cancelled");
-        agreed.clear();
+        w.resultAt = 0;
+        if (point)
+            (exit ? st.agreedCopx : st.agreedEntryPoint).clear();
+        else
+            (exit ? st.agreedXflFt : st.agreedEntryFt) = 0;
+        Log::Info("formular", m_coordMenuCallsign + ": coordination " + request + " cancelled");
     }
     RequestRefresh();
 }

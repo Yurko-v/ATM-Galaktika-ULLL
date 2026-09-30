@@ -176,6 +176,11 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_MAP_CANVAS:
         MapCanvasClick(Pt, Button);
         return;
+    case SO_COORD_MENU:
+        return;
+    case SO_COORD_MENU_ITEM:
+        DecideCoordination(atoi(sObjectId) == 1);
+        return;
     case SO_FT_WINDOW:
         return;
     case SO_COORD_WINDOW:
@@ -850,12 +855,6 @@ void CGalaxyATMSystemRadarScreen::OnFunctionCall(int FunctionId, const char* sIt
         return;
 
     Plugin()->HandleSquawkFunction(FunctionId, sItemString, Area, "screen");
-
-    if (FunctionId == FN_COPX_CANCEL || FunctionId == FN_COPX_MANCOORD)
-    {
-        DecideCopx(FunctionId == FN_COPX_MANCOORD, Pt, Area);
-        return;
-    }
 
     if (FunctionId == FN_RC_FILTER_CALLSIGN || FunctionId == FN_RC_FILTER_BEFORE
         || FunctionId == FN_RC_FILTER_AFTER)

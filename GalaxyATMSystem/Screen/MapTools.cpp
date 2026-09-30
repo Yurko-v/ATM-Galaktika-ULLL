@@ -129,6 +129,8 @@ void CGalaxyATMSystemRadarScreen::TickMapTools()
             OpenMapMenu(m_rightDownClient, m_rightDownView);
     }
 
+    TickCoordDecisionMenu();
+
     if (m_mapMenuOpen)
     {
         POINT cursor;
@@ -455,45 +457,43 @@ void CGalaxyATMSystemRadarScreen::DrawMapSketches(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-void CGalaxyATMSystemRadarScreen::DrawMapMenu(HDC hDC)
+RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const std::vector<PanelMenuRow>& rows,
+    int windowType, int itemType)
 {
-    const int kBorder = 3, kRowH = 20, kSeparatorH = 7, kPadX = 12, kMinW = 170;
-    const int count = (int)MapMenuItem::Count;
+    const int kBorder = 3, kRowH = 20, kSeparatorH = 7, kPadX = 12, kMinW = 120;
 
     int width = kMinW, height = 2 * kBorder;
-    for (int i = 0; i < count; i++)
+    for (const PanelMenuRow& row : rows)
     {
-        width = max(width, (int)Theme::MeasureText(hDC, m_fonts.Body, Tr(kMapMenuRows[i].label)).cx + 2 * kPadX + 2 * kBorder);
-        height += kRowH + (kMapMenuRows[i].separatorAfter ? kSeparatorH : 0);
+        width = max(width, (int)Theme::MeasureText(hDC, m_fonts.Body, Tr(row.label)).cx + 2 * kPadX + 2 * kBorder);
+        height += kRowH + (row.separatorAfter ? kSeparatorH : 0);
     }
 
     const RECT ra = GetRadarArea();
-    int left = m_mapMenuAt.x, top = m_mapMenuAt.y;
+    int left = at.x, top = at.y;
     if (left + width > ra.right)
-        left = max(ra.left, (int)m_mapMenuAt.x - width);
+        left = max((int)ra.left, (int)at.x - width);
     if (top + height > ra.bottom)
-        top = max(ra.top, (int)ra.bottom - height);
+        top = max((int)ra.top, (int)ra.bottom - height);
     const RECT win = { left, top, left + width, top + height };
-    m_mapMenuArea = win;
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
     Theme::WinFill(hDC, win, Theme::MenuBarFill);
     Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
-    AddScreenObject(SO_MAP_MENU, "MAP_MENU", win, false, "");
+    AddScreenObject(windowType, "MENU", win, false, "");
 
     int y = win.top + kBorder;
-    for (int i = 0; i < count; i++)
+    for (size_t i = 0; i < rows.size(); i++)
     {
         const RECT row = { win.left + kBorder, y, win.right - kBorder, y + kRowH };
-        const bool enabled = MapMenuItemEnabled((MapMenuItem)i);
-        if (enabled)
-            AddHotButton(hDC, SO_MAP_MENU_ITEM, std::to_string(i).c_str(), row, "");
+        if (rows[i].enabled)
+            AddHotButton(hDC, itemType, std::to_string(i).c_str(), row, "");
         const RECT text = { row.left + kPadX, row.top, row.right - kPadX, row.bottom };
-        Theme::DrawLine(hDC, text, Tr(kMapMenuRows[i].label), m_fonts.Body,
-            enabled ? Theme::MenuText : Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
+        Theme::DrawLine(hDC, text, Tr(rows[i].label), m_fonts.Body,
+            rows[i].enabled ? Theme::MenuText : Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
         y += kRowH;
-        if (kMapMenuRows[i].separatorAfter)
+        if (rows[i].separatorAfter)
         {
             const RECT line = { row.left + 4, y + kSeparatorH / 2, row.right - 4, y + kSeparatorH / 2 + 1 };
             Theme::FlatFill(hDC, line, Theme::BorderStrong);
@@ -501,4 +501,43 @@ void CGalaxyATMSystemRadarScreen::DrawMapMenu(HDC hDC)
         }
     }
     RestoreDC(hDC, saved);
+    return win;
+}
+
+void CGalaxyATMSystemRadarScreen::DrawMapMenu(HDC hDC)
+{
+    std::vector<PanelMenuRow> rows;
+    for (int i = 0; i < (int)MapMenuItem::Count; i++)
+        rows.push_back({ kMapMenuRows[i].label, MapMenuItemEnabled((MapMenuItem)i), kMapMenuRows[i].separatorAfter });
+    m_mapMenuArea = DrawPanelMenu(hDC, m_mapMenuAt, rows, SO_MAP_MENU, SO_MAP_MENU_ITEM);
+}
+
+void CGalaxyATMSystemRadarScreen::DrawCoordDecisionMenu(HDC hDC)
+{
+    const std::vector<PanelMenuRow> rows = {
+        { L"Cancel", CoordDecisionAllowed(false), false },
+        { L"ManCoord", CoordDecisionAllowed(true), false },
+    };
+    const POINT at = { m_coordMenuAnchor.right + 2, m_coordMenuAnchor.top };
+    m_coordMenuArea = DrawPanelMenu(hDC, at, rows, SO_COORD_MENU, SO_COORD_MENU_ITEM);
+}
+
+void CGalaxyATMSystemRadarScreen::TickCoordDecisionMenu()
+{
+    if (!m_coordMenuOpen)
+        return;
+    auto label = m_formulars.find(m_coordMenuCallsign);
+    if (label == m_formulars.end() || label->second.items.empty())
+    {
+        CloseCoordDecisionMenu();
+        return;
+    }
+    POINT cursor;
+    const bool onRadar = CursorRadarPoint(cursor);
+    const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+        || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    const bool inside = onRadar && (PtInRect(&m_coordMenuArea, cursor) || PtInRect(&m_coordMenuAnchor, cursor));
+    if (down && !m_coordMenuButtonsDown && !inside)
+        CloseCoordDecisionMenu();
+    m_coordMenuButtonsDown = down;
 }

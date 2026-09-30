@@ -559,7 +559,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     value = w.pointName.empty() ? std::wstring(L"---") : Widen(w.pointName.c_str());
                 else
                     value = w.levelFt > 0 ? Widen(FormatAltitudeUnit(w.levelFt, altUnit).c_str()) : std::wstring(L"---");
-                coordLine.push_back({ value, ink, incoming ? &kFnCoordReply : NULL });
+                const FormularFn* mineFn = point ? (exit ? &kFnCoordExitPoint : &kFnCoordEntryPoint)
+                                                 : (exit ? &kFnCoordExitLevel : &kFnCoordEntryLevel);
+                coordLine.push_back({ value, ink, incoming ? &kFnCoordReply : mine ? mineFn : NULL });
                 coordLines.push_back(coordLine);
                 return true;
             };
@@ -847,7 +849,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             {
                 const FormularRun& run = lines[l][r];
                 RECT bg = { x - 1, y, x + runWidths[l][r] + 1, y + lineH };
-                const bool hot = registerObjects && run.fn != NULL && (ctrLabel || run.fn == &kFnCoordReply) && Hot(bg);
+                const bool hot = registerObjects && run.fn != NULL && (ctrLabel || run.fn == &kFnCoordReply || IsMyCoordFn(run.fn)) && Hot(bg);
                 const COLORREF back = hot ? Theme::HoverFill : run.back;
                 if (back != CLR_INVALID)
                 {
@@ -1063,6 +1065,8 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         CloseTransferWindow();
     if (m_ftOpen)
         CloseFreeTextWindow();
+    if (m_coordMenuOpen)
+        CloseCoordDecisionMenu();
 
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
     if (fp.IsValid())
@@ -1102,7 +1106,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
 
     if (hit != NULL && fp.IsValid() && hit->fn == &kFnCopx && button == BUTTON_RIGHT)
     {
-        if (!copxWasOpen && !OpenCopxDecisionMenu(fp, hit->rect))
+        if (!copxWasOpen)
             OpenCopxWindow(sCallsign);
         RequestRefresh();
         return;
@@ -1113,6 +1117,15 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         if (!freeTextWasOpen)
             OpenFreeTextWindow(sCallsign);
         RequestRefresh();
+        return;
+    }
+
+    if (hit != NULL && fp.IsValid() && IsMyCoordFn(hit->fn) && (button == BUTTON_LEFT || button == BUTTON_RIGHT))
+    {
+        const CoordTarget target = hit->fn == &kFnCoordExitLevel ? CoordTarget::ExitLevel
+            : hit->fn == &kFnCoordEntryLevel ? CoordTarget::EntryLevel
+            : hit->fn == &kFnCoordExitPoint ? CoordTarget::ExitPoint : CoordTarget::EntryPoint;
+        OpenCoordDecisionMenu(sCallsign, target, hit->rect);
         return;
     }
 
