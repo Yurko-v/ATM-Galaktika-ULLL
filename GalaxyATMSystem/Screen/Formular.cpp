@@ -3,6 +3,22 @@
 
 using namespace Galaxy;
 
+namespace
+{
+    const int kRvsmBottomFt = 29000;
+    const int kRvsmTopFt = 41000;
+    const double kRvsmOccupiedBandM = 30.0;
+    const double kOccupiedBandM = 60.0;
+    const double kMetresPerFoot = 0.3048;
+    const int kOnGroundMaxGsKt = 50;
+
+    int OccupiedBandFt(int flightLevelFt)
+    {
+        const bool rvsm = flightLevelFt >= kRvsmBottomFt && flightLevelFt <= kRvsmTopFt;
+        return (int)lround((rvsm ? kRvsmOccupiedBandM : kOccupiedBandM) / kMetresPerFoot);
+    }
+}
+
 HFONT CGalaxyATMSystemRadarScreen::GetFormularFont()
 {
     int size = Plugin()->TagFontSize();
@@ -304,6 +320,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit).c_str()),
             base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL });
         const int vs = rt.GetVerticalSpeed();
+        const int occupiedBandFt = OccupiedBandFt(pos.GetFlightLevel());
+        const bool onGround = rt.GetGS() < kOnGroundMaxGsKt;
         std::wstring cflText;
         COLORREF cflColor = base;
         int clearedFt = 0;
@@ -326,8 +344,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 cflText = Widen(FormatAltitudeUnit(cfl, altUnit).c_str());
                 clearedFt = cfl;
                 const bool level = vs > -100 && vs < 100;
-                if ((level && abs(altFt - cfl) > 200)
-                    || (vs >= 100 && altFt > cfl + 200) || (vs <= -100 && altFt < cfl - 200))
+                if ((level && abs(altFt - cfl) > occupiedBandFt)
+                    || (vs >= 100 && altFt > cfl + occupiedBandFt) || (vs <= -100 && altFt < cfl - occupiedBandFt))
                     cflColor = Theme::DuplicateText;
             }
             if (cflText.empty())
@@ -337,13 +355,14 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
         }
 
-        const int kClearedBandFt = 200;
         const wchar_t* trend = NULL;
-        if (clearedApproach)
+        if (onGround)
+            trend = NULL;
+        else if (clearedApproach)
             trend = L"\x2193";
         else if (clearedFt > 0)
-            trend = (clearedFt > altFt + kClearedBandFt) ? L"\x2191"
-                  : (clearedFt < altFt - kClearedBandFt) ? L"\x2193" : NULL;
+            trend = (clearedFt > altFt + occupiedBandFt) ? L"\x2191"
+                  : (clearedFt < altFt - occupiedBandFt) ? L"\x2193" : NULL;
         else
             trend = (vs >= 100) ? L"\x2191" : (vs <= -100) ? L"\x2193" : NULL;
         if (trend != NULL)
