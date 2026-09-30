@@ -195,8 +195,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         std::vector<FormularRun> warnings;
         if (simulator && correlated)
             warnings.push_back({ fp.GetSimulated() ? L"{*}" : L"{}", base, &kFnSimulation });
-        if (correlated && RvsmStatusOf(fp) == RvsmStatus::NotApproved)
-            warnings.push_back({ L"W", Theme::DistressText, NULL });
+        const RvsmStatus rvsm = correlated ? RvsmStatusOf(fp) : RvsmStatus::Approved;
+        if (rvsm == RvsmStatus::NotApproved)
+            warnings.push_back({ L"N", Theme::RvsmMark, NULL, CLR_INVALID, true });
+        else if (rvsm == RvsmStatus::Exempt)
+            warnings.push_back({ L"E", Theme::RvsmMark, NULL, CLR_INVALID, true });
         if (sq != NULL)
         {
             auto dup = codeCount.find(sq);
@@ -281,7 +284,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             warnings.push_back({ L"V", Theme::FormularVfr, NULL });
 
         for (FormularRun& run : warnings)
-            run.color = RGB(GetRValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
+            if (!run.fullBright)
+                run.color = RGB(GetRValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
                 GetGValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
                 GetBValue(run.color) * Theme::FormularWarningBrightnessPct / 100);
 

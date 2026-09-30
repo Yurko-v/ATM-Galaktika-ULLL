@@ -55,6 +55,7 @@ namespace Theme
     const COLORREF FormularVfr   = RGB(0xE8, 0x8E, 0x2C);
     const COLORREF FormularGreen = RGB(0x00, 0xDC, 0x00);
     const COLORREF FormularHandoff = DuplicateText;
+    const COLORREF RvsmMark = DuplicateText;
 
     const int TrackHistoryDots = 5;
 
@@ -71,6 +72,7 @@ namespace Theme
     const COLORREF SpdTitle     = RGB(0x6C, 0xC0, 0xE8);
     const COLORREF SpdBody      = Background;
     const COLORREF SpdSelected  = RGB(0xD2, 0xCE, 0xC4);
+    const COLORREF SpdSelectedText = RGB(0x10, 0x10, 0x10);
     const COLORREF SpdTabOn     = RGB(0x9C, 0x9C, 0x98);
     const COLORREF SpdButton    = RGB(0x8C, 0x8C, 0x88);
     const COLORREF SpdLine      = RGB(0xE6, 0xE6, 0xE6);

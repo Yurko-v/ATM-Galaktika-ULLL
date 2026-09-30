@@ -173,11 +173,13 @@ void CGalaxyATMSystemRadarScreen::DrawRvsmWindow(HDC hDC)
             break;
         if (i == selected)
             fill(row, Theme::SpdSelected);
+        else if (Hot(row))
+            fill(row, Theme::XfrSelected);
         RECT tr = { row.left + rowH / 3, row.top, row.right, row.bottom };
-        text(tr, kRvsmStatusText[i], Theme::Text, DT_LEFT);
+        text(tr, kRvsmStatusText[i], i == selected ? Theme::SpdSelectedText : Theme::Text, DT_LEFT);
         char id[4];
         sprintf_s(id, "%d", i);
-        AddHotButton(hDC, SO_RVSM_ROW, id, row, "");
+        AddScreenObject(SO_RVSM_ROW, id, row, false, "");
     }
 
     RECT track = { list.right, listBox.top, listBox.right, listBox.bottom };
