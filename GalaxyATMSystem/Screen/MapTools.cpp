@@ -457,16 +457,26 @@ void CGalaxyATMSystemRadarScreen::DrawMapSketches(HDC hDC)
     RestoreDC(hDC, saved);
 }
 
-RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const std::vector<PanelMenuRow>& rows,
-    int windowType, int itemType)
+RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title,
+    const std::vector<PanelMenuRow>& rows, int windowType, int itemType)
 {
-    const int kBorder = 3, kRowH = 20, kSeparatorH = 7, kPadX = 12, kMinW = 120;
+    const HFONT font = GetSpeedFont();
+    const int lineH = max(12, (int)Theme::MeasureText(hDC, font, L"Ag").cy);
+    const int border = max(3, lineH / 5);
+    const int titleH = title != NULL ? lineH * 5 / 4 : 0;
+    const int rowH = lineH * 3 / 2;
+    const int separatorH = max(5, lineH / 2);
+    const int padX = lineH * 2 / 3;
+    const int pad = max(2, lineH / 6);
 
-    int width = kMinW, height = 2 * kBorder;
+    int width = lineH * 6;
+    if (title != NULL)
+        width = max(width, (int)Theme::MeasureText(hDC, GetTitleFont(), Tr(title)).cx + titleH + 2 * border + padX);
+    int height = titleH + 2 * border + 2 * pad;
     for (const PanelMenuRow& row : rows)
     {
-        width = max(width, (int)Theme::MeasureText(hDC, m_fonts.Body, Tr(row.label)).cx + 2 * kPadX + 2 * kBorder);
-        height += kRowH + (row.separatorAfter ? kSeparatorH : 0);
+        width = max(width, (int)Theme::MeasureText(hDC, font, Tr(row.label)).cx + 2 * padX + 2 * border + 2 * pad);
+        height += rowH + (row.separatorAfter ? separatorH : 0);
     }
 
     const RECT ra = GetRadarArea();
@@ -477,27 +487,63 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const std::ve
         top = max((int)ra.top, (int)ra.bottom - height);
     const RECT win = { left, top, left + width, top + height };
 
+    auto fill = [&](const RECT& r, COLORREF color)
+    {
+        HBRUSH b = CreateSolidBrush(color);
+        FillRect(hDC, &r, b);
+        DeleteObject(b);
+    };
+    auto frame = [&](const RECT& r, COLORREF color)
+    {
+        HBRUSH b = CreateSolidBrush(color);
+        FrameRect(hDC, &r, b);
+        DeleteObject(b);
+    };
+
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
-    Theme::WinFill(hDC, win, Theme::MenuBarFill);
-    Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
+    fill(win, Theme::PopupFrameActive);
+    if (title != NULL)
+    {
+        const RECT bar = { win.left, win.top, win.right, win.top + titleH };
+        TRIVERTEX v[2] = {
+            { bar.left, bar.top, (COLOR16)(GetRValue(Theme::XfrTitleTop) << 8), (COLOR16)(GetGValue(Theme::XfrTitleTop) << 8),
+              (COLOR16)(GetBValue(Theme::XfrTitleTop) << 8), 0 },
+            { bar.right, bar.bottom, (COLOR16)(GetRValue(Theme::PopupFrameActive) << 8),
+              (COLOR16)(GetGValue(Theme::PopupFrameActive) << 8), (COLOR16)(GetBValue(Theme::PopupFrameActive) << 8), 0 } };
+        GRADIENT_RECT g = { 0, 1 };
+        GradientFill(hDC, v, 2, &g, 1, GRADIENT_FILL_RECT_V);
+        const RECT caption = { bar.left + border, bar.top, bar.right - border, bar.bottom };
+        Theme::DrawLine(hDC, caption, Tr(title), GetTitleFont(), Theme::Text, DT_LEFT | DT_VCENTER);
+    }
+    frame(win, Theme::XfrOutline);
+    const RECT body = { win.left + border, win.top + titleH + (title != NULL ? 0 : border),
+                        win.right - border, win.bottom - border };
+    fill(body, Theme::SpdBody);
+    RECT bodyEdge = body;
+    InflateRect(&bodyEdge, 1, 1);
+    frame(bodyEdge, Theme::XfrOutline);
     AddScreenObject(windowType, "MENU", win, false, "");
 
-    int y = win.top + kBorder;
+    int y = body.top + pad;
     for (size_t i = 0; i < rows.size(); i++)
     {
-        const RECT row = { win.left + kBorder, y, win.right - kBorder, y + kRowH };
+        const RECT row = { body.left + pad, y, body.right - pad, y + rowH };
         if (rows[i].enabled)
-            AddHotButton(hDC, itemType, std::to_string(i).c_str(), row, "");
-        const RECT text = { row.left + kPadX, row.top, row.right - kPadX, row.bottom };
-        Theme::DrawLine(hDC, text, Tr(rows[i].label), m_fonts.Body,
-            rows[i].enabled ? Theme::MenuText : Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
-        y += kRowH;
+        {
+            if (Hot(row))
+                fill(row, Theme::XfrSelected);
+            AddScreenObject(itemType, std::to_string(i).c_str(), row, false, "");
+        }
+        const RECT text = { row.left + padX, row.top, row.right - padX, row.bottom };
+        Theme::DrawLine(hDC, text, Tr(rows[i].label), font,
+            rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
+        y += rowH;
         if (rows[i].separatorAfter)
         {
-            const RECT line = { row.left + 4, y + kSeparatorH / 2, row.right - 4, y + kSeparatorH / 2 + 1 };
-            Theme::FlatFill(hDC, line, Theme::BorderStrong);
-            y += kSeparatorH;
+            const RECT line = { row.left + padX / 2, y + separatorH / 2, row.right - padX / 2, y + separatorH / 2 + 1 };
+            fill(line, Theme::SpdLine);
+            y += separatorH;
         }
     }
     RestoreDC(hDC, saved);
@@ -509,7 +555,7 @@ void CGalaxyATMSystemRadarScreen::DrawMapMenu(HDC hDC)
     std::vector<PanelMenuRow> rows;
     for (int i = 0; i < (int)MapMenuItem::Count; i++)
         rows.push_back({ kMapMenuRows[i].label, MapMenuItemEnabled((MapMenuItem)i), kMapMenuRows[i].separatorAfter });
-    m_mapMenuArea = DrawPanelMenu(hDC, m_mapMenuAt, rows, SO_MAP_MENU, SO_MAP_MENU_ITEM);
+    m_mapMenuArea = DrawPanelMenu(hDC, m_mapMenuAt, NULL, rows, SO_MAP_MENU, SO_MAP_MENU_ITEM);
 }
 
 void CGalaxyATMSystemRadarScreen::DrawCoordDecisionMenu(HDC hDC)
@@ -519,7 +565,7 @@ void CGalaxyATMSystemRadarScreen::DrawCoordDecisionMenu(HDC hDC)
         { L"ManCoord", CoordDecisionAllowed(true), false },
     };
     const POINT at = { m_coordMenuAnchor.right + 2, m_coordMenuAnchor.top };
-    m_coordMenuArea = DrawPanelMenu(hDC, at, rows, SO_COORD_MENU, SO_COORD_MENU_ITEM);
+    m_coordMenuArea = DrawPanelMenu(hDC, at, L"Согласование", rows, SO_COORD_MENU, SO_COORD_MENU_ITEM);
 }
 
 void CGalaxyATMSystemRadarScreen::TickCoordDecisionMenu()

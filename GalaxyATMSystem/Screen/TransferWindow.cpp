@@ -56,10 +56,12 @@ void CGalaxyATMSystemRadarScreen::OpenCopxWindow(const char* callsign)
         current = entry;
     int selected = -1;
     CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
+    const int passed = route.GetPointsCalculatedIndex();
     for (int i = 0; i < route.GetPointsNumber(); i++)
     {
         const char* name = route.GetPointName(i);
-        if (name == NULL || *name == '\0' || route.GetPointDistanceInMinutes(i) < 0)
+        const bool ahead = passed >= 0 ? i > passed : route.GetPointDistanceInMinutes(i) >= 0;
+        if (name == NULL || *name == '\0' || !ahead)
             continue;
         if (!m_xfrPositions.empty() && m_xfrPositions.back().callsign == name)
             continue;

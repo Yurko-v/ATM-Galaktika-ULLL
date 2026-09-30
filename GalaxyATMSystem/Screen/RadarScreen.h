@@ -519,7 +519,8 @@ private:
         bool enabled;
         bool separatorAfter;
     };
-    RECT DrawPanelMenu(HDC hDC, POINT at, const std::vector<PanelMenuRow>& rows, int windowType, int itemType);
+    RECT DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title, const std::vector<PanelMenuRow>& rows,
+        int windowType, int itemType);
     void OpenMapMenu(POINT at, HWND view);
     void CloseMapMenu();
     bool MapMenuItemEnabled(MapMenuItem item);
