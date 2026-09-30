@@ -21,8 +21,7 @@ namespace
             && g_wheelScreen->OnSideButton())
             return 1;
         if (code == HC_ACTION && g_wheelScreen != NULL
-            && (wp == WM_MBUTTONDOWN || wp == WM_MBUTTONUP || wp == WM_MOUSEMOVE
-                || wp == WM_RBUTTONDOWN || wp == WM_RBUTTONUP)
+            && (wp == WM_MOUSEMOVE || wp == WM_RBUTTONDOWN || wp == WM_RBUTTONUP)
             && g_wheelScreen->OnMouseButton(wp, ((const MOUSEHOOKSTRUCT*)lp)->pt))
             return 1;
         return CallNextHookEx(g_wheelHook, code, wp, lp);

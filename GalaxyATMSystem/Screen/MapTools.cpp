@@ -73,38 +73,7 @@ bool CGalaxyATMSystemRadarScreen::OnMouseButton(WPARAM message, POINT screenPt)
 
     switch (message)
     {
-    case WM_MBUTTONDOWN:
-    {
-        POINT client;
-        if (!CursorRadarPoint(client))
-            return false;
-        GetDisplayArea(&m_panLeftDown, &m_panRightUp);
-        const CPosition origin = ConvertCoordFromPixelToPosition(client);
-        const POINT east = { client.x + 100, client.y };
-        const POINT south = { client.x, client.y + 100 };
-        m_panLonPerPx = (ConvertCoordFromPixelToPosition(east).m_Longitude - origin.m_Longitude) / 100.0;
-        m_panLatPerPx = (ConvertCoordFromPixelToPosition(south).m_Latitude - origin.m_Latitude) / 100.0;
-        m_panStart = screenPt;
-        m_panning = true;
-        return true;
-    }
-    case WM_MBUTTONUP:
-        if (!m_panning)
-            return false;
-        m_panning = false;
-        return true;
     case WM_MOUSEMOVE:
-        if (m_panning)
-        {
-            const int dx = screenPt.x - m_panStart.x, dy = screenPt.y - m_panStart.y;
-            CPosition leftDown = m_panLeftDown, rightUp = m_panRightUp;
-            leftDown.m_Longitude -= dx * m_panLonPerPx;
-            rightUp.m_Longitude -= dx * m_panLonPerPx;
-            leftDown.m_Latitude -= dy * m_panLatPerPx;
-            rightUp.m_Latitude -= dy * m_panLatPerPx;
-            SetDisplayArea(leftDown, rightUp);
-            RequestRefresh();
-        }
         if (m_rightDown && (abs(screenPt.x - m_rightDownScreen.x) > kClickSlopPx
                             || abs(screenPt.y - m_rightDownScreen.y) > kClickSlopPx))
             m_rightMoved = true;
@@ -152,8 +121,6 @@ bool CGalaxyATMSystemRadarScreen::RightClickOnEmptyRadar(POINT pt)
 void CGalaxyATMSystemRadarScreen::TickMapTools()
 {
     const ULONGLONG now = GetTickCount64();
-    if (m_panning && (GetAsyncKeyState(VK_MBUTTON) & 0x8000) == 0)
-        m_panning = false;
 
     if (m_rightClickPending && now - m_rightUpTick >= kRightClickSettleMs)
     {

@@ -499,10 +499,6 @@ private:
     bool m_rightClickPending = false;
     ULONGLONG m_rightUpTick = 0;
     ULONGLONG m_lastObjectClickTick = 0;
-    bool m_panning = false;
-    POINT m_panStart = { 0, 0 };
-    EuroScopePlugIn::CPosition m_panLeftDown, m_panRightUp;
-    double m_panLonPerPx = 0.0, m_panLatPerPx = 0.0;
     void TickMapTools();
     void DrawMapSketches(HDC hDC);
     void DrawMapMenu(HDC hDC);
