@@ -287,9 +287,6 @@ namespace Lang
             { L"английский",                     L"English" },
 
             { L"отладка",                        L"debug" },
-            { L"Получить код",                   L"Get code" },
-            { L"Новый код",                      L"New code" },
-            { L"Ввести вручную",                 L"Type in" },
             { L"сервер не настроен - Squawk.ServerUrl в GalaxyATMSystem.json",
                                                  L"server not set up - Squawk.ServerUrl in GalaxyATMSystem.json" },
             { L"тренажёр: выдача кодов отключена, включите Squawk.AllowSweatbox в GalaxyATMSystem.json",

@@ -241,10 +241,10 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
 
         m_squawkMenuCallsign = fp.GetCallsign();
         m_squawkMenuArea = Area;
-        OpenPopupList(Area, Narrow(Tr(L"Код ответчика")).c_str(), 1);
-        AddPopupListElement(Narrow(Tr(L"Получить код")).c_str(), "", FN_SQUAWK_GET);
-        AddPopupListElement(Narrow(Tr(L"Новый код")).c_str(), "", FN_SQUAWK_NEW);
-        AddPopupListElement(Narrow(Tr(L"Ввести вручную")).c_str(), "", FN_SQUAWK_MANUAL);
+        OpenPopupList(Area, "Squawk", 1);
+        AddPopupListElement("Get code", "", FN_SQUAWK_GET);
+        AddPopupListElement("New code", "", FN_SQUAWK_NEW);
+        AddPopupListElement("Type in", "", FN_SQUAWK_MANUAL);
         return;
     }
 
