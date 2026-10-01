@@ -1082,7 +1082,13 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
 
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(sCallsign);
     if (fp.IsValid())
+    {
         GetPlugIn()->SetASELAircraft(fp);
+        POINT cursor;
+        HWND view = NULL;
+        if (CursorRadarPoint(cursor, &view))
+            ShowEsInfoLine(fp, view);
+    }
 
     if (freeTextRequested)
     {
@@ -1107,13 +1113,6 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     }
     if (hit != NULL && hit->fn == &kFnCallsign && !(fp.IsValid() && fp.GetCorrelatedRadarTarget().IsValid()))
         return;
-    if (hit != NULL && hit->fn == &kFnCallsign && button == BUTTON_LEFT)
-    {
-        POINT cursor;
-        HWND view = NULL;
-        if (CursorRadarPoint(cursor, &view))
-            ShowEsInfoLine(fp, view);
-    }
 
     if (hit != NULL && fp.IsValid() && hit->fn == &kFnCfl && button == BUTTON_LEFT)
     {
