@@ -313,11 +313,35 @@ namespace Galaxy
         return best;
     }
 
-    inline bool InsideZoneOf(const std::string& owner, const CPosition& p, int altFt)
+    inline std::set<std::string> OnlinePositions(CPlugIn* plugin)
+    {
+        std::set<std::string> online;
+        const char* myId = plugin->ControllerMyself().GetPositionId();
+        if (myId != NULL && *myId != '\0')
+            online.insert(myId);
+        for (CController c = plugin->ControllerSelectFirst(); c.IsValid(); c = plugin->ControllerSelectNext(c))
+        {
+            const char* id = c.GetPositionId();
+            if (c.IsController() && id != NULL && *id != '\0')
+                online.insert(id);
+        }
+        return online;
+    }
+
+    inline std::string ZoneHolder(const AirspaceSector& s, const std::set<std::string>& online)
+    {
+        for (const std::string& id : s.owners)
+            if (online.count(id) != 0)
+                return id;
+        return s.owners.empty() ? std::string() : s.owners[0];
+    }
+
+    inline bool InsideZoneOf(const std::string& holder, const std::set<std::string>& online,
+        const CPosition& p, int altFt)
     {
         for (const AirspaceSector& s : AirspaceSectors())
         {
-            if (s.owners.empty() || s.owners[0] != owner || altFt < s.bottomFt || altFt >= s.topFt)
+            if (s.owners.empty() || altFt < s.bottomFt || altFt >= s.topFt || ZoneHolder(s, online) != holder)
                 continue;
             if (InsideRing(s.ring, p) || DistanceToRingNm(s.ring, p) <= kJunctionNm)
                 return true;
@@ -328,7 +352,7 @@ namespace Galaxy
     inline const ULONGLONG kZoneExitRecheckMs = 2000;
     inline const size_t kZoneExitMemoLimit = 1024;
 
-    inline std::string ZoneExitPoint(CFlightPlan& fp)
+    inline std::string ZoneExitPoint(CFlightPlan& fp, CPlugIn* plugin)
     {
         struct Memo
         {
@@ -349,14 +373,17 @@ namespace Galaxy
         CRadarTargetPositionData pos = rt.IsValid() ? rt.GetPosition() : fp.GetFPTrackPosition();
         const int altFt = pos.IsValid() ? pos.GetFlightLevel() : 0;
         const AirspaceSector* here = pos.IsValid() ? SectorAt(pos.GetPosition(), altFt) : NULL;
+        std::string holder;
         if (here != NULL)
         {
+            const std::set<std::string> online = OnlinePositions(plugin);
+            holder = ZoneHolder(*here, online);
             CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
             std::string lastInside;
             for (int i = max(0, route.GetPointsCalculatedIndex()); i < route.GetPointsNumber(); i++)
             {
                 const int profileFt = route.GetPointCalculatedProfileAltitude(i);
-                if (!InsideZoneOf(here->owners[0], route.GetPointPosition(i), profileFt > 0 ? profileFt : altFt))
+                if (!InsideZoneOf(holder, online, route.GetPointPosition(i), profileFt > 0 ? profileFt : altFt))
                 {
                     point = lastInside;
                     break;
@@ -368,7 +395,7 @@ namespace Galaxy
         }
 
         if (known == memo.end() || known->second.point != point)
-            Log::Info("formular", callsign + ": exit from the zone of " + (here != NULL ? here->owners[0] : std::string("-"))
+            Log::Info("formular", callsign + ": exit from the zone of " + (here != NULL ? holder : std::string("-"))
                 + " is " + (point.empty() ? std::string("unknown") : point));
         memo[callsign] = { point, now };
         return point;

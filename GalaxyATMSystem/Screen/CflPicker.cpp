@@ -73,7 +73,7 @@ std::string CGalaxyATMSystemRadarScreen::AgreedCopx(CFlightPlan& fp)
     std::string agreed;
     if (it != m_formulars.end())
         agreed = TrackedByOther(fp) ? it->second.agreedEntryPoint : it->second.agreedCopx;
-    return ExitPointFor(fp, agreed, CurrentFormularKind() == FormularKind::Ctr);
+    return ExitPointFor(fp, agreed, CurrentFormularKind() == FormularKind::Ctr ? GetPlugIn() : NULL);
 }
 
 void CGalaxyATMSystemRadarScreen::ApplyCfl(int fl)

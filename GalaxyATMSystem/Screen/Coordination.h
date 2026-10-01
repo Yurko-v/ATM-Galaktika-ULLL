@@ -64,16 +64,16 @@ namespace Galaxy
         return passed;
     }
 
-    inline std::string ExitPointFor(CFlightPlan& fp, const std::string& agreed = "", bool zoneExit = false)
+    inline std::string ExitPointFor(CFlightPlan& fp, const std::string& agreed = "", CPlugIn* zoneOf = NULL)
     {
         static std::set<std::string> reported;
         const char* coordinated = fp.GetExitCoordinationPointName();
-        const std::string zone = zoneExit ? ZoneExitPoint(fp) : std::string();
+        const std::string zone = zoneOf != NULL ? ZoneExitPoint(fp, zoneOf) : std::string();
         const struct { const char* name; const char* source; } candidates[] = {
             { agreed.c_str(), "agreed" },
             { CoordinationHolds(fp.GetExitCoordinationNameState()) ? coordinated : NULL, "exit coordination" },
             { zone.c_str(), "zone exit" },
-            { zoneExit ? fp.GetNextFirCopxPointName() : NULL, "next FIR COPX" },
+            { zoneOf != NULL ? fp.GetNextFirCopxPointName() : NULL, "next FIR COPX" },
             { fp.GetNextCopxPointName(), "next COPX" },
             { coordinated, "exit point" },
         };

@@ -216,17 +216,9 @@ bool CGalaxyATMSystemRadarScreen::PointDirectable(CFlightPlan& fp, const std::st
             altFt = fp.GetFinalAltitude();
     }
 
-    std::set<std::string> online;
     const char* myId = GetPlugIn()->ControllerMyself().GetPositionId();
     const std::string me = myId != NULL ? myId : "";
-    if (!me.empty())
-        online.insert(me);
-    for (CController c = GetPlugIn()->ControllerSelectFirst(); c.IsValid(); c = GetPlugIn()->ControllerSelectNext(c))
-    {
-        const char* id = c.GetPositionId();
-        if (c.IsController() && id != NULL && *id != '\0')
-            online.insert(id);
-    }
+    const std::set<std::string> online = OnlinePositions(GetPlugIn());
 
     const PointVerdict verdict = ClassifyPoint(where, altFt, online, me);
     if (ownerId != NULL && verdict.zone == PointZone::Other)
