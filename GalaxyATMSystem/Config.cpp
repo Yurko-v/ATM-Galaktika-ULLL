@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Config.h"
 #include "Json.h"
+#include "Lang.h"
 
 #include <fstream>
 #include <algorithm>
@@ -109,7 +110,7 @@ void Config::Load(HINSTANCE hModule)
     std::ifstream file(m_Path, std::ios::binary);
     if (!file)
     {
-        m_LoadError = L"config not found: " + m_Path;
+        m_LoadError = Tr(L"конфиг не найден: ") + m_Path;
         return;
     }
 
@@ -119,7 +120,7 @@ void Config::Load(HINSTANCE hModule)
     Json::Value root;
     if (!Json::ParseUtf8(raw, root) || root.kind != Json::Value::Kind::Object)
     {
-        m_LoadError = L"invalid JSON in " + m_Path;
+        m_LoadError = Tr(L"ошибка JSON в файле ") + m_Path;
         return;
     }
 
@@ -303,7 +304,7 @@ void Config::Load(HINSTANCE hModule)
         {
             std::wstring path = ResolvePath(hModule, areasPath);
             if (!LoadTopSkyAreas(path, m_Zones))
-                m_LoadError = L"zones: cannot open " + path;
+                m_LoadError = Tr(L"зоны: не открывается ") + path;
         }
 
         if (zones->kind == Json::Value::Kind::Object)
@@ -317,7 +318,7 @@ void Config::Load(HINSTANCE hModule)
                     std::ifstream lib(path, std::ios::binary);
                     if (!lib)
                     {
-                        m_LoadError = L"zones: cannot open " + path;
+                        m_LoadError = Tr(L"зоны: не открывается ") + path;
                     }
                     else
                     {
@@ -327,7 +328,7 @@ void Config::Load(HINSTANCE hModule)
                         bool ignored = true;
                         if (!Json::ParseUtf8(body, parsed)
                             || !ParseZones(parsed, m_Zones, ignored))
-                            m_LoadError = L"zones: cannot read " + path;
+                            m_LoadError = Tr(L"зоны: не читается ") + path;
                     }
                 }
             }
@@ -362,7 +363,7 @@ void Config::Load(HINSTANCE hModule)
                     std::ifstream keyFile(path, std::ios::binary);
                     if (!keyFile)
                     {
-                        m_LoadError = L"squawk: cannot open " + path;
+                        m_LoadError = Tr(L"коды: не открывается ") + path;
                     }
                     else
                     {

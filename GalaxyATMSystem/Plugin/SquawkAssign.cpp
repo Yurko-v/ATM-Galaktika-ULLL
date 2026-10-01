@@ -20,27 +20,29 @@ void CGalaxyATMSystemPlugin::ConfigureSquawk()
         m_config.SquawkPollSeconds(), log);
 }
 
-void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::string& text)
+void CGalaxyATMSystemPlugin::SquawkDebugLine(const std::wstring& text)
 {
     if (!m_config.SquawkDebug())
         return;
-    DisplayUserMessage("ULLL Squawk", "debug", text.c_str(), true, true, true, true, false);
-    m_squawk.Log(text);
+    DisplayUserMessage("ULLL Squawk", Narrow(Tr(L"отладка")).c_str(), Narrow(text).c_str(),
+        true, true, true, true, false);
+    m_squawk.Log(Log::Utf8(text));
 }
 
-void CGalaxyATMSystemPlugin::SquawkMessage(const std::string& text)
+void CGalaxyATMSystemPlugin::SquawkMessage(const std::wstring& text)
 {
-    DisplayUserMessage("ULLL Squawk", "squawk", text.c_str(), true, true, false, false, false);
-    m_squawk.Log("message: " + text);
-    Log::Warn("squawk", text);
+    DisplayUserMessage("ULLL Squawk", Narrow(Tr(L"Код ответчика")).c_str(), Narrow(text).c_str(),
+        true, true, false, false, false);
+    m_squawk.Log("message: " + Log::Utf8(text));
+    Log::Warn("squawk", Log::Utf8(text));
 }
 
 bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
 {
-    const char* why = NULL;
+    const wchar_t* why = NULL;
     if (!m_squawk.Enabled())
     {
-        why = "server not set up - Squawk.ServerUrl in GalaxyATMSystem.json";
+        why = Tr(L"сервер не настроен - Squawk.ServerUrl в GalaxyATMSystem.json");
     }
     else
     {
@@ -51,12 +53,12 @@ bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
         if (!live && !(sim && m_config.SquawkAllowSweatbox()))
         {
             why = sim
-                ? "sweatbox: codes are off, set Squawk.AllowSweatbox in GalaxyATMSystem.json"
-                : "not connected - codes are only handed out on the network";
+                ? Tr(L"тренажёр: выдача кодов отключена, включите Squawk.AllowSweatbox в GalaxyATMSystem.json")
+                : Tr(L"нет подключения - коды выдаются только в сети");
         }
         else if (!OnControllerPosition(ControllerMyself()))
         {
-            why = "not on a controller position - observers do not hand out codes";
+            why = Tr(L"вы не на диспетчерской позиции - наблюдатели коды не выдают");
         }
     }
 
@@ -112,9 +114,9 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
 {
     for (const SquawkAnswer& answer : m_squawk.TakeAnswers())
     {
-        SquawkDebugLine("answer for " + answer.callsign
-            + ": code=" + (answer.code.empty() ? "-" : answer.code)
-            + " error=" + (answer.error.empty() ? "-" : answer.error));
+        SquawkDebugLine(Tr(L"ответ для ") + Widen(answer.callsign.c_str())
+            + Tr(L": код=") + Widen(answer.code.empty() ? "-" : answer.code.c_str())
+            + Tr(L" ошибка=") + Widen(answer.error.empty() ? "-" : answer.error.c_str()));
 
         if (!answer.error.empty())
         {
@@ -126,26 +128,26 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
             if (!answer.byUser)
                 continue;
 
-            std::string text;
+            std::wstring text;
             if (answer.error == "pool_empty")
-                text = "no free codes left";
+                text = Tr(L"свободных кодов не осталось");
             else if (answer.error == "conflict")
-                text = "code already held by " + answer.holder;
+                text = Tr(L"код уже занят: ") + Widen(answer.holder.c_str());
             else if (answer.error == "not_online")
-                text = "the server does not see " + MyPosition()
-                    + " online on VATSIM - if you have only just logged in, try again in a minute";
+                text = Tr(L"сервер не видит ") + Widen(MyPosition().c_str())
+                    + Tr(L" в сети VATSIM - если вы только что подключились, повторите через минуту");
             else if (answer.error == "network_stale")
-                text = "the server cannot reach VATSIM, so it cannot tell who is asking";
+                text = Tr(L"сервер не может связаться с VATSIM и не знает, кто запрашивает");
             else if (answer.error == "rate_limited")
-                text = "too many requests from this position - wait a minute";
+                text = Tr(L"слишком много запросов с этой позиции - подождите минуту");
             else if (answer.error == "unauthorized")
-                text = "server refused the key - Squawk.ApiKeyFile";
+                text = Tr(L"сервер не принял ключ - Squawk.ApiKeyFile");
             else if (answer.error == "network")
-                text = "server is not answering";
+                text = Tr(L"сервер не отвечает");
             else
-                text = "server error: " + answer.error;
+                text = Tr(L"ошибка сервера: ") + Widen(answer.error.c_str());
 
-            DisplayUserMessage("ULLL Squawk", answer.callsign.c_str(), text.c_str(),
+            DisplayUserMessage("ULLL Squawk", answer.callsign.c_str(), Narrow(text).c_str(),
                 true, true, false, false, false);
             continue;
         }
@@ -156,13 +158,13 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
         CFlightPlan fp = FlightPlanSelect(answer.callsign.c_str());
         if (!fp.IsValid())
         {
-            SquawkMessage(answer.callsign + ": got " + answer.code
-                + " but the flight plan is gone");
+            SquawkMessage(Widen(answer.callsign.c_str()) + Tr(L": получен код ") + Widen(answer.code.c_str())
+                + Tr(L", но плана полёта уже нет"));
             continue;
         }
         if (answer.code == fp.GetControllerAssignedData().GetSquawk())
         {
-            SquawkDebugLine(answer.callsign + ": " + answer.code + " already on the plan");
+            SquawkDebugLine(Widen(answer.callsign.c_str()) + L": " + Widen(answer.code.c_str()) + Tr(L" уже в плане"));
             continue;
         }
 
@@ -170,11 +172,11 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
         if (!fp.GetControllerAssignedData().SetSquawk(answer.code.c_str()))
         {
             m_squawkSetByUs.erase(answer.callsign);
-            SquawkMessage(answer.callsign + ": EuroScope refused to set " + answer.code
-                + " - assume the aircraft first");
+            SquawkMessage(Widen(answer.callsign.c_str()) + Tr(L": EuroScope не дал установить ")
+                + Widen(answer.code.c_str()) + Tr(L" - сначала возьмите борт на управление"));
             continue;
         }
-        SquawkDebugLine(answer.callsign + ": set to " + answer.code);
+        SquawkDebugLine(Widen(answer.callsign.c_str()) + Tr(L": установлен код ") + Widen(answer.code.c_str()));
     }
 }
 
@@ -186,12 +188,12 @@ void CGalaxyATMSystemPlugin::RequestSquawk(const std::string& callsign, bool fre
     std::string position = MyPosition();
     if (position.empty())
     {
-        SquawkMessage("no controller callsign of your own - log in as a controller first");
+        SquawkMessage(Tr(L"нет своего позывного диспетчера - сначала подключитесь диспетчером"));
         return;
     }
 
-    SquawkDebugLine("asking for a code: " + callsign + " from " + position
-        + (fresh ? " (new one)" : ""));
+    SquawkDebugLine(Tr(L"запрос кода: ") + Widen(callsign.c_str()) + Tr(L" от ") + Widen(position.c_str())
+        + (fresh ? Tr(L" (новый)") : L""));
     m_squawk.Assign(callsign, position, fresh, true);
 }
 
@@ -213,8 +215,8 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
     if (m_config.SquawkDebug())
     {
         CFlightPlan asel = FlightPlanSelectASEL();
-        SquawkDebugLine("fn=" + std::to_string(FunctionId) + " via " + source
-            + ", aircraft: " + (asel.IsValid() ? asel.GetCallsign() : "none selected"));
+        SquawkDebugLine(L"fn=" + std::to_wstring(FunctionId) + Tr(L" через ") + Widen(source)
+            + Tr(L", борт: ") + (asel.IsValid() ? Widen(asel.GetCallsign()) : std::wstring(Tr(L"не выбран"))));
     }
 
     switch (FunctionId)
@@ -225,7 +227,7 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
         CFlightPlan fp = FlightPlanSelectASEL();
         if (!fp.IsValid())
         {
-            SquawkMessage("no aircraft selected - click the aircraft's row");
+            SquawkMessage(Tr(L"борт не выбран - щёлкните по строке борта"));
             return;
         }
         if (!SquawkReady(true))
@@ -239,10 +241,10 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
 
         m_squawkMenuCallsign = fp.GetCallsign();
         m_squawkMenuArea = Area;
-        OpenPopupList(Area, "Squawk", 1);
-        AddPopupListElement("Get code", "", FN_SQUAWK_GET);
-        AddPopupListElement("New code", "", FN_SQUAWK_NEW);
-        AddPopupListElement("Type in", "", FN_SQUAWK_MANUAL);
+        OpenPopupList(Area, Narrow(Tr(L"Код ответчика")).c_str(), 1);
+        AddPopupListElement(Narrow(Tr(L"Получить код")).c_str(), "", FN_SQUAWK_GET);
+        AddPopupListElement(Narrow(Tr(L"Новый код")).c_str(), "", FN_SQUAWK_NEW);
+        AddPopupListElement(Narrow(Tr(L"Ввести вручную")).c_str(), "", FN_SQUAWK_MANUAL);
         return;
     }
 
@@ -250,7 +252,7 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
     case FN_SQUAWK_NEW:
         if (m_squawkMenuCallsign.empty())
         {
-            SquawkMessage("the menu lost track of the aircraft - open it again");
+            SquawkMessage(Tr(L"меню потеряло борт - откройте его заново"));
             return;
         }
         RequestSquawk(m_squawkMenuCallsign, FunctionId == FN_SQUAWK_NEW);
@@ -275,7 +277,7 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
         }
         if (!IsSquawkCode(code))
         {
-            SquawkMessage("a code is four digits, 0 to 7");
+            SquawkMessage(Tr(L"код - это четыре цифры от 0 до 7"));
             return;
         }
 
@@ -287,8 +289,8 @@ void CGalaxyATMSystemPlugin::HandleSquawkFunction(int FunctionId, const char* sI
         if (!fp.GetControllerAssignedData().SetSquawk(code.c_str()))
         {
             m_squawkSetByUs.erase(fp.GetCallsign());
-            SquawkMessage(std::string(fp.GetCallsign()) + ": EuroScope refused to set " + code
-                + " - assume the aircraft first");
+            SquawkMessage(Widen(fp.GetCallsign()) + Tr(L": EuroScope не дал установить ")
+                + Widen(code.c_str()) + Tr(L" - сначала возьмите борт на управление"));
             return;
         }
         if (SquawkReady(false))

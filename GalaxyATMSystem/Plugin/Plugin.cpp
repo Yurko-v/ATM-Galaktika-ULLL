@@ -141,9 +141,9 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
         {
             Log::Warn("font", "Inter is not installed - the sector list is drawn in Arial instead."
                 " Install Inter (https://rsms.me/inter/) and restart EuroScope.");
-            DisplayUserMessage("Galaxy ATM System", "Font",
-                "Font Inter is not installed - the sector list (.rc) falls back to Arial."
-                " Install Inter from https://rsms.me/inter/ and restart EuroScope.",
+            DisplayUserMessage("Galaxy ATM System", Narrow(Tr(L"Шрифт")).c_str(),
+                Narrow(Tr(L"Шрифт Inter не установлен - список РЦ (.rc) рисуется шрифтом Arial."
+                    L" Установите Inter с https://rsms.me/inter/ и перезапустите EuroScope.")).c_str(),
                 true, true, true, true, false);
         }
     }

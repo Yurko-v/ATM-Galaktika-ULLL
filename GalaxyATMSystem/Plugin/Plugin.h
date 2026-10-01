@@ -249,8 +249,8 @@ private:
     std::string AssignedSquawk(const EuroScopePlugIn::CFlightPlan& fp) const;
     COLORREF SquawkColor(const EuroScopePlugIn::CFlightPlan& fp, EuroScopePlugIn::CRadarTarget rt, const std::string& assigned) const;
     void RequestSquawk(const std::string& callsign, bool fresh);
-    void SquawkMessage(const std::string& text);
-    void SquawkDebugLine(const std::string& text);
+    void SquawkMessage(const std::wstring& text);
+    void SquawkDebugLine(const std::wstring& text);
     void ApplySquawkAnswers();
 
     void RefreshApwZones();

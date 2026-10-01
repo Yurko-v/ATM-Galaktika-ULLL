@@ -58,8 +58,8 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         m_perfOn = !m_perfOn;
         PerfReset();
         Log::Info("perf", m_perfOn ? "timing on" : "timing off");
-        GetPlugIn()->DisplayUserMessage("ULLL Panel", "perf",
-            m_perfOn ? "timing on - GalaxyATMSystem.log every 10 s" : "timing off",
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Замер")).c_str(),
+            Narrow(m_perfOn ? Tr(L"замер включён - GalaxyATMSystem.log каждые 10 с") : Tr(L"замер выключен")).c_str(),
             true, false, false, false, false);
         return true;
     }
@@ -74,7 +74,8 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
             me.IsValid() && me.GetPositionId() != NULL ? me.GetPositionId() : "-",
             me.IsValid() ? me.GetFacility() : -1,
             (me.IsValid() && me.IsController()) ? 1 : 0);
-        p->DisplayUserMessage("ULLL Panel", "Diag", line, true, true, false, false, false);
+        const std::string diag = Narrow(Tr(L"Диагностика"));
+        p->DisplayUserMessage("ULLL Panel", diag.c_str(), line, true, true, false, false, false);
 
         CFlightPlan fp = p->FlightPlanSelectASEL();
         if (fp.IsValid())
@@ -94,9 +95,9 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         }
         else
         {
-            strcpy_s(line, "no selected aircraft - click its callsign first");
+            strcpy_s(line, Narrow(Tr(L"борт не выбран - сначала щёлкните по его позывному")).c_str());
         }
-        p->DisplayUserMessage("ULLL Panel", "Diag", line, true, true, false, false, false);
+        p->DisplayUserMessage("ULLL Panel", diag.c_str(), line, true, true, false, false, false);
         return true;
     }
 
@@ -104,19 +105,20 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     {
         CPlugIn* p = GetPlugIn();
         const TrackSymbolSet& symbols = TrackSymbols();
-        std::string line = "file: " + g_trackSymbolsSource;
-        p->DisplayUserMessage("ULLL Panel", "Symbols", line.c_str(), true, true, false, false, false);
+        const std::string sender = Narrow(Tr(L"Символы"));
+        std::string line = Narrow(Tr(L"файл: ")) + g_trackSymbolsSource;
+        p->DisplayUserMessage("ULLL Panel", sender.c_str(), line.c_str(), true, true, false, false, false);
 
-        line = "symbols (* = from the file):";
+        line = Narrow(Tr(L"символы (* = из файла):"));
         for (const auto& s : symbols)
             line += " " + s.first + (g_trackSymbolsFromFile.count(s.first) ? "*" : "");
-        p->DisplayUserMessage("ULLL Panel", "Symbols", line.c_str(), true, true, false, false, false);
+        p->DisplayUserMessage("ULLL Panel", sender.c_str(), line.c_str(), true, true, false, false, false);
 
-        char buf[256];
-        sprintf_s(buf, "last frame: targets=%d offRadar=%d altFilter=%d noSymbol=%d drawn=%d visible=%d",
+        wchar_t buf[256];
+        swprintf_s(buf, Tr(L"последний кадр: целей=%d вне экрана=%d фильтр высоты=%d без символа=%d нарисовано=%d панель видна=%d"),
             m_symbolStats.targets, m_symbolStats.offRadar, m_symbolStats.filtered,
             m_symbolStats.noSymbol, m_symbolStats.drawn, m_visible ? 1 : 0);
-        p->DisplayUserMessage("ULLL Panel", "Symbols", buf, true, true, false, false, false);
+        p->DisplayUserMessage("ULLL Panel", sender.c_str(), Narrow(buf).c_str(), true, true, false, false, false);
         return true;
     }
 
