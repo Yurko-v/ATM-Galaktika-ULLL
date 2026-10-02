@@ -125,6 +125,7 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
     if (cmd == ".logout")
     {
         Plugin()->SetSessionAuthorized(false);
+        Plugin()->ResetLogin();
         m_authState = AuthState::LoggedOut;
         m_authMessage.clear();
         m_autoLoginTried = true;

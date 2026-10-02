@@ -265,6 +265,18 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
         hasTable = false;
         return true;
     }
+    Json::Value root;
+    const bool isObject = Json::ParseUtf8(response.body, root) && root.kind == Json::Value::Kind::Object;
+    if (response.status == 403)
+    {
+        const Json::Value* e = isObject ? root.Find(L"error") : NULL;
+        if (e != NULL && e->AsString() == L"not_registered")
+        {
+            name.clear();
+            hasTable = true;
+            return true;
+        }
+    }
     if (response.status != 200)
     {
         Log::Error("auth", "user base: " + endpoint + " answered HTTP " + std::to_string(response.status)
@@ -272,8 +284,7 @@ bool FetchRegisteredName(const std::string& baseUrl, const std::string& apiKey,
         return false;
     }
 
-    Json::Value root;
-    if (!Json::ParseUtf8(response.body, root) || root.kind != Json::Value::Kind::Object)
+    if (!isObject)
     {
         Log::Error("auth", "user base: " + endpoint + " answered something that is not a JSON object - "
             + Log::Snippet(response.body));

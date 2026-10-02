@@ -248,6 +248,7 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
     if (m_authState != AuthState::LoggedOut && !Plugin()->TrainingSession() && Plugin()->AccessSuspended())
     {
         Plugin()->SetSessionAuthorized(false);
+        Plugin()->ResetLogin();
         m_authState = AuthState::LoggedOut;
         m_openDropdown = DropdownKind::None;
         m_rulerArmed = false;
