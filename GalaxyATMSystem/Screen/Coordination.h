@@ -68,14 +68,15 @@ namespace Galaxy
     {
         static std::set<std::string> reported;
         const char* coordinated = fp.GetExitCoordinationPointName();
-        const std::string zone = zoneOf != NULL ? ZoneExitPoint(fp, zoneOf) : std::string();
+        bool neverInHomeZone = false;
+        const std::string zone = zoneOf != NULL ? ZoneExitPoint(fp, zoneOf, neverInHomeZone) : std::string();
         const struct { const char* name; const char* source; } candidates[] = {
             { agreed.c_str(), "agreed" },
             { CoordinationHolds(fp.GetExitCoordinationNameState()) ? coordinated : NULL, "exit coordination" },
             { zone.c_str(), "zone exit" },
-            { zoneOf != NULL ? fp.GetNextFirCopxPointName() : NULL, "next FIR COPX" },
-            { fp.GetNextCopxPointName(), "next COPX" },
-            { coordinated, "exit point" },
+            { zoneOf != NULL && !neverInHomeZone ? fp.GetNextFirCopxPointName() : NULL, "next FIR COPX" },
+            { !neverInHomeZone ? fp.GetNextCopxPointName() : NULL, "next COPX" },
+            { !neverInHomeZone ? coordinated : NULL, "exit point" },
         };
         for (const auto& c : candidates)
         {

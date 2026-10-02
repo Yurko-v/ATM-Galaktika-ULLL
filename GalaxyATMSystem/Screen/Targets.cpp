@@ -20,14 +20,15 @@ void CGalaxyATMSystemRadarScreen::HeadingTurnPath(CRadarTarget rt, double headin
         return;
     }
 
-    const double kRoundPx = 15.0;
-    const POINT atStart = out.front();
-    const POINT aMileOff = ConvertCoordFromPositionToPixel(
-        CalculateDestinationPoint(start, 90.0, 1.0));
-    const double dxPx = (double)aMileOff.x - atStart.x, dyPx = (double)aMileOff.y - atStart.y;
-    const double pxPerNm = sqrt(dxPx * dxPx + dyPx * dyPx);
-    const double radiusNm = max(0.02, min(pxPerNm > 0.01 ? kRoundPx / pxPerNm : 0.5,
-        totalNm / 4.0));
+    const double kStandardRateDegPerSec = 3.0;
+    const double kBankLimitDeg = 25.0;
+    const double kGravityMs2 = 9.80665;
+    const double kMsPerKnot = 0.514444;
+    const double kMetresPerNm = 1852.0;
+    const double speedMs = rt.GetGS() * kMsPerKnot;
+    const double rateRadiusM = speedMs / (kStandardRateDegPerSec * M_PI / 180.0);
+    const double bankRadiusM = speedMs * speedMs / (kGravityMs2 * tan(kBankLimitDeg * M_PI / 180.0));
+    const double radiusNm = max(rateRadiusM, bankRadiusM) / kMetresPerNm;
     const double track = rt.GetTrackHeading();
     const double delta = fmod(headingDeg - track + 540.0, 360.0) - 180.0;
     const double dir = (delta >= 0.0) ? 1.0 : -1.0;

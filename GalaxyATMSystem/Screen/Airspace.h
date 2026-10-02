@@ -12,6 +12,7 @@ namespace Galaxy
         std::vector<std::string> owners;
         std::vector<CPosition> ring;
         double area = 0.0;
+        bool home = false;
     };
 
     enum class PointZone { Mine, Junction, Unowned, Other, Unknown };
@@ -25,6 +26,7 @@ namespace Galaxy
     inline const double kJunctionNm = 1.5;
     inline const int kJunctionFt = 100;
     inline const double kSameCoordDeg = 1e-6;
+    inline const size_t kFirPrefixLength = 4;
 
     inline bool ParseEseCoord(const std::string& text, double& out)
     {
@@ -260,6 +262,17 @@ namespace Galaxy
             if (entry.first.ring.size() >= 3)
                 sectors.push_back(entry.first);
         }
+
+        std::map<std::string, int> sectorsPerFir;
+        std::string homeFir;
+        for (const AirspaceSector& s : sectors)
+        {
+            const std::string fir = s.name.substr(0, kFirPrefixLength);
+            if (++sectorsPerFir[fir] > sectorsPerFir[homeFir] || homeFir.empty())
+                homeFir = fir;
+        }
+        for (AirspaceSector& s : sectors)
+            s.home = s.name.compare(0, kFirPrefixLength, homeFir) == 0;
         Log::Info("airspace", Log::Utf8(file) + ": " + std::to_string(sectors.size()) + " sectors");
         return sectors;
     }
@@ -352,11 +365,12 @@ namespace Galaxy
     inline const ULONGLONG kZoneExitRecheckMs = 2000;
     inline const size_t kZoneExitMemoLimit = 1024;
 
-    inline std::string ZoneExitPoint(CFlightPlan& fp, CPlugIn* plugin)
+    inline std::string ZoneExitPoint(CFlightPlan& fp, CPlugIn* plugin, bool& neverInHomeZone)
     {
         struct Memo
         {
             std::string point;
+            bool neverInHomeZone;
             ULONGLONG tick;
         };
         static std::map<std::string, Memo> memo;
@@ -364,7 +378,10 @@ namespace Galaxy
         const std::string callsign = fp.GetCallsign();
         auto known = memo.find(callsign);
         if (known != memo.end() && now - known->second.tick < kZoneExitRecheckMs)
+        {
+            neverInHomeZone = known->second.neverInHomeZone;
             return known->second.point;
+        }
         if (memo.size() > kZoneExitMemoLimit)
             memo.clear();
 
@@ -374,16 +391,40 @@ namespace Galaxy
         const int altFt = pos.IsValid() ? pos.GetFlightLevel() : 0;
         const AirspaceSector* here = pos.IsValid() ? SectorAt(pos.GetPosition(), altFt) : NULL;
         std::string holder;
+        neverInHomeZone = false;
         if (here != NULL)
         {
             const std::set<std::string> online = OnlinePositions(plugin);
-            holder = ZoneHolder(*here, online);
             CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
-            std::string lastInside;
-            for (int i = max(0, route.GetPointsCalculatedIndex()); i < route.GetPointsNumber(); i++)
+            const auto levelOver = [&](int i)
             {
                 const int profileFt = route.GetPointCalculatedProfileAltitude(i);
-                if (!InsideZoneOf(holder, online, route.GetPointPosition(i), profileFt > 0 ? profileFt : altFt))
+                return profileFt > 0 ? profileFt : altFt;
+            };
+
+            int from = max(0, route.GetPointsCalculatedIndex());
+            const AirspaceSector* zone = here;
+            if (!here->home)
+            {
+                zone = NULL;
+                for (; from < route.GetPointsNumber(); from++)
+                {
+                    const AirspaceSector* ahead = SectorAt(route.GetPointPosition(from), levelOver(from));
+                    if (ahead != NULL && ahead->home)
+                    {
+                        zone = ahead;
+                        break;
+                    }
+                }
+                neverInHomeZone = zone == NULL;
+            }
+            if (zone != NULL)
+                holder = ZoneHolder(*zone, online);
+
+            std::string lastInside;
+            for (int i = from; zone != NULL && i < route.GetPointsNumber(); i++)
+            {
+                if (!InsideZoneOf(holder, online, route.GetPointPosition(i), levelOver(i)))
                 {
                     point = lastInside;
                     break;
@@ -395,9 +436,10 @@ namespace Galaxy
         }
 
         if (known == memo.end() || known->second.point != point)
-            Log::Info("formular", callsign + ": exit from the zone of " + (here != NULL ? holder : std::string("-"))
-                + " is " + (point.empty() ? std::string("unknown") : point));
-        memo[callsign] = { point, now };
+            Log::Info("formular", callsign + ": exit from the zone of " + (!holder.empty() ? holder : std::string("-"))
+                + " is " + (neverInHomeZone ? std::string("none - the route stays outside the home sectors")
+                    : point.empty() ? std::string("unknown") : point));
+        memo[callsign] = { point, neverInHomeZone, now };
         return point;
     }
 

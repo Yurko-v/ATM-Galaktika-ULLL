@@ -334,12 +334,6 @@ void CGalaxyATMSystemRadarScreen::DrawRoutes(HDC hDC)
             }
             canvas->SetColor(color);
             canvas->Ring(path, false);
-
-            Gdiplus::SolidBrush dot(Theme::GdiColor(color));
-            const Gdiplus::REAL r = (Gdiplus::REAL)Theme::RoutePointRadiusPx;
-            for (size_t i = 1; i < path.size(); i++)
-                if (PtInRect(&ra, path[i]))
-                    canvas->g.FillEllipse(&dot, path[i].x - r, path[i].y - r, 2 * r, 2 * r);
         }
     }
 

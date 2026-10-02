@@ -135,7 +135,6 @@ namespace Theme
     const double   WakeArcRadiusPx    = 21.0;
     const float    RouteWidth         = 1.5f;
     const COLORREF RouteColor         = RGB(0xF0, 0xD7, 0x5A);
-    const double   RoutePointRadiusPx = 2.5;
     const double   WakeArcStepPx      = 8.0;
     const double   WakeArcSweepDeg     = 40.0;
 
