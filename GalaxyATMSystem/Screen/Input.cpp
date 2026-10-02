@@ -475,13 +475,7 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
             const std::string who = (callsign != NULL && *callsign != '\0') ? callsign : "(no callsign)";
 
             m_authMessage.clear();
-            if (Plugin()->AccessSuspended())
-            {
-                m_authMessage = Tr(L"Доступ приостановлен");
-                ShowNotice(m_authMessage);
-                Log::Warn("auth", "LOGIN " + who + " refused: access suspended - the name was removed from the user base");
-            }
-            else if (!Plugin()->LiveConnection())
+            if (!Plugin()->LiveConnection())
             {
                 m_authMessage = Tr(L"Нет подключения к VATSIM");
                 Log::Error("auth", "LOGIN " + who + " failed: not controlling on the live VATSIM network"
