@@ -161,6 +161,27 @@ namespace Galaxy
         g.FillPolygon(&brush, head, 4);
     }
 
+    inline void DrawTick(Gdiplus::Graphics& g, const RECT& slot, COLORREF ink)
+    {
+        const Gdiplus::REAL w = (Gdiplus::REAL)(slot.right - slot.left);
+        const Gdiplus::REAL h = (Gdiplus::REAL)(slot.bottom - slot.top);
+        const Gdiplus::REAL top = slot.top + h * 0.3f, bottom = slot.top + h * 0.8f;
+        const Gdiplus::PointF tick[] = {
+            Gdiplus::PointF(slot.left + w * 0.1f, (top + bottom) / 2.0f + h * 0.05f),
+            Gdiplus::PointF(slot.left + w * 0.4f, bottom),
+            Gdiplus::PointF(slot.right - w * 0.1f, top),
+        };
+
+        Gdiplus::Pen pen(Theme::GdiColor(ink), max(2.0f, h / 7.0f));
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        const Gdiplus::SmoothingMode mode = g.GetSmoothingMode();
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.DrawLines(&pen, tick, 3);
+        g.SetSmoothingMode(mode);
+    }
+
     const wchar_t kHandoffArrow = L'\x2192';
 
     inline void DrawHandoffArrow(Gdiplus::Graphics& g, const RECT& slot, COLORREF ink)

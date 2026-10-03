@@ -124,7 +124,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         POINT from, to;
         COLORREF color;
     };
-    enum class ArrowKind { Up, Down, Handoff };
+    enum class ArrowKind { Up, Down, Handoff, Tick };
     struct PendingArrow
     {
         RECT slot;
@@ -149,7 +149,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
         for (const PendingArrow& a : arrows)
         {
-            if (a.kind == ArrowKind::Handoff)
+            if (a.kind == ArrowKind::Tick)
+                DrawTick(g, a.slot, a.ink);
+            else if (a.kind == ArrowKind::Handoff)
                 DrawHandoffArrow(g, a.slot, a.ink);
             else
                 DrawTrendArrow(g, a.slot, a.kind == ArrowKind::Up, a.ink);
@@ -896,16 +898,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
 
                 if (run.text == L"\x221A")
                 {
-                    const int w = runWidths[l][r];
-                    const int top = y + lineH * 3 / 10, bottom = y + lineH * 4 / 5;
-                    const POINT tick[3] = { { x + w / 10, (top + bottom) / 2 + lineH / 20 },
-                                            { x + w * 2 / 5, bottom },
-                                            { x + w - w / 10, top } };
-                    HPEN pen = CreatePen(PS_SOLID, max(2, lineH / 7), ink);
-                    HGDIOBJ old = SelectObject(hDC, pen);
-                    Polyline(hDC, tick, 3);
-                    SelectObject(hDC, old);
-                    DeleteObject(pen);
+                    const RECT slot = { x, y, x + runWidths[l][r], y + lineH };
+                    arrows.push_back({ slot, ArrowKind::Tick, ink });
                 }
                 else if (run.text == L"\x2191" || run.text == L"\x2193")
                 {
