@@ -220,6 +220,8 @@ WorkMode CGalaxyATMSystemRadarScreen::GetWorkMode(std::wstring& labelOut, COLORR
         return WorkMode::Sup;
     }
 
+    if (Plugin()->TrainingSession())
+        ct = CONNECTION_TYPE_SWEATBOX;
     switch (ct)
     {
     case CONNECTION_TYPE_DIRECT:

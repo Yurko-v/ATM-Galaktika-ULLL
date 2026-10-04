@@ -180,6 +180,9 @@
     <ClCompile Include="Plugin\Login.cpp">
       <Filter>Plugin</Filter>
     </ClCompile>
+    <ClCompile Include="Plugin\Sweatbox.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
     <ClCompile Include="Plugin\Plugin.cpp">
       <Filter>Plugin</Filter>
     </ClCompile>

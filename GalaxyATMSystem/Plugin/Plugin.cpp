@@ -148,12 +148,12 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
         }
     }
 
+    DetectSweatbox();
     const bool unlocked = Unlocked();
     m_squawk.SetPosition(unlocked && SquawkReady(false) ? MyPosition() : "");
 
-    int ct = GetConnectionType();
     std::string position = MyPosition();
-    if ((ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !position.empty())
+    if (LiveConnection())
     {
         const int period = ListedOnNetwork() ? kNamePollSeconds : kFeedPollSeconds;
         if (position != m_identityAskedFor || Counter % period == 0)

@@ -122,7 +122,8 @@ std::wstring CGalaxyATMSystemPlugin::MyUserName() const
 bool CGalaxyATMSystemPlugin::LiveConnection() const
 {
     const int ct = GetConnectionType();
-    return (ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !MyPosition().empty();
+    return (ct == CONNECTION_TYPE_DIRECT || ct == CONNECTION_TYPE_VIA_PROXY) && !TrainingSession()
+        && !MyPosition().empty();
 }
 
 bool CGalaxyATMSystemPlugin::ListedOnNetwork() const
@@ -141,11 +142,24 @@ bool CGalaxyATMSystemPlugin::AccessSuspended() const
 
 bool CGalaxyATMSystemPlugin::TrainingSession() const
 {
+    // "Direct to VATSIM" with the SweatBox server reports DIRECT, so DetectSweatbox() marks
+    // the connection by its server address; the mark stays until EuroScope goes offline.
     const int ct = GetConnectionType();
-    return ct == CONNECTION_TYPE_SWEATBOX
+    if (ct != m_lastConnectionType)
+    {
+        Log::Info("auth", "EuroScope connection type " + std::to_string(m_lastConnectionType) + " -> "
+            + std::to_string(ct) + (m_trainingConnection && ct != CONNECTION_TYPE_NO ? ", still a training session" : ""));
+        m_lastConnectionType = ct;
+    }
+
+    if (ct == CONNECTION_TYPE_NO)
+        m_trainingConnection = false;
+    else if (ct == CONNECTION_TYPE_SWEATBOX
         || ct == CONNECTION_TYPE_SIMULATOR_SERVER
         || ct == CONNECTION_TYPE_SIMULATOR_CLIENT
-        || ct == CONNECTION_TYPE_PLAYBACK;
+        || ct == CONNECTION_TYPE_PLAYBACK)
+        m_trainingConnection = true;
+    return m_trainingConnection;
 }
 
 void CGalaxyATMSystemPlugin::StartLogin(const std::wstring& cid, const std::wstring& surname)

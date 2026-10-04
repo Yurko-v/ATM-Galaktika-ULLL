@@ -47,8 +47,8 @@ bool CGalaxyATMSystemPlugin::SquawkReady(bool tell)
     else
     {
         int connection = GetConnectionType();
-        bool live = (connection == CONNECTION_TYPE_DIRECT || connection == CONNECTION_TYPE_VIA_PROXY);
         bool sim = TrainingSession();
+        bool live = !sim && (connection == CONNECTION_TYPE_DIRECT || connection == CONNECTION_TYPE_VIA_PROXY);
 
         if (!live && !(sim && m_config.SquawkAllowSweatbox()))
         {

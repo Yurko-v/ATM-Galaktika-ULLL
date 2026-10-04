@@ -163,6 +163,7 @@
     <ClCompile Include="Plugin\Login.cpp" />
     <ClCompile Include="Plugin\Plugin.cpp" />
     <ClCompile Include="Plugin\SquawkAssign.cpp" />
+    <ClCompile Include="Plugin\Sweatbox.cpp" />
     <ClCompile Include="Plugin\Tags.cpp" />
     <ClCompile Include="Screen\AsrSettings.cpp" />
     <ClCompile Include="Screen\AtisWindow.cpp" />

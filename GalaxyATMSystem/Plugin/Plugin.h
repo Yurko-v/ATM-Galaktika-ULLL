@@ -225,6 +225,18 @@ private:
 
     bool m_sessionAuthorized = false;
     bool m_wasUnlocked = false;
+    mutable bool m_trainingConnection = false;
+    mutable int m_lastConnectionType = EuroScopePlugIn::CONNECTION_TYPE_NO;
+
+    void DetectSweatbox();
+    void StartSweatboxFetch();
+    bool SweatboxAddress(const std::string& address) const;
+    BackgroundJob m_sweatboxFetch;
+    mutable std::mutex m_sweatboxMutex;
+    std::set<std::string> m_sweatboxAddresses = { "165.227.98.205", "45.55.54.56" };
+    bool m_sweatboxFetchTried = false;
+    std::string m_fsdServer;
+
     void StartAllFetches();
 
     void StartAupFetch();
