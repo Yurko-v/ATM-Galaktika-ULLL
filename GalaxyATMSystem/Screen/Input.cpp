@@ -1016,6 +1016,12 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
         return;
     }
 
+    if (ObjectType == SO_COORD_WINDOW && m_coordOpen)
+    {
+        DragPopup(m_coordPlacement, m_coordArea, Pt, Released);
+        return;
+    }
+
     if (ObjectType == SO_ATIS_SCROLLBAR)
     {
         ScrollAtisTo(Pt, Area);

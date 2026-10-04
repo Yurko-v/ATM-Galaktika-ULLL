@@ -194,6 +194,8 @@ private:
         bool wasMine = false;
         int myReply = 0;
         CoordDecision decision = CoordDecision::None;
+        char partnerNote = 0;
+        ULONGLONG partnerNoteAt = 0;
     };
     struct FormularState
     {
@@ -212,6 +214,7 @@ private:
         std::string agreedCopx;
         int agreedEntryFt = 0;
         std::string agreedEntryPoint;
+        std::string lastDirect;
     };
     std::map<std::string, FormularState> m_formulars;
     int AgreedXfl(EuroScopePlugIn::CFlightPlan& fp);
@@ -318,7 +321,6 @@ private:
     void TickHeadingWindow();
 
     enum class RvsmStatus { Approved, Exempt, NotApproved, Turbulent };
-    std::map<std::string, RvsmStatus> m_rvsmStatus;
     RvsmStatus RvsmStatusOf(EuroScopePlugIn::CFlightPlan& fp);
     bool m_rvsmOpen = false;
     PopupPlacement m_rvsmPlacement;
@@ -384,6 +386,7 @@ private:
     void TickFreeTextWindow();
 
     bool m_coordOpen = false;
+    PopupPlacement m_coordPlacement;
     std::string m_coordCallsign;
     bool m_coordButtonsDown = true;
     RECT m_coordArea = { 0, 0, 0, 0 };
@@ -537,8 +540,8 @@ private:
         bool separatorAfter;
         MenuCheck check = MenuCheck::None;
     };
-    RECT DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title, const std::vector<PanelMenuRow>& rows,
-        int windowType, int itemType);
+    RECT DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title, const std::vector<PanelMenuRow>& rows,
+        int windowType, int itemType, const wchar_t* subtitle = NULL);
     void OpenMapMenu(POINT at, HWND view);
     void CloseMapMenu();
     bool MapMenuItemEnabled(MapMenuItem item);

@@ -87,6 +87,14 @@ public:
     bool IsSharedMarked(const std::string& callsign) const { return m_sharedMarked.count(callsign) != 0; }
     void ToggleSharedMarker(EuroScopePlugIn::CFlightPlan fp);
 
+    int  RvsmStatus(const std::string& callsign) const;
+    void SetRvsmStatus(EuroScopePlugIn::CFlightPlan fp, int status);
+    bool SharedSpeedModifier(EuroScopePlugIn::CFlightPlan& fp, char& modifier) const;
+    void ShareSpeedModifier(EuroScopePlugIn::CFlightPlan fp, char modifier);
+    void ShareCoordOutcome(EuroScopePlugIn::CFlightPlan fp, bool point, const std::string& value, char outcome);
+    bool CoordOutcome(const std::string& callsign, bool point, const std::string& value,
+        char& outcome, ULONGLONG& at) const;
+
     void HandleSquawkFunction(int FunctionId, const char* sItemString, RECT Area, const char* source);
 
     const Config& GetConfig() const { return m_config; }
@@ -236,6 +244,23 @@ private:
     std::set<std::string> m_english;
     std::set<std::string> m_sharedMarked;
     bool BroadcastScratchMark(EuroScopePlugIn::CFlightPlan fp, const char* mark, bool on);
+    bool BroadcastScratch(EuroScopePlugIn::CFlightPlan fp, const std::string& msg, const char* what);
+    void ReadSharedScratch(EuroScopePlugIn::CFlightPlan& fp, const char* scratch);
+
+    std::map<std::string, int> m_rvsm;
+    struct SharedSpeed
+    {
+        bool mach = false;
+        int  value = 0;
+        char modifier = 0;
+    };
+    std::map<std::string, SharedSpeed> m_sharedSpeed;
+    struct CoordNote
+    {
+        char outcome = 0;
+        ULONGLONG at = 0;
+    };
+    std::map<std::string, std::map<std::string, CoordNote>> m_coordNotes;
 
     std::string m_squawkMenuCallsign;
     RECT m_squawkMenuArea = { 0, 0, 0, 0 };

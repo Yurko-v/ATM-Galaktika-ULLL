@@ -225,6 +225,14 @@ namespace Galaxy
         return 0;
     }
 
+    inline char SpeedModifierOf(CGalaxyATMSystemPlugin* plugin, CFlightPlan& fp)
+    {
+        char shared = 0;
+        if (plugin != NULL && plugin->SharedSpeedModifier(fp, shared))
+            return shared;
+        return TopSkySpeedModifier(fp.GetControllerAssignedData());
+    }
+
     inline bool CalculatedIasMach(int gsKt, int pressureAltFt, int& iasKt, int& machX100)
     {
         if (gsKt < 40)

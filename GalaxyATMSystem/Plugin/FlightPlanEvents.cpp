@@ -14,14 +14,35 @@ namespace
 {
     const char* const kEnglishMark = "GAL/EN";
     const char* const kSharedMarkerMark = "GAL/MK";
+    const char* const kRvsmMark = "GAL/RV";
+    const char* const kSpeedMark = "GAL/SP";
+    const char* const kCoordMark = "GAL/CO";
+    const int kRvsmStatusCount = 4;
 
-    bool ReadScratchMark(const char* scratch, const char* mark, bool& on)
+    bool ReadScratchValue(const char* scratch, const char* mark, std::string& value)
     {
         const size_t n = strlen(mark);
         if (scratch == NULL || strncmp(scratch, mark, n) != 0 || scratch[n] != '/')
             return false;
-        on = scratch[n + 1] == '1';
+        value = scratch + n + 1;
         return true;
+    }
+
+    bool ReadScratchMark(const char* scratch, const char* mark, bool& on)
+    {
+        std::string value;
+        if (!ReadScratchValue(scratch, mark, value))
+            return false;
+        on = !value.empty() && value[0] == '1';
+        return true;
+    }
+
+    std::string CoordNoteKey(bool point, const std::string& value)
+    {
+        std::string key(1, point ? 'P' : 'L');
+        for (char c : value)
+            key += (char)toupper((unsigned char)c);
+        return key;
     }
 
     bool TrackedBySomeoneElse(CFlightPlan& fp, std::string& tracker)
@@ -40,6 +61,133 @@ bool CGalaxyATMSystemPlugin::BroadcastScratchMark(CFlightPlan fp, const char* ma
     const bool sent = cad.SetScratchPadString(msg.c_str());
     cad.SetScratchPadString(scratch.c_str());
     return sent;
+}
+
+bool CGalaxyATMSystemPlugin::BroadcastScratch(CFlightPlan fp, const std::string& msg, const char* what)
+{
+    const std::string callsign = fp.GetCallsign();
+    std::string tracker;
+    if (TrackedBySomeoneElse(fp, tracker))
+    {
+        Log::Info("formular", callsign + ": " + what + " not shared - tracked by " + tracker
+            + ", EuroScope lets only the tracking controller change the scratch pad");
+        return false;
+    }
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+    const char* old = cad.GetScratchPadString();
+    const std::string scratch = old != NULL ? old : "";
+    const bool sent = cad.SetScratchPadString(msg.c_str());
+    cad.SetScratchPadString(scratch.c_str());
+    if (!sent)
+        Log::Error("formular", callsign + ": " + what + " broadcast refused by EuroScope");
+    return sent;
+}
+
+int CGalaxyATMSystemPlugin::RvsmStatus(const std::string& callsign) const
+{
+    auto it = m_rvsm.find(callsign);
+    return it != m_rvsm.end() ? it->second : -1;
+}
+
+void CGalaxyATMSystemPlugin::SetRvsmStatus(CFlightPlan fp, int status)
+{
+    if (!fp.IsValid() || status < 0 || status >= kRvsmStatusCount)
+        return;
+    m_rvsm[fp.GetCallsign()] = status;
+    BroadcastScratch(fp, std::string(kRvsmMark) + "/" + std::to_string(status), "RVSM status");
+}
+
+bool CGalaxyATMSystemPlugin::SharedSpeedModifier(CFlightPlan& fp, char& modifier) const
+{
+    auto it = m_sharedSpeed.find(fp.GetCallsign());
+    if (it == m_sharedSpeed.end())
+        return false;
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+    const int assigned = it->second.mach ? cad.GetAssignedMach() : cad.GetAssignedSpeed();
+    if (assigned != it->second.value)
+        return false;
+    modifier = it->second.modifier;
+    return true;
+}
+
+void CGalaxyATMSystemPlugin::ShareSpeedModifier(CFlightPlan fp, char modifier)
+{
+    if (!fp.IsValid())
+        return;
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
+    SharedSpeed s;
+    s.mach = cad.GetAssignedMach() > 0;
+    s.value = s.mach ? cad.GetAssignedMach() : cad.GetAssignedSpeed();
+    s.modifier = modifier;
+    if (s.value <= 0)
+        return;
+    m_sharedSpeed[fp.GetCallsign()] = s;
+    std::string msg = std::string(kSpeedMark) + "/" + (s.mach ? "M" : "K") + std::to_string(s.value);
+    if (modifier != 0)
+        msg += modifier;
+    BroadcastScratch(fp, msg, "speed modifier");
+}
+
+void CGalaxyATMSystemPlugin::ShareCoordOutcome(CFlightPlan fp, bool point, const std::string& value, char outcome)
+{
+    if (!fp.IsValid() || value.empty())
+        return;
+    BroadcastScratch(fp, std::string(kCoordMark) + "/" + (point ? "P" : "L") + "/" + value + "/" + outcome,
+        "coordination outcome");
+}
+
+bool CGalaxyATMSystemPlugin::CoordOutcome(const std::string& callsign, bool point, const std::string& value,
+    char& outcome, ULONGLONG& at) const
+{
+    auto notes = m_coordNotes.find(callsign);
+    if (notes == m_coordNotes.end())
+        return false;
+    auto note = notes->second.find(CoordNoteKey(point, value));
+    if (note == notes->second.end())
+        return false;
+    outcome = note->second.outcome;
+    at = note->second.at;
+    return true;
+}
+
+void CGalaxyATMSystemPlugin::ReadSharedScratch(CFlightPlan& fp, const char* scratch)
+{
+    const std::string callsign = fp.GetCallsign();
+    std::string value;
+    if (ReadScratchValue(scratch, kRvsmMark, value))
+    {
+        if (value.size() == 1 && value[0] >= '0' && value[0] < '0' + kRvsmStatusCount)
+            m_rvsm[callsign] = value[0] - '0';
+    }
+    else if (ReadScratchValue(scratch, kSpeedMark, value))
+    {
+        if (value.size() < 2 || (value[0] != 'K' && value[0] != 'M'))
+            return;
+        SharedSpeed s;
+        s.mach = value[0] == 'M';
+        s.value = atoi(value.c_str() + 1);
+        s.modifier = (value.back() == '+' || value.back() == '-') ? value.back() : '\0';
+        if (s.value > 0)
+            m_sharedSpeed[callsign] = s;
+    }
+    else if (ReadScratchValue(scratch, kCoordMark, value))
+    {
+        const size_t first = value.find('/'), last = value.rfind('/');
+        if (first != 1 || last <= first + 1 || last + 2 != value.size())
+            return;
+        const bool point = value[0] == 'P';
+        const std::string what = value.substr(first + 1, last - first - 1);
+        const char outcome = value[last + 1];
+        std::map<std::string, CoordNote>& notes = m_coordNotes[callsign];
+        if (outcome == 'R')
+            notes.erase(CoordNoteKey(point, what));
+        else if (outcome == 'M' || outcome == 'C')
+            notes[CoordNoteKey(point, what)] = { outcome, GetTickCount64() };
+        else
+            return;
+        Log::Info("formular", callsign + ": partner says coordination " + (point ? "DCT " : "level ") + what
+            + (outcome == 'R' ? " requested" : outcome == 'M' ? " coordinated manually" : " cancelled"));
+    }
 }
 
 void CGalaxyATMSystemPlugin::ToggleSharedMarker(CFlightPlan fp)
@@ -264,6 +412,7 @@ void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPla
             else
                 m_sharedMarked.erase(FlightPlan.GetCallsign());
         }
+        ReadSharedScratch(FlightPlan, scratch);
         return;
     }
 

@@ -73,6 +73,10 @@ bool CGalaxyATMSystemRadarScreen::SendCoordination(CFlightPlan& fp, const std::s
         return false;
     }
     Log::Info("formular", callsign + ": coordination " + request + " sent to " + partner);
+    FormularState& st = m_formulars[callsign];
+    for (CoordWatch* w : { point.empty() ? &st.exitCoord : &st.exitPoint, point.empty() ? &st.entryCoord : &st.entryPoint })
+        w->decision = CoordDecision::None;
+    Plugin()->ShareCoordOutcome(fp, !point.empty(), point.empty() ? std::to_string(altitudeFt) : point, 'R');
     return true;
 }
 
@@ -135,7 +139,8 @@ void CGalaxyATMSystemRadarScreen::DecideCoordination(bool manual)
     CoordWatch& w = WatchOf(st, m_coordMenuTarget);
     const bool point = m_coordMenuTarget == CoordTarget::ExitPoint || m_coordMenuTarget == CoordTarget::EntryPoint;
     const bool exit = m_coordMenuTarget == CoordTarget::ExitPoint || m_coordMenuTarget == CoordTarget::ExitLevel;
-    const std::string request = point ? "DCT " + w.pointName : "level " + std::to_string(w.levelFt);
+    const std::string value = point ? w.pointName : std::to_string(w.levelFt);
+    const std::string request = (point ? "DCT " : "level ") + value;
 
     if (manual)
     {
@@ -151,6 +156,7 @@ void CGalaxyATMSystemRadarScreen::DecideCoordination(bool manual)
         else
             (exit ? st.agreedXflFt : st.agreedEntryFt) = w.levelFt;
         Log::Info("formular", m_coordMenuCallsign + ": " + request + " coordinated manually");
+        Plugin()->ShareCoordOutcome(fp, point, value, 'M');
     }
     else
     {
@@ -163,6 +169,7 @@ void CGalaxyATMSystemRadarScreen::DecideCoordination(bool manual)
         else
             (exit ? st.agreedXflFt : st.agreedEntryFt) = 0;
         Log::Info("formular", m_coordMenuCallsign + ": coordination " + request + " cancelled");
+        Plugin()->ShareCoordOutcome(fp, point, value, 'C');
     }
     RequestRefresh();
 }
@@ -256,6 +263,7 @@ std::wstring CGalaxyATMSystemRadarScreen::PendingCoordRequest(const std::string&
 void CGalaxyATMSystemRadarScreen::OpenCoordWindow(const char* callsign)
 {
     m_coordOpen = true;
+    m_coordPlacement = PopupPlacement();
     m_coordCallsign = callsign;
     m_coordButtonsDown = true;
     RequestRefresh();
@@ -282,6 +290,7 @@ void CGalaxyATMSystemRadarScreen::TickCoordWindow()
 
     POINT cursor;
     const bool onRadar = CursorRadarPoint(cursor);
+    TrackPopupActive(m_coordPlacement, m_coordArea, onRadar, cursor);
     const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
         || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
     if (down && !m_coordButtonsDown && onRadar
@@ -301,56 +310,129 @@ void CGalaxyATMSystemRadarScreen::DrawCoordWindow(HDC hDC)
     if (label == m_formulars.end() || request.empty())
         return;
 
-    const int kTitleH = 24, kPad = 12, kBtnW = 96, kBtnH = 22, kGap = 12, kCloseW = 26, kLabelGap = 6;
-    const std::wstring caption = std::wstring(Tr(L"Согласование")) + L" " + Widen(m_coordCallsign.c_str());
-    const int captionW = (int)Theme::MeasureText(hDC, m_fonts.WinTitle, caption).cx;
-    const int requestW = (int)Theme::MeasureText(hDC, m_fonts.Body, request).cx;
-    const int requestH = max(18, (int)Theme::MeasureText(hDC, m_fonts.Body, request).cy);
-    const int W = max(2 * kBtnW + kGap, max(captionW + 2 * kCloseW, requestW)) + 2 * (kPad + 5);
-    const int H = kTitleH + kPad + requestH + kGap + kBtnH + kPad + 5;
-
-    const RECT ra = GetRadarArea();
-    const RECT& box = label->second.area;
-    int left = box.right + kLabelGap;
-    if (left + W > ra.right)
-        left = box.left - kLabelGap - W;
-    left = max(ra.left, left);
-    const int top = max(ra.top, min(box.top, ra.bottom - H));
-    const RECT win = { left, top, left + W, top + H };
-    m_coordArea = win;
-
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
+    SelectObject(hDC, GetSpeedFont());
+    TEXTMETRICW tm;
+    GetTextMetricsW(hDC, &tm);
+    const int lineH = max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
 
-    HRGN rgn = Theme::WinRegion(win);
-    SelectClipRgn(hDC, rgn);
-    Theme::FlatFill(hDC, win, Theme::MenuBarFill);
-    RECT title = { win.left, win.top, win.right, win.top + kTitleH };
-    Theme::DrawLine(hDC, title, caption, m_fonts.WinTitle, Theme::MenuText, DT_CENTER | DT_VCENTER | DT_NOPREFIX);
-    RECT body = { win.left + 5, title.bottom, win.right - 5, win.bottom - 5 };
-    Theme::OutlineBox(hDC, body, Theme::InsetFill, Theme::Border);
-    SelectClipRgn(hDC, NULL);
-    DeleteObject(rgn);
-    Theme::WinBorder(hDC, win, 2, Theme::WinFrame);
+    const int rowH = lineH * 7 / 5;
+    const int border = max(3, rowH / 9);
+    const int line = max(1, rowH / 25);
+    const int titleH = rowH * 9 / 8;
+    const int gap = rowH / 3;
+    const int pad = rowH * 2 / 5;
+    const int accentH = max(2, rowH / 8);
 
-    AddScreenObject(SO_COORD_WINDOW, m_coordCallsign.c_str(), win, false, "");
+    const std::wstring acceptText = Tr(L"Принять"), rejectText = Tr(L"Отклонить");
+    const wchar_t* caption = Tr(L"Согласование");
+    auto measure = [&](HFONT font, const std::wstring& s)
+    {
+        SelectObject(hDC, font);
+        SIZE sz = { 0, 0 };
+        GetTextExtentPoint32W(hDC, s.c_str(), (int)s.size(), &sz);
+        return (int)sz.cx;
+    };
+    const int btnW = max(measure(GetSpeedFont(), acceptText), measure(GetSpeedFont(), rejectText)) + rowH;
+    const int fieldW = measure(GetSpeedFont(), request) + rowH;
+    const int titleW = measure(GetTitleFont(), caption) + titleH + border;
+    const int inner = max(max(2 * btnW + gap, fieldW), max(titleW - 2 * border, rowH * 5));
+    const int width = inner + 2 * (border + pad);
+    const int height = titleH + gap + rowH + gap / 2 + rowH + gap + rowH + pad + border;
 
-    RECT close = { win.right - kCloseW, title.top + 4, win.right - 8, title.bottom - 4 };
-    AddHotButton(hDC, SO_COORD_CLOSE, m_coordCallsign.c_str(), close, Tr("Закрыть"));
-    DrawCloseCross(hDC, close, Theme::MenuText);
+    const RECT& box = label->second.area;
+    const RECT ra = GetRadarArea();
+    int left = box.right + 1;
+    if (left + width > ra.right)
+        left = box.left - 1 - width;
+    const RECT area = PlacePopup(m_coordPlacement, left, max(ra.top, min(box.top, ra.bottom - height)), width, height);
+    m_coordArea = area;
+    AddScreenObject(SO_COORD_WINDOW, m_coordCallsign.c_str(), area, true, "");
 
-    RECT textR = { body.left + kPad, title.bottom + kPad, body.right - kPad, title.bottom + kPad + requestH };
-    Theme::DrawLine(hDC, textR, request, m_fonts.Body, Theme::DuplicateText, DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+    auto fill = [&](const RECT& r, COLORREF color)
+    {
+        HBRUSH b = CreateSolidBrush(color);
+        FillRect(hDC, &r, b);
+        DeleteObject(b);
+    };
+    auto frame = [&](RECT r, COLORREF color, int thick)
+    {
+        HBRUSH b = CreateSolidBrush(color);
+        for (int i = 0; i < thick; i++)
+        {
+            FrameRect(hDC, &r, b);
+            InflateRect(&r, -1, -1);
+        }
+        DeleteObject(b);
+    };
+    auto text = [&](RECT r, const wchar_t* s, COLORREF color, UINT align)
+    {
+        SetTextColor(hDC, color);
+        DrawTextW(hDC, s, -1, &r, align | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    };
+    auto gradient = [&](const RECT& r, COLORREF topColor, COLORREF bottomColor)
+    {
+        TRIVERTEX v[2] = {
+            { r.left, r.top, (COLOR16)(GetRValue(topColor) << 8), (COLOR16)(GetGValue(topColor) << 8),
+              (COLOR16)(GetBValue(topColor) << 8), 0 },
+            { r.right, r.bottom, (COLOR16)(GetRValue(bottomColor) << 8), (COLOR16)(GetGValue(bottomColor) << 8),
+              (COLOR16)(GetBValue(bottomColor) << 8), 0 } };
+        GRADIENT_RECT g = { 0, 1 };
+        GradientFill(hDC, v, 2, &g, 1, GRADIENT_FILL_RECT_V);
+    };
 
-    const int buttonsLeft = (win.left + win.right - (2 * kBtnW + kGap)) / 2;
-    const RECT accept = { buttonsLeft, textR.bottom + kGap, buttonsLeft + kBtnW, textR.bottom + kGap + kBtnH };
-    const RECT reject = { accept.right + kGap, accept.top, accept.right + kGap + kBtnW, accept.bottom };
-    Theme::OutlineBox(hDC, accept, Theme::MenuBarFill, Theme::FormularGreen);
-    Theme::OutlineBox(hDC, reject, Theme::MenuBarFill, Theme::DistressText);
-    AddHotButton(hDC, SO_COORD_ACCEPT, m_coordCallsign.c_str(), accept, Tr("Принять согласование"));
-    AddHotButton(hDC, SO_COORD_REJECT, m_coordCallsign.c_str(), reject, Tr("Отклонить согласование"));
-    Theme::DrawLine(hDC, accept, L"Accept", m_fonts.Body, Theme::FormularGreen, DT_CENTER | DT_VCENTER);
-    Theme::DrawLine(hDC, reject, L"Reject", m_fonts.Body, Theme::DistressText, DT_CENTER | DT_VCENTER);
+    fill(area, PopupFrame(m_coordPlacement));
+    const RECT titleBar = { area.left, area.top, area.right, area.top + titleH };
+    gradient(titleBar, m_coordPlacement.active ? Theme::XfrTitleTop : Theme::XfrTitleTopInactive,
+        PopupFrame(m_coordPlacement));
+    frame(area, Theme::XfrOutline, 1);
+    const RECT body = { area.left + border, area.top + titleH, area.right - border, area.bottom - border };
+    fill(body, Theme::SpdBody);
+    RECT bodyEdge = body;
+    InflateRect(&bodyEdge, 1, 1);
+    frame(bodyEdge, Theme::XfrOutline, 1);
+
+    SelectObject(hDC, GetTitleFont());
+    const RECT title = { area.left + border * 2, area.top, area.right - titleH, area.top + titleH };
+    text(title, caption, Theme::Text, DT_LEFT);
+    const RECT close = { area.right - titleH, area.top, area.right - border, area.top + titleH };
+    text(close, L"\x00D7", Theme::Text, DT_CENTER);
+    AddScreenObject(SO_COORD_CLOSE, m_coordCallsign.c_str(), close, false, Tr("Закрыть"));
+
+    SelectObject(hDC, GetSpeedFont());
+    const int x0 = body.left + pad, x1 = body.right - pad;
+    int y = body.top + gap;
+    const RECT cs = { x0, y, x1, y + rowH };
+    text(cs, Widen(m_coordCallsign.c_str()).c_str(), Theme::Text, DT_CENTER);
+    y += rowH + gap / 2;
+
+    const RECT field = { x0, y, x1, y + rowH };
+    fill(field, RGB(0x10, 0x10, 0x10));
+    frame(field, Theme::SpdLine, line);
+    text(field, request.c_str(), Theme::DuplicateText, DT_CENTER);
+    y += rowH + gap;
+
+    const int mid = (x0 + x1) / 2;
+    const RECT buttons[2] = { { x0, y, mid - gap / 2, y + rowH }, { mid + gap / 2, y, x1, y + rowH } };
+    const wchar_t* labels[2] = { acceptText.c_str(), rejectText.c_str() };
+    const COLORREF accents[2] = { Theme::FormularGreen, Theme::DistressText };
+    const int types[2] = { SO_COORD_ACCEPT, SO_COORD_REJECT };
+    const char* tips[2] = { Tr("Принять согласование"), Tr("Отклонить согласование") };
+    for (int i = 0; i < 2; i++)
+    {
+        const RECT& btn = buttons[i];
+        if (Hot(btn))
+            gradient(btn, Theme::XfrButtonHotTop, Theme::XfrButtonHotBottom);
+        else
+            gradient(btn, Theme::XfrButtonTop, Theme::XfrButtonBottom);
+        const RECT accent = { btn.left + line, btn.bottom - line - accentH, btn.right - line, btn.bottom - line };
+        fill(accent, accents[i]);
+        frame(btn, Theme::SpdLine, line);
+        const RECT face = { btn.left, btn.top, btn.right, btn.bottom - accentH };
+        text(face, labels[i], Theme::Text, DT_CENTER);
+        AddScreenObject(types[i], m_coordCallsign.c_str(), btn, false, tips[i]);
+    }
 
     RestoreDC(hDC, saved);
 }

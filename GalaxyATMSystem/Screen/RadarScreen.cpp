@@ -9,7 +9,6 @@ void CGalaxyATMSystemRadarScreen::ForgetGone(const std::set<std::string>& live)
     KeepOnly(m_localFreeText, live);
     for (auto it = m_routeShown.begin(); it != m_routeShown.end();)
         it = live.count(*it) != 0 ? std::next(it) : m_routeShown.erase(it);
-    KeepOnly(m_rvsmStatus, live);
     KeepOnly(m_rcLastInSector, live);
     KeepOnly(m_rcPicked, live);
     KeepOnly(m_closedPlans, live);

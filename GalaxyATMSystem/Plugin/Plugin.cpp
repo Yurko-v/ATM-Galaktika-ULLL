@@ -217,6 +217,9 @@ void CGalaxyATMSystemPlugin::ForgetGone()
     KeepOnly(m_squawkSetByUs, live);
     KeepOnly(m_english, live);
     KeepOnly(m_sharedMarked, live);
+    KeepOnly(m_rvsm, live);
+    KeepOnly(m_sharedSpeed, live);
+    KeepOnly(m_coordNotes, live);
     KeepOnly(m_apwCache, live);
     m_squawk.Forget(live);
     for (CGalaxyATMSystemRadarScreen* screen : g_screens)

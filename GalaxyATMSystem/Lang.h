@@ -77,6 +77,8 @@ namespace Lang
             { L"ЛКМ - точка линии, ПКМ - закончить", L"LMB - line point, RMB - finish" },
             { L"Колесо - радиус, ЛКМ/ПКМ - готово",  L"Wheel - radius, LMB/RMB - done" },
             { L"Согласование",                   L"Coordination" },
+            { L"Принять",                        L"Accept" },
+            { L"Отклонить",                      L"Reject" },
             { L"Принять согласование",           L"Accept the coordination" },
             { L"Отклонить согласование",         L"Reject the coordination" },
             { L"Борт никем не взят - согласовывать не с кем",

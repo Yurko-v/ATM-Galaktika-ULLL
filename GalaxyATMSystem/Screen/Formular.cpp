@@ -442,7 +442,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
             if (!aspText.empty())
             {
-                char modifier = TopSkySpeedModifier(assigned);
+                char modifier = SpeedModifierOf(plugin, fp);
                 if (modifier != 0)
                     aspText += (wchar_t)modifier;
             }
@@ -460,13 +460,53 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             const ULONGLONG now = GetTickCount64();
             const int exitState = fp.GetExitCoordinationAltitudeState();
             const int entryState = fp.GetEntryCoordinationAltitudeState();
-            auto track = [now, &st, &callsign](CoordWatch& w, bool exit, int s, int fl, const char* point = NULL)
+
+            const char* directNow = fp.GetControllerAssignedData().GetDirectToPointName();
+            const std::string direct = directNow != NULL ? directNow : "";
+            if (direct != st.lastDirect)
+            {
+                if (!direct.empty() && !st.agreedCopx.empty() && _stricmp(st.agreedCopx.c_str(), direct.c_str()) != 0)
+                    st.agreedCopx.clear();
+                if (!direct.empty() && !st.agreedEntryPoint.empty()
+                    && _stricmp(st.agreedEntryPoint.c_str(), direct.c_str()) != 0)
+                    st.agreedEntryPoint.clear();
+                st.lastDirect = direct;
+            }
+
+            auto track = [now, &st, &callsign, plugin](CoordWatch& w, bool exit, int s, int fl, const char* point = NULL)
             {
                 if (s == COORDINATION_STATE_REQUESTED_BY_ME && w.lastState != COORDINATION_STATE_REQUESTED_BY_ME)
                     w.decision = CoordDecision::None;
                 if ((s == COORDINATION_STATE_REQUESTED_BY_ME || s == COORDINATION_STATE_REQUESTED_BY_OTHER)
                     && point != NULL)
                     w.pointName = point;
+
+                const bool requested = s == COORDINATION_STATE_REQUESTED_BY_ME || s == COORDINATION_STATE_REQUESTED_BY_OTHER;
+                const int requestedFt = requested ? fl : w.levelFt;
+                const std::string requestedValue = point != NULL ? w.pointName : std::to_string(requestedFt);
+                char note = 0;
+                ULONGLONG noteAt = 0;
+                if (!plugin->CoordOutcome(callsign, point != NULL, requestedValue, note, noteAt))
+                    note = 0;
+                w.partnerNote = s == COORDINATION_STATE_REQUESTED_BY_OTHER ? note : 0;
+                w.partnerNoteAt = noteAt;
+                std::string& agreedPoint = exit ? st.agreedCopx : st.agreedEntryPoint;
+                int& agreedFt = exit ? st.agreedXflFt : st.agreedEntryFt;
+                if (s == COORDINATION_STATE_REQUESTED_BY_OTHER && note == 'M')
+                {
+                    if (point != NULL)
+                        agreedPoint = w.pointName;
+                    else if (requestedFt > 0)
+                        agreedFt = requestedFt;
+                }
+                else if (!requested && note == 'C')
+                {
+                    if (point != NULL && !agreedPoint.empty() && _stricmp(agreedPoint.c_str(), w.pointName.c_str()) == 0)
+                        agreedPoint.clear();
+                    else if (point == NULL && agreedFt > 0 && agreedFt == w.levelFt)
+                        agreedFt = 0;
+                }
+
                 if (w.lastState != 0 && w.lastState != s
                     && (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME || w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
                     && s != COORDINATION_STATE_REQUESTED_BY_ME && s != COORDINATION_STATE_REQUESTED_BY_OTHER)
@@ -474,9 +514,11 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     const std::string nowPoint = point != NULL ? point : "";
                     const bool valueKept = point != NULL ? _stricmp(nowPoint.c_str(), w.pointName.c_str()) == 0
                                                          : fl == w.levelFt;
-                    if (w.decision == CoordDecision::Cancelled)
+                    const bool partnerCancelled = w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && note == 'C';
+                    const bool partnerManual = w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && note == 'M';
+                    if (w.decision == CoordDecision::Cancelled || partnerCancelled)
                         w.result = COORDINATION_STATE_REFUSED;
-                    else if (w.decision == CoordDecision::Manual)
+                    else if (w.decision == CoordDecision::Manual || partnerManual)
                         w.result = COORDINATION_STATE_MANUAL_ACCEPTED;
                     else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.myReply != 0)
                         w.result = w.myReply;
@@ -485,9 +527,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                         w.result = s;
                     else
                         w.result = valueKept ? COORDINATION_STATE_ACCEPTED : COORDINATION_STATE_REFUSED;
-                    const bool cancelled = w.decision == CoordDecision::Cancelled;
+                    const bool cancelled = w.decision == CoordDecision::Cancelled || partnerCancelled;
                     if (w.decision == CoordDecision::None)
-                        w.resultAt = now;
+                        w.resultAt = partnerManual ? noteAt : now;
                     if (cancelled)
                         w.result = 0;
                     w.decision = CoordDecision::None;
@@ -500,7 +542,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     Log::Info("formular", callsign + ": coordination " + (point != NULL ? "DCT " + w.pointName
                         : "level " + std::to_string(w.levelFt)) + " state " + std::to_string(w.lastState)
                         + " -> " + std::to_string(s) + ", now " + (point != NULL ? nowPoint : std::to_string(fl))
-                        + (cancelled ? ", cancelled here" : accepted ? ", agreed" : ", refused"));
+                        + (partnerCancelled ? ", cancelled by the partner" : cancelled ? ", cancelled here"
+                           : partnerManual ? ", coordinated manually by the partner" : accepted ? ", agreed" : ", refused"));
                 }
                 if (s != COORDINATION_STATE_REQUESTED_BY_OTHER)
                     w.myReply = 0;
@@ -542,6 +585,17 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                     ink = Theme::FormularGreen;
                     mine = true;
                 }
+                else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.partnerNote == 'C')
+                {
+                    return false;
+                }
+                else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.partnerNote == 'M')
+                {
+                    if (now - w.partnerNoteAt >= kCoordResultMs)
+                        return false;
+                    ink = Theme::FormularGreen;
+                    mine = false;
+                }
                 else if (w.lastState == COORDINATION_STATE_REQUESTED_BY_ME || w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER)
                 {
                     ink = Theme::DuplicateText;
@@ -560,7 +614,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 std::string from = exit ? me : prev, to = exit ? next : me;
                 if (mine != exit)
                     std::swap(from, to);
-                const bool incoming = (w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER);
+                const bool incoming = w.lastState == COORDINATION_STATE_REQUESTED_BY_OTHER && w.partnerNote == 0;
                 std::vector<FormularRun> coordLine;
                 coordLine.push_back({ Widen((from + ">" + to + (point ? " DCT:" : " HFL:")).c_str()), base,
                     incoming ? &kFnCoordReply : NULL });
@@ -668,7 +722,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
             if (!speed.empty())
             {
-                char modifier = TopSkySpeedModifier(cad);
+                char modifier = SpeedModifierOf(plugin, fp);
                 if (modifier != 0)
                     speed += (wchar_t)modifier;
             }

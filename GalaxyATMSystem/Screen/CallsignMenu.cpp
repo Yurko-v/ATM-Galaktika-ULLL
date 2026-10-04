@@ -13,11 +13,11 @@ namespace
 
     const CallsignMenuRow kCallsignMenuRows[] = {
         { L"Привязать", false },
-        { L"Отвязать", false },
+        { L"Отвязать", true },
         { L"Сброс управления", false },
         { L"Завершить план", true },
-        { L"FPL к отметке", true },
-        { L"Редактировать FPL", true },
+        { L"FPL к отметке", false },
+        { L"Редактировать FPL", false },
         { L"Изменить код ВРЛ", true },
         { L"Общий маркер", false },
         { L"Мой маркер", false },
@@ -141,8 +141,19 @@ void CGalaxyATMSystemRadarScreen::DrawCallsignMenu(HDC hDC)
             row.check = m_rcPicked.count(m_csMenuCallsign) != 0 ? MenuCheck::On : MenuCheck::Off;
         rows.push_back(row);
     }
-    const POINT at = { m_csMenuAnchor.right + 2, m_csMenuAnchor.top };
-    m_csMenuArea = DrawPanelMenu(hDC, at, Widen(m_csMenuCallsign.c_str()).c_str(), rows, SO_CS_MENU, SO_CS_MENU_ITEM);
+    std::wstring detail;
+    CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_csMenuCallsign.c_str());
+    const char* type = fp.IsValid() ? fp.GetFlightPlanData().GetAircraftFPType() : NULL;
+    if (type != NULL && *type != '\0')
+        detail = Widen(type);
+    CRadarTarget rt = GetPlugIn()->RadarTargetSelect(m_csMenuCallsign.c_str());
+    const char* squawk = rt.IsValid() && rt.GetPosition().IsValid() ? rt.GetPosition().GetSquawk() : NULL;
+    if (squawk != NULL && *squawk != '\0')
+        detail += (detail.empty() ? L"" : L" \x00B7 ") + Widen(squawk);
+
+    const POINT at = { m_csMenuAnchor.right + 4, m_csMenuAnchor.top };
+    m_csMenuArea = DrawPanelMenu(hDC, at, Widen(m_csMenuCallsign.c_str()).c_str(), rows, SO_CS_MENU, SO_CS_MENU_ITEM,
+        detail.c_str());
 }
 
 void CGalaxyATMSystemRadarScreen::TickCallsignMenu()

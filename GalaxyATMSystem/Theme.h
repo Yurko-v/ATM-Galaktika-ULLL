@@ -84,6 +84,8 @@ namespace Theme
     const COLORREF XfrOutline   = RGB(0x3C, 0x84, 0xAC);
     const COLORREF XfrButtonTop    = RGB(0xA8, 0xA8, 0xA4);
     const COLORREF XfrButtonBottom = RGB(0x7C, 0x7C, 0x78);
+    const COLORREF XfrButtonHotTop    = RGB(0xC0, 0xC0, 0xBC);
+    const COLORREF XfrButtonHotBottom = RGB(0x94, 0x94, 0x90);
 
     const COLORREF HoverFill = RGB(0xE8, 0x8E, 0x2C);
     const BYTE     HoverAlpha = 150;
@@ -97,6 +99,14 @@ namespace Theme
     const COLORREF MenuBarFill      = Background;
     const COLORREF MenuText         = RGB(0xFF, 0xFF, 0xFF);
     const COLORREF MenuTextDisabled = RGB(0x9A, 0x9A, 0x9A);
+    const COLORREF MenuWell         = RGB(0x1E, 0x1E, 0x1E);
+    const COLORREF MenuWellEdge     = RGB(0x55, 0x5C, 0x4E);
+    const COLORREF MenuHover        = RGB(0x3A, 0x42, 0x33);
+    const COLORREF MenuHoverMark    = RGB(0xFF, 0xFF, 0xFF);
+    const COLORREF MenuRule         = RGB(0x3A, 0x40, 0x35);
+    const COLORREF MenuTextOff      = RGB(0x6E, 0x74, 0x6A);
+    const COLORREF MenuSubText      = RGB(0x9A, 0xA3, 0x94);
+    const BYTE     MenuShadowAlpha  = 70;
 
     const COLORREF Link      = RGB(0x8C, 0xC8, 0xFF);
     const COLORREF LinkHover = RGB(0xC8, 0xE6, 0xFF);

@@ -459,103 +459,128 @@ void CGalaxyATMSystemRadarScreen::DrawMapSketches(HDC hDC)
 }
 
 RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title,
-    const std::vector<PanelMenuRow>& rows, int windowType, int itemType)
+    const std::vector<PanelMenuRow>& rows, int windowType, int itemType, const wchar_t* subtitle)
 {
-    const HFONT font = GetSpeedFont();
-    const int lineH = max(12, (int)Theme::MeasureText(hDC, font, L"Ag").cy);
-    const int border = max(3, lineH / 5);
-    const int titleH = title != NULL ? lineH * 5 / 4 : 0;
-    const int rowH = lineH * 3 / 2;
-    const int separatorH = max(5, lineH / 2);
-    const int padX = lineH * 2 / 3;
-    const int pad = max(2, lineH / 6);
+    const HFONT font = m_fonts.Body;
+    const HFONT titleFont = m_fonts.Ruler;
+    const HFONT subFont = m_fonts.Small;
+    const int pad = kOuterPad;
+    const int inset = 3;
+    const int rowH = 22;
+    const int textPad = 10;
+    const int markW = 2;
+    const int ruleH = 9;
+    const int checkGap = 8;
+    const int captionTop = 5;
+    const int captionH = title != NULL ? captionTop + L::CAPTION_H + L::CAP_GAP : pad;
+    const int shadow = 4;
 
-    int width = lineH * 6;
-    if (title != NULL)
-        width = max(width, (int)Theme::MeasureText(hDC, GetTitleFont(), Tr(title)).cx + titleH + 2 * border + padX);
-    int height = titleH + 2 * border + 2 * pad;
+    const std::wstring heading = title != NULL ? Tr(title) : L"";
+    const std::wstring detail = subtitle != NULL && *subtitle != L'\0' ? std::wstring(L"  ") + subtitle : L"";
+    const int headingW = (int)Theme::MeasureText(hDC, titleFont, heading).cx;
+    const int detailW = detail.empty() ? 0 : (int)Theme::MeasureText(hDC, subFont, detail).cx;
+
+    int textW = 0;
+    bool anyCheck = false;
     for (const PanelMenuRow& row : rows)
     {
-        const int checkW = row.check != MenuCheck::None ? lineH * 11 / 10 : 0;
-        width = max(width, (int)Theme::MeasureText(hDC, font, Tr(row.label)).cx + checkW + 2 * padX + 2 * border + 2 * pad);
-        height += rowH + (row.separatorAfter ? separatorH : 0);
+        textW = max(textW, (int)Theme::MeasureText(hDC, font, Tr(row.label)).cx);
+        anyCheck = anyCheck || row.check != MenuCheck::None;
     }
+    const int checkW = anyCheck ? kCheckSize + checkGap : 0;
+    int wellW = max(textW + 2 * textPad + checkW + 2 * inset, 148);
+    if (title != NULL)
+        wellW = max(wellW, headingW + detailW + 2 * textPad);
+    int wellH = 2 * inset;
+    for (const PanelMenuRow& row : rows)
+        wellH += rowH + (row.separatorAfter ? ruleH : 0);
+    const int width = wellW + 2 * pad;
+    const int height = captionH + wellH + pad;
 
     const RECT ra = GetRadarArea();
     int left = at.x, top = at.y;
-    if (left + width > ra.right)
+    if (left + width + shadow > ra.right)
         left = max((int)ra.left, (int)at.x - width);
-    if (top + height > ra.bottom)
-        top = max((int)ra.top, (int)ra.bottom - height);
+    if (top + height + shadow > ra.bottom)
+        top = max((int)ra.top, (int)ra.bottom - height - shadow);
     const RECT win = { left, top, left + width, top + height };
-
-    auto fill = [&](const RECT& r, COLORREF color)
-    {
-        HBRUSH b = CreateSolidBrush(color);
-        FillRect(hDC, &r, b);
-        DeleteObject(b);
-    };
-    auto frame = [&](const RECT& r, COLORREF color)
-    {
-        HBRUSH b = CreateSolidBrush(color);
-        FrameRect(hDC, &r, b);
-        DeleteObject(b);
-    };
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
-    fill(win, Theme::PopupFrameActive);
+    {
+        Gdiplus::Graphics g(hDC);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        for (int s = shadow; s >= 1; s--)
+        {
+            const Gdiplus::REAL x = (Gdiplus::REAL)win.left + s / 2.0f, y = (Gdiplus::REAL)win.top + s;
+            const Gdiplus::REAL w = (Gdiplus::REAL)width, h = (Gdiplus::REAL)height, d = 2.0f * (Theme::WinCornerRadius + s);
+            Gdiplus::GraphicsPath path;
+            path.AddArc(x, y, d, d, 180, 90);
+            path.AddArc(x + w - d, y, d, d, 270, 90);
+            path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+            path.AddArc(x, y + h - d, d, d, 90, 90);
+            path.CloseFigure();
+            Gdiplus::SolidBrush brush(Gdiplus::Color((BYTE)(Theme::MenuShadowAlpha / shadow), 0, 0, 0));
+            g.FillPath(&brush, &path);
+        }
+    }
+    Theme::AntiAliased smooth;
+    Theme::SmoothBox(hDC, win, &Theme::Background, &Theme::BorderStrong, Theme::WinCornerRadius);
     if (title != NULL)
     {
-        const RECT bar = { win.left, win.top, win.right, win.top + titleH };
-        TRIVERTEX v[2] = {
-            { bar.left, bar.top, (COLOR16)(GetRValue(Theme::XfrTitleTop) << 8), (COLOR16)(GetGValue(Theme::XfrTitleTop) << 8),
-              (COLOR16)(GetBValue(Theme::XfrTitleTop) << 8), 0 },
-            { bar.right, bar.bottom, (COLOR16)(GetRValue(Theme::PopupFrameActive) << 8),
-              (COLOR16)(GetGValue(Theme::PopupFrameActive) << 8), (COLOR16)(GetBValue(Theme::PopupFrameActive) << 8), 0 } };
-        GRADIENT_RECT g = { 0, 1 };
-        GradientFill(hDC, v, 2, &g, 1, GRADIENT_FILL_RECT_V);
-        const RECT caption = { bar.left + border, bar.top, bar.right - border, bar.bottom };
-        Theme::DrawLine(hDC, caption, Tr(title), GetTitleFont(), Theme::Text, DT_LEFT | DT_VCENTER);
+        const int capTop = win.top + captionTop, capBottom = capTop + L::CAPTION_H;
+        const int startX = max((int)win.left + pad, (int)(win.left + win.right - headingW - detailW) / 2);
+        const RECT headR = { startX, capTop, startX + headingW + 1, capBottom };
+        Theme::DrawLine(hDC, headR, heading, titleFont, Theme::Text, DT_LEFT | DT_VCENTER | DT_NOPREFIX);
+        if (!detail.empty())
+        {
+            const RECT detailR = { headR.right - 1, capTop, win.right - pad, capBottom };
+            Theme::DrawLine(hDC, detailR, detail, subFont, Theme::MenuSubText,
+                DT_LEFT | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        }
     }
-    frame(win, Theme::XfrOutline);
-    const RECT body = { win.left + border, win.top + titleH + (title != NULL ? 0 : border),
-                        win.right - border, win.bottom - border };
-    fill(body, Theme::SpdBody);
-    RECT bodyEdge = body;
-    InflateRect(&bodyEdge, 1, 1);
-    frame(bodyEdge, Theme::XfrOutline);
+    const RECT well = { win.left + pad, win.top + captionH, win.right - pad, win.bottom - pad };
+    Theme::OutlineBox(hDC, well, Theme::MenuWell, Theme::MenuWellEdge);
     AddScreenObject(windowType, "MENU", win, false, "");
 
-    int y = body.top + pad;
+    int y = well.top + inset;
     for (size_t i = 0; i < rows.size(); i++)
     {
-        const RECT row = { body.left + pad, y, body.right - pad, y + rowH };
-        if (rows[i].enabled)
+        const PanelMenuRow& item = rows[i];
+        const RECT row = { well.left + inset, y, well.right - inset, y + rowH };
+        const bool hot = item.enabled && Hot(row);
+        if (hot)
         {
-            if (Hot(row))
-                fill(row, Theme::XfrSelected);
+            Theme::SmoothBox(hDC, row, &Theme::MenuHover, NULL, 3);
+            const RECT mark = { row.left + 2, row.top + 5, row.left + 2 + markW, row.bottom - 5 };
+            Theme::FlatFill(hDC, mark, Theme::MenuHoverMark);
+        }
+        if (item.enabled)
             AddScreenObject(itemType, std::to_string(i).c_str(), row, false, "");
-        }
-        RECT text = { row.left + padX, row.top, row.right - padX, row.bottom };
-        if (rows[i].check != MenuCheck::None)
+
+        const COLORREF ink = item.enabled ? Theme::Text : Theme::MenuTextOff;
+        const int textLeft = row.left + textPad + (item.check != MenuCheck::None ? checkW : 0);
+        const RECT text = { textLeft, row.top, row.right - textPad, row.bottom };
+        Theme::DrawLine(hDC, text, Tr(item.label), font, ink, DT_LEFT | DT_VCENTER | DT_NOPREFIX);
+        if (item.check != MenuCheck::None)
         {
-            const int side = lineH * 3 / 5;
-            const RECT box = { text.left, (row.top + row.bottom - side) / 2, text.left + side, (row.top + row.bottom + side) / 2 };
-            if (rows[i].check == MenuCheck::On)
-                fill(box, rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled);
-            else
-                frame(box, rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled);
-            text.left = box.right + lineH / 2;
+            const int cy = (row.top + row.bottom - kCheckSize) / 2;
+            const RECT box = { row.left + textPad, cy, row.left + textPad + kCheckSize, cy + kCheckSize };
+            const bool on = item.check == MenuCheck::On;
+            Theme::OutlineBox(hDC, box, on ? Theme::Active : Theme::ControlFill,
+                item.enabled ? Theme::BorderCheck : Theme::MenuTextOff);
+            if (on)
+            {
+                Gdiplus::Graphics g(hDC);
+                DrawTick(g, box, item.enabled ? Theme::Text : Theme::MenuTextOff);
+            }
         }
-        Theme::DrawLine(hDC, text, Tr(rows[i].label), font,
-            rows[i].enabled ? Theme::Text : Theme::MenuTextDisabled, DT_LEFT | DT_VCENTER);
         y += rowH;
-        if (rows[i].separatorAfter)
+        if (item.separatorAfter)
         {
-            const RECT line = { row.left + padX / 2, y + separatorH / 2, row.right - padX / 2, y + separatorH / 2 + 1 };
-            fill(line, Theme::SpdLine);
-            y += separatorH;
+            const RECT rule = { well.left + textPad, y + ruleH / 2, well.right - textPad, y + ruleH / 2 + 1 };
+            Theme::FlatFill(hDC, rule, Theme::MenuRule);
+            y += ruleH;
         }
     }
     RestoreDC(hDC, saved);

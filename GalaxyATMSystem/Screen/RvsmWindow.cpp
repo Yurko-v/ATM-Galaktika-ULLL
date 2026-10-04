@@ -14,9 +14,9 @@ namespace
 
 CGalaxyATMSystemRadarScreen::RvsmStatus CGalaxyATMSystemRadarScreen::RvsmStatusOf(CFlightPlan& fp)
 {
-    auto set = m_rvsmStatus.find(fp.GetCallsign());
-    if (set != m_rvsmStatus.end())
-        return set->second;
+    const int shared = Plugin()->RvsmStatus(fp.GetCallsign());
+    if (shared >= 0 && shared < kRvsmStatusCount)
+        return (RvsmStatus)shared;
     return fp.GetFlightPlanData().IsRvsm() ? RvsmStatus::Approved : RvsmStatus::NotApproved;
 }
 
@@ -44,7 +44,7 @@ void CGalaxyATMSystemRadarScreen::ApplyRvsm(int status)
 {
     if (status >= 0 && status < kRvsmStatusCount)
     {
-        m_rvsmStatus[m_rvsmCallsign] = (RvsmStatus)status;
+        Plugin()->SetRvsmStatus(GetPlugIn()->FlightPlanSelect(m_rvsmCallsign.c_str()), status);
         Log::Info("formular", m_rvsmCallsign + ": RVSM " + Narrow(kRvsmStatusText[status]));
     }
     CloseRvsmWindow();

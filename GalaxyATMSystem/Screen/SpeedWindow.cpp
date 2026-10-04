@@ -15,7 +15,7 @@ void CGalaxyATMSystemRadarScreen::OpenSpeedWindow(const char* callsign)
     m_spdCallsign = callsign;
     m_spdButtonsDown = true;
     m_spdEntryPending = false;
-    const char modifier = TopSkySpeedModifier(cad);
+    const char modifier = SpeedModifierOf(Plugin(), fp);
     m_spdMode = modifier == '+' ? SpeedOrGreater : modifier == '-' ? SpeedOrLess : SpeedExact;
 
     int mach = cad.GetAssignedMach();
@@ -138,6 +138,8 @@ void CGalaxyATMSystemRadarScreen::ApplySpeed()
         const std::string updated = WithSpeedModifier(annotation, modifier);
         if (updated != (annotation != NULL ? annotation : ""))
             cad.SetFlightStripAnnotation(kTopSkySpeedAnnotation, updated.c_str());
+        if (ok)
+            Plugin()->ShareSpeedModifier(fp, modifier);
     }
     CloseSpeedWindow();
 }
