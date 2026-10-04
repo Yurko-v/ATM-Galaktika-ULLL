@@ -193,12 +193,8 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         return;
     case SO_COORD_WINDOW:
         return;
-    case SO_COORD_ACCEPT:
-    case SO_COORD_REJECT:
-        ReplyCoordination(sObjectId, ObjectType == SO_COORD_ACCEPT);
-        CloseCoordWindow();
-        return;
-    case SO_COORD_CLOSE:
+    case SO_COORD_REPLY:
+        ReplyCoordination(m_coordCallsign.c_str(), atoi(sObjectId) == 0);
         CloseCoordWindow();
         return;
     case SO_FT_CLOSE:
@@ -1013,12 +1009,6 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
     if (ObjectType == SO_RVSM_WINDOW && m_rvsmOpen)
     {
         DragPopup(m_rvsmPlacement, m_rvsmArea, Pt, Released);
-        return;
-    }
-
-    if (ObjectType == SO_COORD_WINDOW && m_coordOpen)
-    {
-        DragPopup(m_coordPlacement, m_coordArea, Pt, Released);
         return;
     }
 

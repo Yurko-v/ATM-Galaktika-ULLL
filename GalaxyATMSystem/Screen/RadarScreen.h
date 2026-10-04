@@ -386,7 +386,6 @@ private:
     void TickFreeTextWindow();
 
     bool m_coordOpen = false;
-    PopupPlacement m_coordPlacement;
     std::string m_coordCallsign;
     bool m_coordButtonsDown = true;
     RECT m_coordArea = { 0, 0, 0, 0 };
@@ -892,12 +891,10 @@ const int SO_FT_CLOSE    = 131;
 const int SO_FT_FIELD    = 132;
 const int SO_FT_OK       = 133;
 const int SO_FT_CANCEL   = 134;
-const int SO_COORD_ACCEPT = 135;
-const int SO_COORD_REJECT = 136;
+const int SO_COORD_REPLY  = 135;
 const int SO_RC_SQUAWK     = 137;
 const int SO_RC_XFL        = 138;
 const int SO_COORD_WINDOW  = 139;
-const int SO_COORD_CLOSE   = 140;
 
 const int SO_NOTICE_WINDOW = 84;
 const int SO_NOTICE_OK     = 85;
