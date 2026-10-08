@@ -167,27 +167,31 @@ void CGalaxyATMSystemRadarScreen::DrawTargetVectors(HDC hDC)
     std::vector<VectorLabel> labels;
     std::unique_ptr<VectorCanvas> canvas;
 
-    for (CRadarTarget rt = GetPlugIn()->RadarTargetSelectFirst(); rt.IsValid();
-         rt = GetPlugIn()->RadarTargetSelectNext(rt))
+    for (const FrameTarget& t : m_frameTargets)
     {
-        CRadarTargetPositionData pos = rt.GetPosition();
-        if (!pos.IsValid())
-            continue;
-        if (pos.GetPressureAltitude() < 700)
+        if (t.pressureAltFt < 700 || !t.shown)
             continue;
 
-        if (!Plugin()->AltFilterPasses(pos.GetPressureAltitude()))
-            continue;
-
+        CRadarTarget rt = t.rt;
+        const CRadarTargetPositionData& pos = t.pos;
         int groundSpeed = rt.GetGS();
         if (groundSpeed < 10)
             continue;
 
-        CFlightPlan fp = rt.GetCorrelatedFlightPlan();
+        // Nothing to draw for a target whose longest vector cannot reach the screen.
+        double reachNm = 0.0;
+        if (m_vecTimeEnabled || m_vecByPlan)
+            reachNm = max(reachNm, groundSpeed / 60.0 * m_vecTimeMin);
+        if (m_vecDistEnabled)
+            reachNm = max(reachNm, m_vecDistKm / 1.852);
+        if (!NearScreen(t.tp, reachNm))
+            continue;
+
+        CFlightPlan fp = t.fp;
         COLORREF color = GetTagColorForFlightPlan(fp);
         if (SeparationLost(rt.GetCallsign()))
             color = Theme::SeparationLoss;
-        else if (HoveredCtrLabel(fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign()))
+        else if (HoveredCtrLabel(t.callsign.c_str()))
             color = Theme::FormularHoverTarget;
 
         if (!canvas)
@@ -354,21 +358,14 @@ void CGalaxyATMSystemRadarScreen::DrawRoutes(HDC hDC)
 
 void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
 {
-    const RECT ra = GetRadarArea();
     std::unique_ptr<VectorCanvas> canvas;
-    for (CRadarTarget rt = GetPlugIn()->RadarTargetSelectFirst(); rt.IsValid();
-         rt = GetPlugIn()->RadarTargetSelectNext(rt))
+    for (const FrameTarget& t : m_frameTargets)
     {
-        CRadarTargetPositionData pos = rt.GetPosition();
-        if (!pos.IsValid())
+        if (!t.onScreen || t.pressureAltFt < 700 || !t.shown)
             continue;
 
-        if (pos.GetPressureAltitude() < 700)
-            continue;
-        if (!Plugin()->AltFilterPasses(pos.GetPressureAltitude()))
-            continue;
-
-        CFlightPlan fp = rt.GetCorrelatedFlightPlan();
+        CRadarTarget rt = t.rt;
+        CFlightPlan fp = t.fp;
         if (!fp.IsValid())
             continue;
         char wtc = fp.GetFlightPlanData().GetAircraftWtc();
@@ -377,10 +374,8 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
             continue;
 
         const double kAheadNM = 20.0;
-        CPosition here = pos.GetPosition();
-        POINT c = ConvertCoordFromPositionToPixel(here);
-        if (!PtInRect(&ra, c))
-            continue;
+        CPosition here = t.pos.GetPosition();
+        POINT c = t.tp;
         POINT ahead = ConvertCoordFromPositionToPixel(
             CalculateDestinationPoint(here, rt.GetTrackHeading(), kAheadNM));
         double dx = ahead.x - c.x, dy = ahead.y - c.y;

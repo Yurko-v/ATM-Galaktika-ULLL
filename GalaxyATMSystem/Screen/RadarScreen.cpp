@@ -153,6 +153,7 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
             {
                 it->second->PollRulerButton();
                 it->second->PollRouteClearKey();
+                it->second->PollRdf();
                 it->second->TickMapTools();
                 it->second->AutoLogin();
                 it->second->TickEntry();

@@ -81,6 +81,7 @@ CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     m_aup = std::make_shared<const std::vector<ZoneBooking>>();
 
     ConfigureSquawk();
+    ConfigureRdf();
 }
 
 void CGalaxyATMSystemPlugin::StartAllFetches()
@@ -95,6 +96,7 @@ void CGalaxyATMSystemPlugin::StartAllFetches()
 CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
 {
     m_squawk.Stop();
+    m_rdf.Stop();
 
     m_metarFetch.Wait();
     m_sigmetFetch.Wait();
@@ -123,6 +125,7 @@ void CGalaxyATMSystemPlugin::ReloadConfig()
     if (Unlocked())
         StartAllFetches();
     ConfigureSquawk();
+    ConfigureRdf();
 }
 
 EuroScopePlugIn::CRadarScreen* CGalaxyATMSystemPlugin::OnRadarScreenCreated(

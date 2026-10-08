@@ -50,7 +50,7 @@ void CGalaxyATMSystemRadarScreen::PerfReport()
 
     static const char* const kNames[] = {
         "BeforeTags", "AfterTags", "AfterLists",
-        "Zones", "Sigmets", "WakeArcs", "TargetVectors", "TargetSymbols", "Formulars", "CoordWindow",
+        "Zones", "SigmetHits", "Rdf", "Stca", "WakeArcs", "TargetVectors", "TargetSymbols", "Formulars", "CoordWindow",
         "Panel", "Windows" };
     static_assert(_countof(kNames) == (size_t)PerfSection::Count, "perf section names");
 
@@ -116,7 +116,6 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
     if (Phase == REFRESH_PHASE_BEFORE_TAGS)
     {
         Timed(PerfSection::Zones, [&] { DrawZones(hDC); });
-        Timed(PerfSection::Sigmets, [&] { DrawSigmets(hDC); });
         return;
     }
 
@@ -133,7 +132,7 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
         m_areaShiftDown = ShiftHeldInEuroScope();
         if (m_areaShiftDown || m_zoneInfoIndex >= 0)
             RegisterZoneObjects();
-        RegisterSigmetObjects();
+        Timed(PerfSection::Sigmets, [&] { RegisterSigmetObjects(); });
 
         if (m_rulerPressPending)
         {
@@ -203,8 +202,12 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
         }
         const bool sketching = m_rulerArmed || m_rulerPlacing || m_mapTool != MapTool::None;
 
+        CollectFrameTargets();
+
         {
             Theme::AntiAliased smoothVectors;
+            Timed(PerfSection::Rdf, [&] { DrawRdf(hDC); });
+            Timed(PerfSection::Stca, [&] { DrawStca(hDC); });
             Timed(PerfSection::WakeArcs, [&] { DrawWakeArcs(hDC); });
             if (!m_routeShown.empty())
                 DrawRoutes(hDC);
@@ -242,6 +245,7 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
         else if (m_rulerArmed)
             DrawRulerCursor(hDC);
 
+        m_frameTargets.clear();     // EuroScope's handles are only good for this frame
         return;
     }
 
@@ -287,6 +291,7 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
     {
         Timed(PerfSection::Windows, [&]
         {
+            DrawRdfBox(hDC);
             if (m_atisLetterOpen)
                 DrawAtisLetterWindow(hDC);
             if (m_atisOpen)

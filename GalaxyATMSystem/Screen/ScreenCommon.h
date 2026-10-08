@@ -4,6 +4,7 @@
 #include "Screen/PanelLayout.h"
 #include "Screen/Pickers.h"
 #include "Screen/FormularItems.h"
+#include "Screen/ModeS.h"
 #include "Screen/Coordination.h"
 #include "Screen/Airspace.h"
 #include "Screen/TrackSymbols.h"

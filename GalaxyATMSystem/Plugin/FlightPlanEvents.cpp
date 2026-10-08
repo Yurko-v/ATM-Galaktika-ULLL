@@ -45,6 +45,18 @@ namespace
         return key;
     }
 
+    // H270, S250, M78, R1500: EuroScope reads these out of the scratch pad as an
+    // assignment instead of keeping them as text.
+    bool EsAssignmentString(const std::string& s)
+    {
+        if (s.size() < 2 || s.size() > 5 || strchr("HSMR", s[0]) == NULL)
+            return false;
+        for (size_t i = 1; i < s.size(); i++)
+            if (s[i] < '0' || s[i] > '9')
+                return false;
+        return true;
+    }
+
     bool TrackedBySomeoneElse(CFlightPlan& fp, std::string& tracker)
     {
         const char* tracking = fp.GetTrackingControllerId();
@@ -75,7 +87,9 @@ bool CGalaxyATMSystemPlugin::BroadcastScratch(CFlightPlan fp, const std::string&
     }
     CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
     const char* old = cad.GetScratchPadString();
-    const std::string scratch = old != NULL ? old : "";
+    // An assignment left in the scratch pad would go out again with the restore and
+    // put the old heading or speed back at the other end.
+    const std::string scratch = old != NULL && !EsAssignmentString(old) ? old : "";
     const bool sent = cad.SetScratchPadString(msg.c_str());
     cad.SetScratchPadString(scratch.c_str());
     if (!sent)
@@ -134,6 +148,18 @@ void CGalaxyATMSystemPlugin::ShareCoordOutcome(CFlightPlan fp, bool point, const
         return;
     BroadcastScratch(fp, std::string(kCoordMark) + "/" + (point ? "P" : "L") + "/" + value + "/" + outcome,
         "coordination outcome");
+}
+
+void CGalaxyATMSystemPlugin::PublishAssignment(CFlightPlan fp, const std::string& command, const char* what)
+{
+    // In a sweatbox the pseudo pilot's EuroScope flies the aircraft from what reaches it
+    // over the network, and heading, speed and direct to travel there as scratch pad
+    // strings. The setter is not relied on to send them, so the label sends them too.
+    // The temporary altitude has its own network message and needs nothing extra.
+    if (!fp.IsValid() || command.empty() || !TrainingSession())
+        return;
+    if (BroadcastScratch(fp, command, what))
+        Log::Info("formular", std::string(fp.GetCallsign()) + ": " + what + " " + command + " sent to the sweatbox");
 }
 
 bool CGalaxyATMSystemPlugin::CoordOutcome(const std::string& callsign, bool point, const std::string& value,

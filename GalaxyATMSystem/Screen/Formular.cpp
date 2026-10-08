@@ -56,7 +56,6 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         return;
 
     CGalaxyATMSystemPlugin* plugin = Plugin();
-    RECT ra = GetRadarArea();
 
     int saved = SaveDC(hDC);
     SetBkMode(hDC, TRANSPARENT);
@@ -105,18 +104,30 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     const bool ctrLabel = (kind == FormularKind::Ctr);
     const bool simulator = InSimulatorSession(plugin);
     const FormularFn* const remarkFn = (kind == FormularKind::App) ? &kFnAppRemark : &kFnRemark;
-    const std::string myPositionId = PositionIdOf(plugin, plugin->ControllerMyself().GetCallsign());
+    const char* myCallsign = plugin->ControllerMyself().GetCallsign();
+    const std::string myPositionId = ShownPositionId(myCallsign, PositionIdOf(plugin, myCallsign));
 
-    std::map<std::string, int> codeCount;
-    for (CRadarTarget t = plugin->RadarTargetSelectFirst(); t.IsValid();
-         t = plugin->RadarTargetSelectNext(t))
+    // How many targets squawk each four digit code, indexed by the code read as decimal.
+    auto codeIndex = [](const char* c)
     {
-        CRadarTargetPositionData p = t.GetPosition();
-        const char* c = p.IsValid() ? p.GetSquawk() : NULL;
-        if (c == NULL || strlen(c) != 4 || strcmp(c, "0000") == 0 || strcmp(c, "1200") == 0
-            || strcmp(c, "2000") == 0 || strcmp(c, "7000") == 0)
+        if (c == NULL)
+            return -1;
+        int v = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            if (c[i] < '0' || c[i] > '9')
+                return -1;
+            v = v * 10 + (c[i] - '0');
+        }
+        return c[4] == '\0' ? v : -1;
+    };
+    std::vector<unsigned short> codeCount(10000, 0);
+    for (const FrameTarget& t : m_frameTargets)
+    {
+        const int code = codeIndex(t.pos.GetSquawk());
+        if (code < 0 || code == 0 || code == 1200 || code == 2000 || code == 7000)
             continue;
-        codeCount[c]++;
+        codeCount[code]++;
     }
 
     struct PendingLeader
@@ -161,25 +172,16 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     };
 
     for (int pass = 0; pass < 2; pass++, drawPending())
-    for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
-         rt = plugin->RadarTargetSelectNext(rt))
+    for (const FrameTarget& target : m_frameTargets)
     {
-        CRadarTargetPositionData pos = rt.GetPosition();
-        if (!pos.IsValid())
+        if (!target.onScreen || !target.shown || target.callsign.empty())
             continue;
 
-        POINT tp = ConvertCoordFromPositionToPixel(pos.GetPosition());
-        if (!PtInRect(&ra, tp))
-            continue;
-
-        if (!plugin->AltFilterPasses(pos.GetPressureAltitude()))
-            continue;
-
-        CFlightPlan fp = rt.GetCorrelatedFlightPlan();
-        const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
-        if (cs == NULL || *cs == '\0')
-            continue;
-        const std::string callsign = cs;
+        CRadarTarget rt = target.rt;
+        const CRadarTargetPositionData& pos = target.pos;
+        const POINT tp = target.tp;
+        CFlightPlan fp = target.fp;
+        const std::string& callsign = target.callsign;
         const bool expanded = !m_formularHover.empty() && m_formularHover == callsign;
         const bool rcPicked = !expanded && m_rcPicked.count(callsign) != 0;
         const bool sharedPicked = !expanded && !rcPicked && plugin->IsSharedMarked(callsign);
@@ -198,12 +200,9 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         std::vector<FormularRun> warnings;
         if (simulator && correlated)
             warnings.push_back({ fp.GetSimulated() ? L"{*}" : L"{}", base, &kFnSimulation });
-        if (sq != NULL)
-        {
-            auto dup = codeCount.find(sq);
-            if (dup != codeCount.end() && dup->second > 1)
-                warnings.push_back({ L"SSR", Theme::DuplicateText, NULL });
-        }
+        const int code = codeIndex(sq);
+        if (code >= 0 && codeCount[code] > 1)
+            warnings.push_back({ L"SSR", Theme::DuplicateText, NULL });
         if (correlated && sq != NULL && *sq != '\0')
         {
             std::string assigned = plugin->AssignedSquawkFor(fp);
@@ -298,9 +297,10 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             }
 
             std::string si;
-            const char* current = fp.GetTrackingControllerId();
-            if (current != NULL)
-                si = current;
+            const char* currentId = fp.GetTrackingControllerId();
+            const std::string current = currentId != NULL
+                ? ShownPositionId(fp.GetTrackingControllerCallsign(), currentId) : std::string();
+            si = current;
             const char* next = fp.GetCoordinatedNextController();
             if (next != NULL && *next != '\0')
             {
@@ -308,13 +308,15 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 const char* nextId = nextController.IsValid() ? nextController.GetPositionId()
                     : (strlen(next) <= 3 ? next : NULL);
                 if (nextId != NULL && *nextId != '\0')
-                    si = nextId;
+                    si = ShownPositionId(next, nextId);
             }
-            const char* handoffTarget = fp.GetHandoffTargetControllerId();
+            const char* handoffTargetId = fp.GetHandoffTargetControllerId();
+            const std::string handoffTarget = handoffTargetId != NULL
+                ? ShownPositionId(fp.GetHandoffTargetControllerCallsign(), handoffTargetId) : std::string();
             const bool handoff = fpState == FLIGHT_PLAN_STATE_TRANSFER_FROM_ME_INITIATED
                 || fpState == FLIGHT_PLAN_STATE_TRANSFER_TO_ME_INITIATED;
-            if (handoff && handoffTarget != NULL && *handoffTarget != '\0')
-                ident.push_back({ Widen(current != NULL ? current : "") + kHandoffArrow + Widen(handoffTarget),
+            if (handoff && !handoffTarget.empty())
+                ident.push_back({ Widen(current.c_str()) + kHandoffArrow + Widen(handoffTarget.c_str()),
                     Theme::FormularHandoff, kind == FormularKind::Twr ? &kFnTwrSector : &kFnSector });
             else if (!si.empty())
                 ident.push_back({ Widen(si.c_str()), base,
@@ -557,11 +559,14 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             track(st.entryPoint, false, fp.GetEntryCoordinationPointState(), 0, fp.GetEntryCoordinationPointName());
 
             const std::string& me = myPositionId;
-            std::string next = PositionIdOf(plugin, fp.GetCoordinatedNextController());
-            std::string prev = PositionIdOf(plugin, fp.GetTrackingControllerCallsign());
+            const char* nextCs = fp.GetCoordinatedNextController();
+            const char* prevCs = fp.GetTrackingControllerCallsign();
+            std::string next = ShownPositionId(nextCs, PositionIdOf(plugin, nextCs));
+            std::string prev = ShownPositionId(prevCs, PositionIdOf(plugin, prevCs));
             if (next.empty() || prev.empty() || prev == me)
             {
-                const std::string partner = PositionIdOf(plugin, CoordPartner(plugin, fp).c_str());
+                const std::string partnerCs = CoordPartner(plugin, fp);
+                const std::string partner = ShownPositionId(partnerCs.c_str(), PositionIdOf(plugin, partnerCs.c_str()));
                 if (next.empty())
                     next = partner;
                 if (prev.empty() || prev == me)
@@ -815,6 +820,27 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (!freeText.empty())
             lines.push_back(freeText);
 
+        // A middle click on the expanded CTR label opens the downlinked data under a row
+        // of page tabs; another middle click, or a click on mode-s, puts it away. Only
+        // the Mode-S page exists so far; the other tabs are shown greyed.
+        size_t tabLine = lines.size();
+        bool modeSOpen = false;
+        if (expanded && correlated && ctrLabel)
+        {
+            auto known = m_formulars.find(callsign);
+            modeSOpen = known != m_formulars.end() && known->second.modeS;
+        }
+        if (modeSOpen)
+        {
+            std::vector<FormularRun> tabs;
+            tabs.push_back({ L"mode-s", base, &kFnModeSTab });
+            for (const wchar_t* tab : { L"gnrl", L"route", L"sysco", L"sensors" })
+                tabs.push_back({ tab, Theme::FormularTabIdle, NULL });
+            lines.push_back(tabs);
+            for (const std::wstring& text : ModeSPage(fp, rt, tl, plugin->QnhHpa()))
+                lines.push_back(std::vector<FormularRun>(1, FormularRun{ text, base, NULL }));
+        }
+
         int width = 0;
         std::vector<std::vector<int>> runWidths(lines.size());
         std::vector<int> lineWidths(lines.size(), 0);
@@ -988,6 +1014,23 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             flushGroup();
         }
 
+        if (boxed && tabLine < lines.size())
+        {
+            // The open tab framed up to the box edge, and a rule under the whole row.
+            const int top = area.top + (int)tabLine * lineH;
+            const int bottom = top + lineH;
+            const int tabRight = area.left + runWidths[tabLine][0] + space.cx / 2;
+            HPEN pen = CreatePen(PS_SOLID, 1, Theme::Text);
+            HGDIOBJ oldPen = SelectObject(hDC, pen);
+            MoveToEx(hDC, box.left, top, NULL);
+            LineTo(hDC, tabRight, top);
+            LineTo(hDC, tabRight, bottom);
+            MoveToEx(hDC, box.left, bottom, NULL);
+            LineTo(hDC, box.right, bottom);
+            SelectObject(hDC, oldPen);
+            DeleteObject(pen);
+        }
+
         if (registerObjects)
         {
             RECT hit = area;
@@ -1035,6 +1078,36 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     }
 
     RestoreDC(hDC, saved);
+}
+
+// The sector name a controller knows the position by. The sector file ID is not
+// always it - Kotlas is KC there (ULLL_KT_CTR:...:KC:KT) but KT on the floor - so the
+// Designation from the config wins when the position has one.
+std::string CGalaxyATMSystemRadarScreen::ShownPositionId(const char* callsign, const std::string& positionId)
+{
+    if (callsign == NULL || *callsign == '\0')
+        return positionId;
+
+    // Asked several times for every label in every frame; the answer only changes when
+    // the config is reloaded, so it is kept for a few seconds.
+    const ULONGLONG now = GetTickCount64();
+    if (now - m_shownIdsTick > 5000 || m_shownIds.size() > 512)
+    {
+        m_shownIds.clear();
+        m_shownIdsTick = now;
+    }
+    std::string key = callsign;
+    key += '\n';
+    key += positionId;
+    auto known = m_shownIds.find(key);
+    if (known != m_shownIds.end())
+        return known->second;
+
+    PositionInfo pi;
+    const std::string shown = Plugin()->GetConfig().FindPosition(callsign, positionId, pi) && !pi.Designation.empty()
+        ? Narrow(pi.Designation) : positionId;
+    m_shownIds.emplace(std::move(key), shown);
+    return shown;
 }
 
 bool CGalaxyATMSystemRadarScreen::HoveredCtrLabel(const char* callsign)
@@ -1092,7 +1165,14 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
 
     if (button == BUTTON_MIDDLE)
+    {
+        if (m_formularHover == sCallsign && CurrentFormularKind() == FormularKind::Ctr)
+        {
+            it->second.modeS = !it->second.modeS;
+            RequestRefresh();
+        }
         return;
+    }
 
     const bool freeTextRequested = button == kSideButton && CurrentFormularKind() == FormularKind::Ctr
         && std::any_of(it->second.items.begin(), it->second.items.end(), [&pt](const FormularItem& item)
@@ -1274,6 +1354,13 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     if (hit != NULL && hit->fn == &kFnAfl && button == BUTTON_RIGHT)
     {
         Plugin()->ToggleEnglish(GetPlugIn()->FlightPlanSelect(sCallsign));
+        RequestRefresh();
+        return;
+    }
+
+    if (hit != NULL && hit->fn == &kFnModeSTab && button == BUTTON_LEFT)
+    {
+        it->second.modeS = !it->second.modeS;
         RequestRefresh();
         return;
     }

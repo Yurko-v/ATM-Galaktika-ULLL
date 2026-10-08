@@ -79,8 +79,17 @@ void CGalaxyATMSystemRadarScreen::ApplyHeading()
     {
         if (!fp.GetControllerAssignedData().SetAssignedHeading(value))
             Log::Warn("formular", m_ahdgCallsign + ": EuroScope refused heading " + std::to_string(value));
+        else
+            PublishHeading(fp, value);
     }
     CloseHeadingWindow();
+}
+
+void CGalaxyATMSystemRadarScreen::PublishHeading(CFlightPlan& fp, int heading)
+{
+    char command[8];
+    sprintf_s(command, "H%03d", heading);
+    Plugin()->PublishAssignment(fp, command, "heading");
 }
 
 void CGalaxyATMSystemRadarScreen::TickHeadingWindow()

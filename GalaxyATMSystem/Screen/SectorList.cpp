@@ -3,79 +3,6 @@
 
 using namespace Galaxy;
 
-const std::set<std::string>& CGalaxyATMSystemRadarScreen::KfConflicts()
-{
-    const ULONGLONG now = GetTickCount64();
-    if (m_kfTick != 0 && now - m_kfTick < kKfRecheckMs)
-        return m_kfConflicts;
-    m_kfTick = now;
-    m_kfConflicts.clear();
-    m_ssaViolations.clear();
-
-    struct KfTrack
-    {
-        std::string callsign;
-        CPosition pos;
-        double trackDeg, nmPerSec, ft, ftPerSec;
-    };
-    std::vector<KfTrack> airborne;
-    for (CRadarTarget t = GetPlugIn()->RadarTargetSelectFirst(); t.IsValid();
-         t = GetPlugIn()->RadarTargetSelectNext(t))
-    {
-        CRadarTargetPositionData p = t.GetPosition();
-        if (!p.IsValid() || t.GetGS() < kKfMinGsKt)
-            continue;
-        airborne.push_back({ t.GetCallsign(), p.GetPosition(), t.GetTrackHeading(),
-            t.GetGS() / 3600.0, (double)p.GetFlightLevel(), t.GetVerticalSpeed() / 60.0 });
-    }
-
-    for (size_t i = 0; i < airborne.size(); i++)
-    {
-        const KfTrack& self = airborne[i];
-        for (size_t j = i + 1; j < airborne.size(); j++)
-        {
-            const KfTrack& other = airborne[j];
-            if (fabs(self.pos.m_Latitude - other.pos.m_Latitude) * 60.0 > kKfScanNm
-                || fabs(self.ft - other.ft) > kKfScanFt
-                || self.pos.DistanceTo(other.pos) > kKfScanNm)
-                continue;
-            if (m_ssaViolations.count(self.callsign) && m_ssaViolations.count(other.callsign))
-                continue;
-            if (self.pos.DistanceTo(other.pos) < kKfLateralNm && fabs(self.ft - other.ft) < kKfVerticalFt)
-            {
-                for (const std::string* callsign : { &self.callsign, &other.callsign })
-                {
-                    m_ssaViolations.insert(*callsign);
-                    m_kfConflicts.insert(*callsign);
-                }
-                continue;
-            }
-            if (m_kfConflicts.count(self.callsign) && m_kfConflicts.count(other.callsign))
-                continue;
-
-            for (int s = kKfStepSec; s <= kKfLookaheadSec; s += kKfStepSec)
-            {
-                CPosition a = CalculateDestinationPoint(self.pos, self.trackDeg, self.nmPerSec * s);
-                CPosition b = CalculateDestinationPoint(other.pos, other.trackDeg, other.nmPerSec * s);
-                double dv = (self.ft + self.ftPerSec * s) - (other.ft + other.ftPerSec * s);
-                if (a.DistanceTo(b) < kKfLateralNm && fabs(dv) < kKfVerticalFt)
-                {
-                    m_kfConflicts.insert(self.callsign);
-                    m_kfConflicts.insert(other.callsign);
-                    break;
-                }
-            }
-        }
-    }
-    return m_kfConflicts;
-}
-
-bool CGalaxyATMSystemRadarScreen::SeparationLost(const char* callsign)
-{
-    KfConflicts();
-    return callsign != NULL && m_ssaViolations.count(callsign) != 0;
-}
-
 void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& out)
 {
     out.clear();
@@ -190,17 +117,26 @@ void CGalaxyATMSystemRadarScreen::BuildSectorList(std::vector<SectorListRow>& ou
 
         row.cells[RC_CRD] = (row.crdState != COORDINATION_STATE_NONE) ? L"ACT" : L"";
 
-        out.push_back(row);
+        out.push_back(std::move(row));
     }
 
     const int cell = (m_rcSortKey >= 0 && m_rcSortKey < kRcCols) ? m_rcSortKey : RC_CALLSIGN;
     const bool asc = m_rcSortAsc;
-    std::stable_sort(out.begin(), out.end(),
-        [cell, asc](const SectorListRow& a, const SectorListRow& b)
+    // The sort text of each row worked out once, not twice for every comparison.
+    std::vector<std::pair<std::wstring, size_t>> keys;
+    keys.reserve(out.size());
+    for (size_t i = 0; i < out.size(); i++)
+        keys.push_back({ RcSortText(out[i], cell), i });
+    std::stable_sort(keys.begin(), keys.end(),
+        [asc](const std::pair<std::wstring, size_t>& a, const std::pair<std::wstring, size_t>& b)
         {
-            std::wstring ka = RcSortText(a, cell), kb = RcSortText(b, cell);
-            return asc ? (ka < kb) : (kb < ka);
+            return asc ? (a.first < b.first) : (b.first < a.first);
         });
+    std::vector<SectorListRow> sorted;
+    sorted.reserve(out.size());
+    for (const auto& k : keys)
+        sorted.push_back(std::move(out[k.second]));
+    out.swap(sorted);
 }
 
 bool CGalaxyATMSystemRadarScreen::ScrollSectorList(int rows)

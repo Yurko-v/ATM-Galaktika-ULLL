@@ -78,6 +78,7 @@ namespace Galaxy
     const int kSideButton = BUTTON_RIGHT + 1;
 
     inline const FormularFn kFnCoordReply    = { NULL,    0,   NULL,    0,   NULL,    0    };
+    inline const FormularFn kFnModeSTab      = { NULL,    0,   NULL,    0,   NULL,    0    };
     inline const FormularFn kFnCoordExitLevel  = { NULL,  0,   NULL,    0,   NULL,    0    };
     inline const FormularFn kFnCoordEntryLevel = { NULL,  0,   NULL,    0,   NULL,    0    };
     inline const FormularFn kFnCoordExitPoint  = { NULL,  0,   NULL,    0,   NULL,    0    };

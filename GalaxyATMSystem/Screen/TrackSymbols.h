@@ -235,10 +235,11 @@ namespace Galaxy
         MoveToEx(hDC, at.x + to.x, at.y + to.y, NULL);
     }
 
-    inline void DrawTrackSymbol(HDC hDC, const TrackSymbol& symbol, POINT at, COLORREF color,
+    // Draws with a pen the caller owns, so a frame of targets in a handful of colours
+    // does not create and delete a pen for every symbol and history dot.
+    inline void DrawTrackSymbol(HDC hDC, const TrackSymbol& symbol, POINT at, HPEN pen, COLORREF color,
         double holeRadius = 0.0)
     {
-        HPEN pen = CreatePen(PS_SOLID, 1, color);
         HGDIOBJ oldPen = SelectObject(hDC, pen);
         HGDIOBJ oldBrush = SelectObject(hDC, GetStockObject(NULL_BRUSH));
         MoveToEx(hDC, at.x, at.y, NULL);
@@ -287,6 +288,38 @@ namespace Galaxy
 
         SelectObject(hDC, oldBrush);
         SelectObject(hDC, oldPen);
+    }
+
+    inline void DrawTrackSymbol(HDC hDC, const TrackSymbol& symbol, POINT at, COLORREF color,
+        double holeRadius = 0.0)
+    {
+        HPEN pen = CreatePen(PS_SOLID, 1, color);
+        DrawTrackSymbol(hDC, symbol, at, pen, color, holeRadius);
         DeleteObject(pen);
     }
+
+    // One solid 1 px pen per colour for the length of a frame.
+    class PenCache
+    {
+    public:
+        PenCache() = default;
+        PenCache(const PenCache&) = delete;
+        PenCache& operator=(const PenCache&) = delete;
+        ~PenCache()
+        {
+            for (const auto& p : m_pens)
+                DeleteObject(p.second);
+        }
+        HPEN Get(COLORREF color)
+        {
+            for (const auto& p : m_pens)
+                if (p.first == color)
+                    return p.second;
+            HPEN pen = CreatePen(PS_SOLID, 1, color);
+            m_pens.push_back({ color, pen });
+            return pen;
+        }
+    private:
+        std::vector<std::pair<COLORREF, HPEN>> m_pens;
+    };
 }

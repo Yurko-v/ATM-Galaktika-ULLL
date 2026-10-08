@@ -91,6 +91,7 @@ namespace Theme
     const BYTE     HoverAlpha = 150;
 
     const COLORREF FormularHoverTarget = RGB(0xE8, 0x8E, 0x2C);
+    const COLORREF FormularTabIdle = RGB(0x8C, 0x8C, 0x8C);
     const COLORREF HeadingDragText = RGB(0xFF, 0xFF, 0xFF);
 
     const COLORREF AtisIndexText = RGB(0x9E, 0xFF, 0x3D);
@@ -130,6 +131,21 @@ namespace Theme
 
     const COLORREF Ruler        = RGB(0xE0, 0xC9, 0x9A);
     const float    RulerWidth   = 1.0f;
+
+    // Conflict alert: amber while it is a prediction, the separation loss red.
+    const COLORREF StcaPredicted  = RGB(0xFF, 0xB4, 0x32);
+    const float    StcaWidth      = 1.5f;
+    const double   StcaMarkRadius = 4.0;
+
+    // Пеленгатор. The bearing line is green, as on the real АРП; two aircraft
+    // transmitting at once cannot be resolved, so those bearings go red.
+    const COLORREF RdfLine       = RGB(0x2C, 0xE0, 0x3C);
+    const COLORREF RdfConcurrent = RGB(0xFF, 0x3B, 0x30);
+    const COLORREF RdfControl    = RGB(0x8C, 0xE0, 0xA8);
+    const float    RdfWidth      = 1.4f;
+    const COLORREF RdfBoxFill    = RGB(0x1E, 0x1E, 0x1E);
+    const COLORREF RdfBoxEdge    = RGB(0x55, 0x5C, 0x4E);
+    const COLORREF RdfBoxIdle    = RGB(0x6E, 0x74, 0x6A);
     const COLORREF MapText      = RGB(0x82, 0xEB, 0x25);
     const COLORREF MapSketch    = MapText;
     const float    MapSketchWidth = 1.5f;
@@ -142,11 +158,11 @@ namespace Theme
     const double   VectorHeadLength  = 7.0;
 
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcRadiusPx    = 21.0;
+    const double   WakeArcRadiusPx    = 25.0;
     const float    RouteWidth         = 1.5f;
     const COLORREF RouteColor         = RGB(0xF0, 0xD7, 0x5A);
-    const double   WakeArcStepPx      = 8.0;
-    const double   WakeArcSweepDeg     = 40.0;
+    const double   WakeArcStepPx      = 9.0;
+    const double   WakeArcSweepDeg     = 46.0;
 
     const COLORREF SigmetLine   = RGB(0x1C, 0x3C, 0xA0);
     const int      SigmetWidth  = 2;

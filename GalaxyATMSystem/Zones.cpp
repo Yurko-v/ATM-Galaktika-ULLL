@@ -813,6 +813,11 @@ std::wstring Zone::LevelBand() const
     return (lower.empty() ? L"---" : lower) + L"-" + (upper.empty() ? L"---" : upper);
 }
 
+bool ParseGeoPoint(const Json::Value& node, EuroScopePlugIn::CPosition& out)
+{
+    return ParsePoint(node, out);
+}
+
 bool ParseZones(const Json::Value& node, std::vector<Zone>& out, bool& enabled)
 {
     const Json::Value* items = NULL;

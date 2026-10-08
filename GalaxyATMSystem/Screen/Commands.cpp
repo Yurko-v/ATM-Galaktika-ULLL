@@ -175,6 +175,34 @@ bool CGalaxyATMSystemRadarScreen::OnCompileCommand(const char* sCommandLine)
         RequestRefresh();
         return true;
     }
+    if (cmd == ".stca")
+    {
+        m_stcaOn = !m_stcaOn;
+        m_kfTick = 0;
+        std::string msg = Narrow(StcaStatusLine());
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Конфликты")).c_str(),
+            msg.c_str(), true, false, false, false, false);
+        RequestRefresh();
+        return true;
+    }
+    if (cmd == ".stcainfo")
+    {
+        std::string msg = Narrow(StcaStatusLine());
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Конфликты")).c_str(),
+            msg.c_str(), true, false, false, false, false);
+        return true;
+    }
+    if (cmd == ".rdf" || cmd == ".arp")
+    {
+        m_rdfVisible = !m_rdfVisible;
+        if (!m_rdfVisible)
+            m_rdfLive.clear();
+        std::string msg = Narrow(RdfStatusLine());
+        GetPlugIn()->DisplayUserMessage("ULLL Panel", Narrow(Tr(L"Пеленгатор")).c_str(),
+            msg.c_str(), true, false, false, false, false);
+        RequestRefresh();
+        return true;
+    }
     if (cmd == ".rc")
     {
         m_rcOpen = !m_rcOpen;

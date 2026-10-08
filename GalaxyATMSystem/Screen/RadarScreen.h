@@ -125,9 +125,30 @@ private:
         int width = 0, height = 0;
         std::string key;
         RECT drawn = { 0, 0, 0, 0 };
+        std::vector<RECT> blits;    // runs of tiles with anything drawn on them
         void Release();
     };
     ZoneLayer m_zoneLayer;
+    void FindLayerBlits();
+
+    // Where SIGMET and zone outlines take clicks and show their title, worked out
+    // again only when the view or the areas change. A box names its slot in ids/tips.
+    struct AreaHit
+    {
+        size_t slot;
+        RECT box;
+    };
+    struct AreaHits
+    {
+        std::string key;
+        std::vector<AreaHit> boxes;
+        std::vector<std::string> ids, tips;
+        void Clear() { boxes.clear(); ids.clear(); tips.clear(); }
+    };
+    AreaHits m_sigmetHits;
+    AreaHits m_zoneHits;
+    void BuildZoneHits();
+    std::string ViewKey();
 
     static const size_t kRunWidthCacheLimit = 4096;
     std::map<std::wstring, int> m_runWidths;
@@ -139,6 +160,33 @@ private:
     void BuildSectorList(std::vector<SectorListRow>& out);
     const std::set<std::string>& KfConflicts();
     bool SeparationLost(const char* callsign);
+
+    // Short term conflict alert. A pair is shown after it is found twice running, so
+    // one noisy radar return does not flash an alert, and kept for a few cycles after
+    // it stops being found, so it does not flicker on the edge of the minima.
+    struct StcaWatch
+    {
+        Stca::Conflict last;
+        int  hits = 0;
+        int  misses = 0;
+        bool raised = false;
+        bool inhibited = false;     // the controller clicked it away; predicted only
+    };
+    bool m_stcaOn = true;
+    std::map<std::string, StcaWatch> m_stcaWatch;   // keyed "A|B", A < B
+    std::map<std::wstring, EuroScopePlugIn::CPosition> m_stcaAreaCentres;
+    std::set<std::wstring> m_stcaWarnedAreas;
+    double m_stcaVariation = 0.0;                   // sector file magnetic variation, east positive
+    double m_stcaTrackHeadingOffset = 0.0;          // GetTrackHeading minus the true track, for .stca
+    int    m_stcaOffsetSamples = 0;
+    int    m_stcaTracks = 0;
+    double m_stcaLastMs = 0.0;
+    std::vector<Stca::Area> StcaAreas();
+    void RunStca();
+    bool StcaShown(const StcaWatch& watch) const;
+    void DrawStca(HDC hDC);
+    void InhibitStca(const char* pairKey);
+    std::wstring StcaStatusLine();
     void DrawSectorList(HDC hDC, RECT area, int scale, bool floating, const std::vector<SectorListRow>& all);
     bool ScrollSectorList(int rows);
     int  RcScale(int availW, int availH);
@@ -161,7 +209,6 @@ private:
     static double GainToSpanNM(int gain);
     static int    SpanNMToGain(double spanNM);
 
-    void DrawSigmets(HDC hDC);
     void RegisterSigmetObjects();
     void DrawSigmetInfo(HDC hDC);
     bool SigmetOutline(const std::vector<EuroScopePlugIn::CPosition>& ring,
@@ -203,6 +250,7 @@ private:
         POINT callsignAt = { 0, 0 };
         bool  placed = false;
         bool  zone = false;
+        bool  modeS = false;
         POINT anchor = { 0, 0 };
         RECT  area = { 0, 0, 0, 0 };
         std::vector<FormularItem> items;
@@ -318,6 +366,7 @@ private:
     void DrawHeadingWindow(HDC hDC);
     void ScrollHeading(int rows);
     void ApplyHeading();
+    void PublishHeading(EuroScopePlugIn::CFlightPlan& fp, int heading);
     void TickHeadingWindow();
 
     enum class RvsmStatus { Approved, Exempt, NotApproved, Turbulent };
@@ -448,6 +497,7 @@ private:
     FormularKindSetting m_formularKindSetting;
     FormularKind CurrentFormularKind();
     bool HoveredCtrLabel(const char* callsign);
+    std::string ShownPositionId(const char* callsign, const std::string& positionId);
 
     void  DrawFormulars(HDC hDC, bool registerObjects);
 
@@ -459,6 +509,28 @@ private:
     };
     SymbolStats m_symbolStats;
     void  FormularClick(const char* sCallsign, POINT pt, int button);
+
+    // Every radar target with a position, read from EuroScope once at the start of the
+    // tag phase; symbols, labels, vectors and wake arcs all walk this list instead of
+    // asking EuroScope again for each of them.
+    struct FrameTarget
+    {
+        EuroScopePlugIn::CRadarTarget rt;
+        EuroScopePlugIn::CRadarTargetPositionData pos;
+        EuroScopePlugIn::CFlightPlan fp;
+        std::string callsign;       // the plan's when correlated, the target's otherwise
+        POINT tp = { 0, 0 };
+        int  pressureAltFt = 0;
+        bool onScreen = false;      // inside the radar area
+        bool shown = false;         // passes the altitude filter
+    };
+    std::vector<FrameTarget> m_frameTargets;
+    double m_framePxPerNm = 0.0;
+    void  CollectFrameTargets();
+    bool  NearScreen(POINT tp, double reachNm);
+
+    std::map<std::string, std::string> m_shownIds;
+    ULONGLONG m_shownIdsTick = 0;
 
     bool  m_hdgDragging;
     bool  m_hdgDragMoved;
@@ -472,6 +544,34 @@ private:
         double* drawnHdg = NULL);
     void  HeadingTurnPath(EuroScopePlugIn::CRadarTarget rt, double headingDeg, double totalNm,
         std::vector<POINT>& out);
+
+    // Пеленгатор: a bearing line drawn from the АРП to whoever is transmitting, and
+    // the box that holds the last forward/reverse bearing.
+    struct RdfFix
+    {
+        bool   valid = false;
+        double bearing = 0.0;       // true bearing from the АРП, which is what we draw
+        double reading = 0.0;       // what the station reads out, magnetic where it is set up that way
+        bool   toTarget = false;    // ends on the aircraft; otherwise a full radial, as the control bearing is
+        EuroScopePlugIn::CPosition target;
+        bool   self = false;
+        std::string callsign;
+    };
+    bool m_rdfVisible = true;
+    unsigned m_rdfGeneration = 0;
+    std::vector<RdfFix> m_rdfLive;
+    RdfFix m_rdfLast;
+    ULONGLONG m_rdfHoldUntil = 0;
+    std::map<std::wstring, EuroScopePlugIn::CPosition> m_rdfAirports;
+    std::set<std::wstring> m_rdfWarnedAirports;
+    bool RdfStationPosition(const RdfStation& station, EuroScopePlugIn::CPosition& out);
+    void CollectRdfFixes(const EuroScopePlugIn::CPosition& arp, const RdfStation& station);
+    void DrawRdf(HDC hDC);
+    void DrawRdfBox(HDC hDC);
+    std::wstring RdfStatusLine();
+public:
+    void PollRdf();
+private:
 
     void DrawTargetVectors(HDC hDC);
     void DrawWakeArcs(HDC hDC);
@@ -735,7 +835,7 @@ private:
     enum class PerfSection
     {
         BeforeTags, AfterTags, AfterLists,
-        Zones, Sigmets, WakeArcs, TargetVectors, TargetSymbols, Formulars, CoordWindow,
+        Zones, Sigmets, Rdf, Stca, WakeArcs, TargetVectors, TargetSymbols, Formulars, CoordWindow,
         Panel, Windows, Count
     };
     struct PerfTotals
@@ -980,6 +1080,9 @@ const int SO_DROPDOWN_ITEM = 50;
 
 const int SO_SIGMET_AREA   = 70;
 const int SO_ZONE_AREA     = 71;
+
+const int SO_STCA_LABEL    = 179;
+
 
 const int FN_ALTFILTER_FROM = 300;
 const int FN_ALTFILTER_TO   = 301;

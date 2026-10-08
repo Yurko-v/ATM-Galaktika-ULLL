@@ -43,14 +43,7 @@ namespace Galaxy
     inline const float kRcDividerSvg[] = { 844.0f, 1256.0f, 1852.5f };
     inline const float kRcDividerWSvg = 2.5f;
 
-    inline const double kKfLateralNm    = 5.0;
-    inline const double kKfVerticalFt   = 800.0;
-    inline const int    kKfLookaheadSec = 120;
-    inline const int    kKfStepSec      = 10;
     inline const int    kKfMinGsKt      = 50;
-    inline const double kKfScanNm       = 40.0;
-    inline const double kKfScanFt       = 10000.0;
-    inline const ULONGLONG kKfRecheckMs = 1000;
 
     inline const float kRcCrossSvg[12][2] = {
         { 2011.27f, 64.4168f }, { 2008.58f, 61.7335f }, { 2019.32f, 51.0002f },

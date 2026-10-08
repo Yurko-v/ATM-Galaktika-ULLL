@@ -20,6 +20,7 @@ void CGalaxyATMSystemRadarScreen::OpenTransferWindow(const char* callsign)
         XfrPosition p = { c.GetPositionId(), c.GetCallsign() };
         if (p.positionId.empty())
             p.positionId = p.callsign;
+        p.positionId = ShownPositionId(c.GetCallsign(), p.positionId);
         if (p.callsign == next)
             m_xfrPositions.insert(m_xfrPositions.begin(), p);
         else
@@ -164,7 +165,10 @@ void CGalaxyATMSystemRadarScreen::DirectToTransferPoint(int index)
     const std::string point = m_xfrPositions[index].callsign;
     CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_xfrCallsign.c_str());
     if (fp.IsValid() && fp.GetControllerAssignedData().SetDirectToPointName(point.c_str()))
+    {
         Log::Info("formular", m_xfrCallsign + ": DCT " + point);
+        Plugin()->PublishAssignment(fp, point, "direct");
+    }
     else
         CoordinationFailed(m_xfrCallsign, L"EuroScope \x043D\x0435 \x0432\x044B\x043F\x043E\x043B\x043D\x0438\x043B \x0441\x043F\x0440\x044F\x043C\x043B\x0435\x043D\x0438\x0435",
             "DCT " + point + " refused by EuroScope");

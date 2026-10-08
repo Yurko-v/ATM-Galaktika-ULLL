@@ -34,79 +34,70 @@ bool CGalaxyATMSystemRadarScreen::SigmetOutline(
     return true;
 }
 
-void CGalaxyATMSystemRadarScreen::DrawSigmets(HDC hDC)
-{
-    if (!m_sigmetsVisible || !m_sigmets || m_sigmets->empty())
-        return;
-
-    int saved = SaveDC(hDC);
-
-    {
-        AreaCanvas canvas(hDC, GetRadarArea(), Theme::SigmetLine,
-            (float)Theme::SigmetWidth);
-        for (const Sigmet& sig : *m_sigmets)
-        {
-            std::vector<POINT> pts;
-            for (const std::vector<EuroScopePlugIn::CPosition>& ring : sig.rings)
-            {
-                if (SigmetOutline(ring, pts))
-                    canvas.Ring(pts, sig.closed);
-            }
-        }
-    }
-
-    RestoreDC(hDC, saved);
-}
-
+// SIGMET outlines themselves are drawn into the zone layer (DrawZones). The boxes
+// along them are worked out only when the view or the SIGMETs change; EuroScope
+// still needs them added again every frame.
 void CGalaxyATMSystemRadarScreen::RegisterSigmetObjects()
 {
     if (!m_sigmetsVisible || !m_sigmets || m_sigmets->empty())
         return;
 
-    RECT ra = GetRadarArea();
-    const int kPad = 12;
-    const double kStepPx = 24.0;
-
-    const int kMaxBoxes = 3000;
-    int boxes = 0;
-
-    std::vector<POINT> pts;
-    for (size_t i = 0; i < m_sigmets->size() && boxes < kMaxBoxes; i++)
+    char tail[32];
+    sprintf_s(tail, "|%p", (const void*)m_sigmets.get());
+    const std::string key = ViewKey() + tail;
+    AreaHits& hits = m_sigmetHits;
+    if (key != hits.key)
     {
-        const Sigmet& sig = (*m_sigmets)[i];
+        hits.key = key;
+        hits.Clear();
 
-        char id[16];
-        sprintf_s(id, "%zu", i);
-        std::string tip = Narrow(sig.Title().substr(0, 120));
+        RECT ra = GetRadarArea();
+        const int kPad = 12;
+        const double kStepPx = 24.0;
+        const size_t kMaxBoxes = 3000;
 
-        for (const std::vector<EuroScopePlugIn::CPosition>& ring : sig.rings)
+        std::vector<POINT> pts;
+        for (size_t i = 0; i < m_sigmets->size() && hits.boxes.size() < kMaxBoxes; i++)
         {
-            if (!SigmetOutline(ring, pts))
-                continue;
+            const Sigmet& sig = (*m_sigmets)[i];
+            hits.ids.push_back(std::to_string(i));
+            hits.tips.push_back(Narrow(sig.Title().substr(0, 120)));
 
-            size_t segments = sig.closed ? pts.size() : pts.size() - 1;
-            for (size_t seg = 0; seg < segments && boxes < kMaxBoxes; seg++)
+            for (const std::vector<EuroScopePlugIn::CPosition>& ring : sig.rings)
             {
-                POINT a = pts[seg], b = pts[(seg + 1) % pts.size()];
-                if (!Geom::ClipSegment(ra, a, b))
+                if (!SigmetOutline(ring, pts))
                     continue;
 
-                double len = sqrt((double)(b.x - a.x) * (b.x - a.x) + (double)(b.y - a.y) * (b.y - a.y));
-                int steps = max(1, (int)lround(len / kStepPx));
-
-                for (int st = 0; st <= steps && boxes < kMaxBoxes; st++)
+                size_t segments = sig.closed ? pts.size() : pts.size() - 1;
+                for (size_t seg = 0; seg < segments && hits.boxes.size() < kMaxBoxes; seg++)
                 {
-                    double t = (double)st / steps;
-                    POINT p;
-                    p.x = a.x + (LONG)lround((b.x - a.x) * t);
-                    p.y = a.y + (LONG)lround((b.y - a.y) * t);
-                    RECT box = { p.x - kPad, p.y - kPad, p.x + kPad, p.y + kPad };
-                    AddScreenObject(SO_SIGMET_AREA, id, box, false, tip.c_str());
-                    boxes++;
+                    POINT a = pts[seg], b = pts[(seg + 1) % pts.size()];
+                    if (!Geom::ClipSegment(ra, a, b))
+                        continue;
+
+                    double len = sqrt((double)(b.x - a.x) * (b.x - a.x) + (double)(b.y - a.y) * (b.y - a.y));
+                    int steps = max(1, (int)lround(len / kStepPx));
+
+                    for (int st = 0; st <= steps && hits.boxes.size() < kMaxBoxes; st++)
+                    {
+                        double t = (double)st / steps;
+                        POINT p;
+                        p.x = a.x + (LONG)lround((b.x - a.x) * t);
+                        p.y = a.y + (LONG)lround((b.y - a.y) * t);
+                        RECT box = { p.x - kPad, p.y - kPad, p.x + kPad, p.y + kPad };
+                        // The end of one segment is the start of the next.
+                        if (!hits.boxes.empty() && hits.boxes.back().slot == i
+                            && EqualRect(&hits.boxes.back().box, &box))
+                            continue;
+                        hits.boxes.push_back({ i, box });
+                    }
                 }
             }
         }
     }
+
+    for (const AreaHit& h : hits.boxes)
+        AddScreenObject(SO_SIGMET_AREA, hits.ids[h.slot].c_str(), h.box, false, hits.tips[h.slot].c_str());
 }
 
 int CGalaxyATMSystemRadarScreen::FindSigmetAt(POINT pt)

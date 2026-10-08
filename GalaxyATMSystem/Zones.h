@@ -37,6 +37,10 @@ struct Zone
 
 std::wstring ZoneLevelText(int fl);
 
+// A point written either as [lat, lon] or as a sector file style
+// "N059.48.01.000:E030.15.45.000" string.
+bool ParseGeoPoint(const Json::Value& node, EuroScopePlugIn::CPosition& out);
+
 bool ParseZones(const Json::Value& node, std::vector<Zone>& out, bool& enabled);
 
 bool LoadTopSkyAreas(const std::wstring& path, std::vector<Zone>& out);

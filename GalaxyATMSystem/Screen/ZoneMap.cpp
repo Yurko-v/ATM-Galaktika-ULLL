@@ -58,21 +58,32 @@ void CGalaxyATMSystemRadarScreen::ZoneLayer::Release()
     width = height = 0;
     key.clear();
     drawn = { 0, 0, 0, 0 };
+    blits.clear();
 }
 
-std::string CGalaxyATMSystemRadarScreen::ZoneLayerKey()
+// The radar area and the part of the world it shows: anything turned from positions
+// into pixels has to be worked out again when this changes.
+std::string CGalaxyATMSystemRadarScreen::ViewKey()
 {
     const RECT ra = GetRadarArea();
     CPosition leftDown, rightUp;
     GetDisplayArea(&leftDown, &rightUp);
+    char key[160];
+    sprintf_s(key, "%ld,%ld,%ld,%ld|%.7f,%.7f,%.7f,%.7f",
+        ra.left, ra.top, ra.right, ra.bottom, leftDown.m_Latitude, leftDown.m_Longitude,
+        rightUp.m_Latitude, rightUp.m_Longitude);
+    return key;
+}
+
+std::string CGalaxyATMSystemRadarScreen::ZoneLayerKey()
+{
     const Config& cfg = Plugin()->GetConfig();
     const std::vector<Zone>& zones = cfg.Zones();
-    char head[256];
-    sprintf_s(head, "%ld,%ld,%ld,%ld|%.7f,%.7f,%.7f,%.7f|%d|%p,%zu|",
-        ra.left, ra.top, ra.right, ra.bottom, leftDown.m_Latitude, leftDown.m_Longitude,
-        rightUp.m_Latitude, rightUp.m_Longitude, Theme::AntiAliasOn() ? 1 : 0,
-        (const void*)zones.data(), zones.size());
-    std::string key = head;
+    char head[160];
+    sprintf_s(head, "|%d|%d,%p,%zu|%d,%p|", Theme::AntiAliasOn() ? 1 : 0,
+        m_zonesVisible ? 1 : 0, (const void*)zones.data(), zones.size(),
+        m_sigmetsVisible ? 1 : 0, (const void*)m_sigmets.get());
+    std::string key = ViewKey() + head;
     for (ZoneKind kind : { ZoneKind::Prohibited, ZoneKind::Restricted, ZoneKind::Danger })
     {
         const ZoneStyle& s = cfg.ZoneStyleFor(kind);
@@ -86,6 +97,8 @@ std::string CGalaxyATMSystemRadarScreen::ZoneLayerKey()
     return key;
 }
 
+// Zones and SIGMET outlines, drawn once into a layer that is laid over every frame
+// until the view, the zones or the SIGMETs change.
 void CGalaxyATMSystemRadarScreen::RenderZoneLayer(HDC hDC)
 {
     ZoneLayer& layer = m_zoneLayer;
@@ -118,74 +131,189 @@ void CGalaxyATMSystemRadarScreen::RenderZoneLayer(HDC hDC)
     }
     memset(layer.bits, 0, (size_t)width * height * 4);
 
-    const std::vector<Zone>& zones = Plugin()->GetConfig().Zones();
     const Config& cfg = Plugin()->GetConfig();
+    const std::vector<Zone>& zones = cfg.Zones();
     const ZoneStyle& styleP = cfg.ZoneStyleFor(ZoneKind::Prohibited);
     const ZoneStyle& styleR = cfg.ZoneStyleFor(ZoneKind::Restricted);
     const ZoneStyle& styleD = cfg.ZoneStyleFor(ZoneKind::Danger);
+    const bool showZones = m_zonesVisible && !zones.empty();
+    const bool showSigmets = m_sigmetsVisible && m_sigmets && !m_sigmets->empty();
 
     RECT drawn = { LONG_MAX, LONG_MAX, LONG_MIN, LONG_MIN };
+    auto grow = [&drawn](const std::vector<POINT>& pts)
+    {
+        for (const POINT& p : pts)
+        {
+            drawn.left = min(drawn.left, p.x);
+            drawn.top = min(drawn.top, p.y);
+            drawn.right = max(drawn.right, p.x);
+            drawn.bottom = max(drawn.bottom, p.y);
+        }
+    };
     {
         Gdiplus::Bitmap surface(width, height, width * 4, PixelFormat32bppPARGB, (BYTE*)layer.bits);
-        AreaCanvas canvas(&surface, ra, styleR.line, (float)Theme::ZoneWidth);
         std::vector<POINT> pts;
 
-        for (size_t i = 0; i < zones.size(); i++)
+        if (showZones)
         {
-            if (i >= m_zoneActive.size() || !m_zoneActive[i])
-                continue;
-
-            const Zone& zone = zones[i];
-            if (!ZoneOutline(zone, pts))
-                continue;
-
-            const ZoneStyle& style = (zone.kind == ZoneKind::Prohibited) ? styleP
-                : (zone.kind == ZoneKind::Danger) ? styleD : styleR;
-
-            canvas.Wash(pts, style.fill, style.alpha);
-            canvas.SetColor(style.line);
-            canvas.Ring(pts, true);
-
-            for (const POINT& p : pts)
+            AreaCanvas canvas(&surface, ra, styleR.line, (float)Theme::ZoneWidth);
+            for (size_t i = 0; i < zones.size(); i++)
             {
-                drawn.left = min(drawn.left, p.x);
-                drawn.top = min(drawn.top, p.y);
-                drawn.right = max(drawn.right, p.x);
-                drawn.bottom = max(drawn.bottom, p.y);
+                if (i >= m_zoneActive.size() || !m_zoneActive[i])
+                    continue;
+
+                const Zone& zone = zones[i];
+                if (!ZoneOutline(zone, pts))
+                    continue;
+
+                const ZoneStyle& style = (zone.kind == ZoneKind::Prohibited) ? styleP
+                    : (zone.kind == ZoneKind::Danger) ? styleD : styleR;
+
+                canvas.Wash(pts, style.fill, style.alpha);
+                canvas.SetColor(style.line);
+                canvas.Ring(pts, true);
+                grow(pts);
+            }
+        }
+
+        if (showSigmets)
+        {
+            AreaCanvas canvas(&surface, ra, Theme::SigmetLine, (float)Theme::SigmetWidth);
+            for (const Sigmet& sig : *m_sigmets)
+            {
+                for (const std::vector<EuroScopePlugIn::CPosition>& ring : sig.rings)
+                {
+                    if (!SigmetOutline(ring, pts))
+                        continue;
+                    canvas.Ring(pts, sig.closed);
+                    grow(pts);
+                }
             }
         }
     }
     if (drawn.right < drawn.left)
         return;
-    InflateRect(&drawn, (int)Theme::ZoneWidth + 2, (int)Theme::ZoneWidth + 2);
+    const int pad = max(Theme::ZoneWidth, Theme::SigmetWidth) + 2;
+    InflateRect(&drawn, pad, pad);
     IntersectRect(&layer.drawn, &drawn, &ra);
+}
+
+// Splits the drawn part of the layer into 64 px tiles and keeps only those with a
+// pixel on them, joined into runs, so the empty sky between areas is not blended
+// every frame.
+void CGalaxyATMSystemRadarScreen::FindLayerBlits()
+{
+    ZoneLayer& layer = m_zoneLayer;
+    layer.blits.clear();
+    const RECT r = layer.drawn;
+    if (layer.bits == NULL || r.right <= r.left || r.bottom <= r.top)
+        return;
+
+    const int kTile = 64;
+    const UINT32* bits = (const UINT32*)layer.bits;
+    std::vector<size_t> above, here;
+    for (int top = r.top; top < r.bottom; top += kTile)
+    {
+        const int bottom = min(top + kTile, (int)r.bottom);
+        here.clear();
+        auto close = [&](const RECT& run)
+        {
+            // A run straight under one of the same width just makes that one taller.
+            for (size_t idx : above)
+            {
+                RECT& prev = layer.blits[idx];
+                if (prev.left == run.left && prev.right == run.right && prev.bottom == run.top)
+                {
+                    prev.bottom = run.bottom;
+                    here.push_back(idx);
+                    return;
+                }
+            }
+            layer.blits.push_back(run);
+            here.push_back(layer.blits.size() - 1);
+        };
+
+        RECT run = { 0, 0, 0, 0 };
+        bool open = false;
+        for (int left = r.left; left < r.right; left += kTile)
+        {
+            const int right = min(left + kTile, (int)r.right);
+            bool used = false;
+            for (int y = top; y < bottom && !used; y++)
+            {
+                const UINT32* row = bits + (size_t)y * layer.width;
+                for (int x = left; x < right; x++)
+                {
+                    if (row[x] != 0)
+                    {
+                        used = true;
+                        break;
+                    }
+                }
+            }
+            if (used && open)
+            {
+                run.right = right;
+            }
+            else if (used)
+            {
+                run = { left, top, right, bottom };
+                open = true;
+            }
+            else if (open)
+            {
+                close(run);
+                open = false;
+            }
+        }
+        if (open)
+            close(run);
+        above.swap(here);
+    }
 }
 
 void CGalaxyATMSystemRadarScreen::DrawZones(HDC hDC)
 {
-    if (!m_zonesVisible)
-        return;
-
-    const std::vector<Zone>& zones = Plugin()->GetConfig().Zones();
-    if (zones.empty())
+    const bool showZones = m_zonesVisible && !Plugin()->GetConfig().Zones().empty();
+    const bool showSigmets = m_sigmetsVisible && m_sigmets && !m_sigmets->empty();
+    if (!showZones && !showSigmets)
         return;
 
     const std::string key = ZoneLayerKey();
     if (key != m_zoneLayer.key || m_zoneLayer.dc == NULL)
     {
         RenderZoneLayer(hDC);
+        FindLayerBlits();
         m_zoneLayer.key = m_zoneLayer.dc != NULL ? key : std::string();
     }
-
-    const RECT& r = m_zoneLayer.drawn;
-    if (m_zoneLayer.dc == NULL || r.right <= r.left || r.bottom <= r.top)
+    if (m_zoneLayer.dc == NULL)
         return;
+
     BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    AlphaBlend(hDC, r.left, r.top, r.right - r.left, r.bottom - r.top,
-        m_zoneLayer.dc, r.left, r.top, r.right - r.left, r.bottom - r.top, blend);
+    for (const RECT& r : m_zoneLayer.blits)
+        AlphaBlend(hDC, r.left, r.top, r.right - r.left, r.bottom - r.top,
+            m_zoneLayer.dc, r.left, r.top, r.right - r.left, r.bottom - r.top, blend);
 }
 
+// Zone boxes are only taken with Shift held or a zone card open; the grid is worked
+// out again only when the view or the active zones change.
 void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
+{
+    if (!m_zonesVisible || Plugin()->GetConfig().Zones().empty())
+        return;
+
+    const std::string key = ZoneLayerKey();
+    if (key != m_zoneHits.key)
+    {
+        m_zoneHits.key = key;
+        m_zoneHits.Clear();
+        BuildZoneHits();
+    }
+    for (const AreaHit& h : m_zoneHits.boxes)
+        AddScreenObject(SO_ZONE_AREA, m_zoneHits.ids[h.slot].c_str(), h.box, false, m_zoneHits.tips[h.slot].c_str());
+}
+
+void CGalaxyATMSystemRadarScreen::BuildZoneHits()
 {
     if (!m_zonesVisible)
         return;
@@ -379,9 +507,13 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
         cell *= 2;
     }
 
-    std::map<size_t, std::string> tips;
+    std::map<size_t, size_t> slots;
     for (const Outline& o : visible)
-        tips[o.index] = Narrow(zones[o.index].Title().substr(0, 120));
+    {
+        slots[o.index] = m_zoneHits.tips.size();
+        m_zoneHits.ids.push_back(std::to_string(o.index));
+        m_zoneHits.tips.push_back(Narrow(zones[o.index].Title().substr(0, 120)));
+    }
 
     for (int cy = 0; cy < rows; cy++)
     {
@@ -394,10 +526,7 @@ void CGalaxyATMSystemRadarScreen::RegisterZoneObjects()
             const int gx = (baseCX + cx) * cell;
             const int gy = (baseCY + cy) * cell;
             RECT box = { gx, gy, gx + cell, gy + cell };
-
-            char id[16];
-            sprintf_s(id, "%d", sq.index);
-            AddScreenObject(SO_ZONE_AREA, id, box, false, tips[(size_t)sq.index].c_str());
+            m_zoneHits.boxes.push_back({ slots[(size_t)sq.index], box });
         }
     }
 }

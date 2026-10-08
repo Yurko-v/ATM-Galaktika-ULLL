@@ -176,6 +176,9 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_MAP_CANVAS:
         MapCanvasClick(Pt, Button);
         return;
+    case SO_STCA_LABEL:
+        InhibitStca(sObjectId);
+        return;
     case SO_COORD_MENU:
     case SO_CS_MENU:
         return;
@@ -946,8 +949,8 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
             {
                 int hdg = DragHeading(m_hdgDragCallsign.c_str(), Pt);
                 CFlightPlan fp = GetPlugIn()->FlightPlanSelect(m_hdgDragCallsign.c_str());
-                if (hdg > 0 && fp.IsValid())
-                    fp.GetControllerAssignedData().SetAssignedHeading(hdg);
+                if (hdg > 0 && fp.IsValid() && fp.GetControllerAssignedData().SetAssignedHeading(hdg))
+                    PublishHeading(fp, hdg);
                 m_hdgDragEndTick = GetTickCount64();
             }
             m_hdgDragging = false;

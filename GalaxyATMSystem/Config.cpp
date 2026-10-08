@@ -391,6 +391,124 @@ void Config::Load(HINSTANCE hModule)
         }
     }
 
+    if (const Json::Value* rdf = root.Find(L"Rdf"))
+    {
+        if (rdf->kind == Json::Value::Kind::Object)
+        {
+            if (const Json::Value* v = rdf->Find(L"Enabled"))
+                m_RdfEnabled = v->AsBool(m_RdfEnabled);
+            if (const Json::Value* v = rdf->Find(L"Endpoint"))
+            {
+                const std::string endpoint = Json::WideToUtf8(v->AsString());
+                if (!endpoint.empty())
+                    m_RdfEndpoint = endpoint;
+            }
+            if (const Json::Value* v = rdf->Find(L"Default"))
+                m_RdfDefault = ToUpper(v->AsString());
+
+            if (const Json::Value* stations = rdf->Find(L"Stations"))
+            {
+                if (stations->kind == Json::Value::Kind::Object)
+                {
+                    for (const auto& [key, entry] : stations->obj)
+                    {
+                        RdfStation station;
+                        station.id = ToUpper(key);
+                        station.name = station.id;
+                        if (entry.kind == Json::Value::Kind::Object)
+                        {
+                            if (const Json::Value* v = entry.Find(L"Name"))
+                                station.name = v->AsString(station.name);
+                            if (const Json::Value* v = entry.Find(L"Point"))
+                                station.hasPoint = ParseGeoPoint(*v, station.point);
+                            if (const Json::Value* v = entry.Find(L"ControlBearing"))
+                            {
+                                const long long deg = v->AsInt(-1);
+                                if (deg >= 0 && deg < 360)
+                                    station.controlBearing = (int)deg;
+                            }
+                            if (const Json::Value* v = entry.Find(L"MagneticVariation"))
+                                station.variation = max(-30.0, min(30.0, v->AsNumber(0.0)));
+                        }
+                        else
+                        {
+                            station.hasPoint = ParseGeoPoint(entry, station.point);
+                        }
+                        m_RdfStations.push_back(station);
+                    }
+                }
+            }
+
+            if (const Json::Value* byPosition = rdf->Find(L"ByPosition"))
+            {
+                if (byPosition->kind == Json::Value::Kind::Object)
+                {
+                    for (const auto& [position, station] : byPosition->obj)
+                        m_RdfByPosition[ToUpper(position)] = ToUpper(station.AsString());
+                }
+            }
+        }
+    }
+
+    if (const Json::Value* stca = root.Find(L"Stca"))
+    {
+        if (stca->kind == Json::Value::Kind::Object)
+        {
+            Stca::Settings& s = m_StcaSettings;
+
+            // Distances are accepted in km, the way the minima are written in Russia,
+            // or in NM; the km one wins when both are there.
+            auto distance = [](const Json::Value& node, const wchar_t* km, const wchar_t* nm, double& out)
+            {
+                if (const Json::Value* v = node.Find(nm))
+                    out = max(0.5, min(30.0, v->AsNumber(out)));
+                if (const Json::Value* v = node.Find(km))
+                    out = max(0.5, min(30.0, v->AsNumber(out * 1.852) / 1.852));
+            };
+
+            if (const Json::Value* v = stca->Find(L"Enabled"))
+                m_StcaEnabled = v->AsBool(m_StcaEnabled);
+            if (const Json::Value* v = stca->Find(L"LookaheadSeconds"))
+                s.lookaheadSec = (int)max(30LL, min(300LL, v->AsInt(s.lookaheadSec)));
+            distance(*stca, L"LateralKm", L"LateralNm", s.lateralNm);
+            if (const Json::Value* v = stca->Find(L"VerticalFt"))
+                s.verticalFt = max(300.0, min(5000.0, v->AsNumber(s.verticalFt)));
+            if (const Json::Value* v = stca->Find(L"VerticalAboveFL410Ft"))
+                s.verticalHighFt = max(300.0, min(5000.0, v->AsNumber(s.verticalHighFt)));
+            if (const Json::Value* v = stca->Find(L"ToleranceFt"))
+                s.verticalToleranceFt = max(0.0, min(500.0, v->AsNumber(s.verticalToleranceFt)));
+            if (const Json::Value* v = stca->Find(L"MinAltitudeFt"))
+                s.minAltitudeFt = max(0.0, min(20000.0, v->AsNumber(s.minAltitudeFt)));
+            if (const Json::Value* v = stca->Find(L"Turns"))
+                s.turns = v->AsBool(s.turns);
+
+            if (const Json::Value* areas = stca->Find(L"Areas"))
+            {
+                if (areas->kind == Json::Value::Kind::Object)
+                {
+                    m_StcaAreas.clear();
+                    for (const auto& [key, entry] : areas->obj)
+                    {
+                        StcaAreaConfig area;
+                        area.id = ToUpper(key);
+                        if (entry.kind != Json::Value::Kind::Object)
+                            continue;
+                        if (const Json::Value* v = entry.Find(L"Point"))
+                            area.hasPoint = ParseGeoPoint(*v, area.point);
+                        if (const Json::Value* v = entry.Find(L"RadiusNm"))
+                            area.radiusNm = max(1.0, min(200.0, v->AsNumber(area.radiusNm)));
+                        if (const Json::Value* v = entry.Find(L"RadiusKm"))
+                            area.radiusNm = max(1.0, min(200.0, v->AsNumber(area.radiusNm * 1.852) / 1.852));
+                        if (const Json::Value* v = entry.Find(L"CeilingFt"))
+                            area.ceilingFt = max(0.0, min(60000.0, v->AsNumber(area.ceilingFt)));
+                        distance(entry, L"LateralKm", L"LateralNm", area.lateralNm);
+                        m_StcaAreas.push_back(area);
+                    }
+                }
+            }
+        }
+    }
+
     if (!m_AtisTextRu.empty() && !m_AtisTextEn.empty())
         m_AtisMessage = m_AtisTextRu + L"\n\n" + m_AtisTextEn;
     else if (!m_AtisTextRu.empty())
@@ -408,6 +526,33 @@ const ZoneStyle& Config::ZoneStyleFor(ZoneKind kind) const
     case ZoneKind::Danger:     return m_ZoneDanger;
     default:                   return m_ZoneRestricted;
     }
+}
+
+const RdfStation* Config::RdfStationFor(const std::wstring& positionCallsign) const
+{
+    if (m_RdfStations.empty())
+        return NULL;
+
+    auto byId = [this](const std::wstring& id) -> const RdfStation*
+    {
+        if (id.empty())
+            return NULL;
+        for (const RdfStation& station : m_RdfStations)
+            if (station.id == id)
+                return &station;
+        return NULL;
+    };
+
+    auto mapped = m_RdfByPosition.find(ToUpper(positionCallsign));
+    if (mapped != m_RdfByPosition.end())
+    {
+        if (const RdfStation* station = byId(mapped->second))
+            return station;
+    }
+
+    // No Default means positions that are not listed have no АРП at all, rather than
+    // borrowing one from another sector.
+    return byId(m_RdfDefault);
 }
 
 bool Config::FindPosition(const std::string& callsign,

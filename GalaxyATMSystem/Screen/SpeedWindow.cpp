@@ -132,6 +132,8 @@ void CGalaxyATMSystemRadarScreen::ApplySpeed()
         }
         if (!ok)
             Log::Warn("formular", m_spdCallsign + ": EuroScope refused speed " + std::to_string(value));
+        else
+            Plugin()->PublishAssignment(fp, (mach ? "M" : "S") + std::to_string(value), "speed");
 
         const char modifier = m_spdMode == SpeedOrGreater ? '+' : m_spdMode == SpeedOrLess ? '-' : 0;
         const char* annotation = cad.GetFlightStripAnnotation(kTopSkySpeedAnnotation);

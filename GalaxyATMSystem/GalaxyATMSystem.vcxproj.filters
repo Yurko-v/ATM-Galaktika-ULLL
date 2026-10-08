@@ -66,6 +66,12 @@
     <ClInclude Include="Squawk.h">
       <Filter>Modules</Filter>
     </ClInclude>
+    <ClInclude Include="Rdf.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="Stca.h">
+      <Filter>Modules</Filter>
+    </ClInclude>
     <ClInclude Include="TextEntry.h">
       <Filter>Modules</Filter>
     </ClInclude>
@@ -101,6 +107,9 @@
       <Filter>Screen</Filter>
     </ClInclude>
     <ClInclude Include="Screen\Coordination.h">
+      <Filter>Screen</Filter>
+    </ClInclude>
+    <ClInclude Include="Screen\ModeS.h">
       <Filter>Screen</Filter>
     </ClInclude>
     <ClInclude Include="Screen\FormularItems.h">
@@ -162,6 +171,12 @@
     <ClCompile Include="Squawk.cpp">
       <Filter>Modules</Filter>
     </ClCompile>
+    <ClCompile Include="Rdf.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="Stca.cpp">
+      <Filter>Modules</Filter>
+    </ClCompile>
     <ClCompile Include="TextEntry.cpp">
       <Filter>Modules</Filter>
     </ClCompile>
@@ -184,6 +199,9 @@
       <Filter>Plugin</Filter>
     </ClCompile>
     <ClCompile Include="Plugin\Plugin.cpp">
+      <Filter>Plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin\RdfSetup.cpp">
       <Filter>Plugin</Filter>
     </ClCompile>
     <ClCompile Include="Plugin\SquawkAssign.cpp">
@@ -232,6 +250,12 @@
       <Filter>Screen</Filter>
     </ClCompile>
     <ClCompile Include="Screen\Refresh.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\RdfView.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
+    <ClCompile Include="Screen\StcaView.cpp">
       <Filter>Screen</Filter>
     </ClCompile>
     <ClCompile Include="Screen\Ruler.cpp">

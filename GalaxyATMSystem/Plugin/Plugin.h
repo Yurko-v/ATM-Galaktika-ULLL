@@ -21,6 +21,7 @@
 #include "RadarCursor.h"
 #include "Apw.h"
 #include "Squawk.h"
+#include "Rdf.h"
 
 extern HINSTANCE g_hModule;
 
@@ -92,12 +93,20 @@ public:
     bool SharedSpeedModifier(EuroScopePlugIn::CFlightPlan& fp, char& modifier) const;
     void ShareSpeedModifier(EuroScopePlugIn::CFlightPlan fp, char modifier);
     void ShareCoordOutcome(EuroScopePlugIn::CFlightPlan fp, bool point, const std::string& value, char outcome);
+    // Training sessions only: sends a label assignment in EuroScope's scratch pad form
+    // (H270, S250, M78, a point name), the form the sweatbox host flies the aircraft by.
+    void PublishAssignment(EuroScopePlugIn::CFlightPlan fp, const std::string& command, const char* what);
     bool CoordOutcome(const std::string& callsign, bool point, const std::string& value,
         char& outcome, ULONGLONG& at) const;
 
     void HandleSquawkFunction(int FunctionId, const char* sItemString, RECT Area, const char* source);
 
     const Config& GetConfig() const { return m_config; }
+
+    const RdfClient& Rdf() const { return m_rdf; }
+
+    // The АРП for the position we are logged in as; NULL when none is configured.
+    const RdfStation* RdfStation() const;
 
     void ReloadConfig();
 
@@ -250,6 +259,9 @@ private:
     std::shared_ptr<const std::vector<ZoneBooking>> m_notams;
 
     SquawkClient m_squawk;
+
+    RdfClient m_rdf;
+    void ConfigureRdf();
 
     std::map<std::string, std::string> m_squawkSetByUs;
 

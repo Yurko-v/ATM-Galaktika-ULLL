@@ -51,6 +51,48 @@ void CGalaxyATMSystemRadarScreen::HeadingTurnPath(CRadarTarget rt, double headin
             CalculateDestinationPoint(rollOut, headingDeg, straightNm)));
 }
 
+void CGalaxyATMSystemRadarScreen::CollectFrameTargets()
+{
+    m_frameTargets.clear();
+    CGalaxyATMSystemPlugin* plugin = Plugin();
+    const RECT ra = GetRadarArea();
+
+    const double widthNm = DisplayWidthNM();
+    m_framePxPerNm = widthNm > 0.0 ? (ra.right - ra.left) / widthNm : 0.0;
+
+    for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
+         rt = plugin->RadarTargetSelectNext(rt))
+    {
+        CRadarTargetPositionData pos = rt.GetPosition();
+        if (!pos.IsValid())
+            continue;
+        m_frameTargets.emplace_back();
+        FrameTarget& t = m_frameTargets.back();
+        t.rt = rt;
+        t.pos = pos;
+        t.fp = rt.GetCorrelatedFlightPlan();
+        const char* cs = t.fp.IsValid() ? t.fp.GetCallsign() : rt.GetCallsign();
+        if (cs != NULL)
+            t.callsign = cs;
+        t.tp = ConvertCoordFromPositionToPixel(pos.GetPosition());
+        t.pressureAltFt = pos.GetPressureAltitude();
+        t.onScreen = PtInRect(&ra, t.tp) != FALSE;
+        t.shown = plugin->AltFilterPasses(t.pressureAltFt);
+    }
+}
+
+// Whether anything drawn from tp out to reachNm can land on the radar area. Without a
+// scale yet, everything counts as near.
+bool CGalaxyATMSystemRadarScreen::NearScreen(POINT tp, double reachNm)
+{
+    if (m_framePxPerNm <= 0.0)
+        return true;
+    const RECT ra = GetRadarArea();
+    const double margin = reachNm * m_framePxPerNm * 1.5 + 50.0;
+    return tp.x >= ra.left - margin && tp.x <= ra.right + margin
+        && tp.y >= ra.top - margin && tp.y <= ra.bottom + margin;
+}
+
 void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 {
     const TrackSymbolSet& symbols = TrackSymbols();
@@ -58,30 +100,32 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
     if (symbols.empty())
         return;
 
-    CGalaxyATMSystemPlugin* plugin = Plugin();
     RECT ra = GetRadarArea();
+    PenCache pens;
+
+    auto history = symbols.find("HISTORY");
+    auto coasted = symbols.find("COASTED");
+    auto assumedStar = symbols.find("ASSUMED");
 
     int saved = SaveDC(hDC);
-    for (CRadarTarget rt = plugin->RadarTargetSelectFirst(); rt.IsValid();
-         rt = plugin->RadarTargetSelectNext(rt))
+    for (const FrameTarget& t : m_frameTargets)
     {
         m_symbolStats.targets++;
-        CRadarTargetPositionData pos = rt.GetPosition();
-        if (!pos.IsValid())
-            continue;
-        POINT tp = ConvertCoordFromPositionToPixel(pos.GetPosition());
-        if (!PtInRect(&ra, tp))
+        if (!t.onScreen)
         {
             m_symbolStats.offRadar++;
             continue;
         }
-        if (!plugin->AltFilterPasses(pos.GetPressureAltitude()))
+        if (!t.shown)
         {
             m_symbolStats.filtered++;
             continue;
         }
 
-        CFlightPlan fp = rt.GetCorrelatedFlightPlan();
+        CRadarTarget rt = t.rt;
+        const CRadarTargetPositionData& pos = t.pos;
+        CFlightPlan fp = t.fp;
+        const POINT tp = t.tp;
         const char* plan = fp.IsValid() ? fp.GetFlightPlanData().GetPlanType() : NULL;
         const bool vfr = plan != NULL && (plan[0] == 'V' || plan[0] == 'v');
 
@@ -110,10 +154,9 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
             else if (diverging && symbols.count(name + "_DIV"))
                 name += "_DIV";
         }
-        if (pos.GetReceivedTime() > 30 && symbols.count("COASTED"))
-            name = "COASTED";
-
         auto symbol = symbols.find(name);
+        if (pos.GetReceivedTime() > 30 && coasted != symbols.end())
+            symbol = coasted;
         if (symbol == symbols.end())
         {
             m_symbolStats.noSymbol++;
@@ -122,16 +165,15 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
 
         const COLORREF color = GetTagColorForFlightPlan(fp);
 
-        const char* cs = fp.IsValid() ? fp.GetCallsign() : rt.GetCallsign();
         const COLORREF symbolColor = SeparationLost(rt.GetCallsign()) ? Theme::SeparationLoss
-            : HoveredCtrLabel(cs) ? Theme::FormularHoverTarget : color;
-        auto state = (cs != NULL) ? m_formulars.find(cs) : m_formulars.end();
+            : HoveredCtrLabel(t.callsign.c_str()) ? Theme::FormularHoverTarget : color;
+        auto state = !t.callsign.empty() ? m_formulars.find(t.callsign) : m_formulars.end();
         if (state != m_formulars.end() && state->second.zone)
             DrawProtectionZone(hDC, pos.GetPosition(), tp, symbolColor);
 
-        auto history = symbols.find("HISTORY");
         if (history != symbols.end())
         {
+            const HPEN historyPen = pens.Get(color);
             CRadarTargetPositionData earlier = pos;
             for (int i = 0; i < Theme::TrackHistoryDots; i++)
             {
@@ -140,17 +182,17 @@ void CGalaxyATMSystemRadarScreen::DrawTargetSymbols(HDC hDC)
                     break;
                 POINT hp = ConvertCoordFromPositionToPixel(earlier.GetPosition());
                 if (PtInRect(&ra, hp))
-                    DrawTrackSymbol(hDC, history->second, hp, color);
+                    DrawTrackSymbol(hDC, history->second, hp, historyPen, color);
             }
         }
 
-        auto star = (fp.IsValid() && fp.GetState() == FLIGHT_PLAN_STATE_ASSUMED)
-            ? symbols.find("ASSUMED") : symbols.end();
-        const bool assumed = star != symbols.end();
+        const bool assumed = assumedStar != symbols.end()
+            && fp.IsValid() && fp.GetState() == FLIGHT_PLAN_STATE_ASSUMED;
 
-        DrawTrackSymbol(hDC, symbol->second, tp, symbolColor, assumed ? kAssumedHoleRadius : 0.0);
+        const HPEN symbolPen = pens.Get(symbolColor);
+        DrawTrackSymbol(hDC, symbol->second, tp, symbolPen, symbolColor, assumed ? kAssumedHoleRadius : 0.0);
         if (assumed)
-            DrawTrackSymbol(hDC, star->second, tp, symbolColor);
+            DrawTrackSymbol(hDC, assumedStar->second, tp, symbolPen, symbolColor);
         m_symbolStats.drawn++;
     }
     RestoreDC(hDC, saved);
