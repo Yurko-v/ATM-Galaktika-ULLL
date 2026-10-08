@@ -207,7 +207,7 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
         {
             Theme::AntiAliased smoothVectors;
             Timed(PerfSection::Rdf, [&] { DrawRdf(hDC); });
-            Timed(PerfSection::Stca, [&] { DrawStca(hDC); });
+            Timed(PerfSection::Stca, [&] { KfConflicts(); });
             Timed(PerfSection::WakeArcs, [&] { DrawWakeArcs(hDC); });
             if (!m_routeShown.empty())
                 DrawRoutes(hDC);

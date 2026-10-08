@@ -184,7 +184,6 @@ private:
     std::vector<Stca::Area> StcaAreas();
     void RunStca();
     bool StcaShown(const StcaWatch& watch) const;
-    void DrawStca(HDC hDC);
     void InhibitStca(const char* pairKey);
     std::wstring StcaStatusLine();
     void DrawSectorList(HDC hDC, RECT area, int scale, bool floating, const std::vector<SectorListRow>& all);

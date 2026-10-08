@@ -26,26 +26,6 @@ namespace
             v += 360.0;
         return v > 180.0 ? v - 360.0 : v;
     }
-
-    std::wstring Distance(double nm, DistUnit unit)
-    {
-        wchar_t buf[32];
-        if (unit == DistUnit::Km)
-            swprintf_s(buf, L"%.1f %s", nm * 1.852, Tr(L"км"));
-        else
-            swprintf_s(buf, L"%.1f NM", nm);
-        return buf;
-    }
-
-    std::wstring Vertical(double ft, AltUnit unit)
-    {
-        wchar_t buf[32];
-        if (unit == AltUnit::M)
-            swprintf_s(buf, L"%d %s", (int)lround(ft * 0.3048 / 10.0) * 10, Tr(L"м"));
-        else
-            swprintf_s(buf, L"%d ft", (int)lround(ft / 10.0) * 10);
-        return buf;
-    }
 }
 
 std::vector<Stca::Area> CGalaxyATMSystemRadarScreen::StcaAreas()
@@ -304,53 +284,6 @@ void CGalaxyATMSystemRadarScreen::InhibitStca(const char* pairKey)
     Log::Info("stca", "inhibited by the controller: " + it->first);
     m_kfTick = 0;   // recompute the formular and list marks straight away
     RequestRefresh();
-}
-
-void CGalaxyATMSystemRadarScreen::DrawStca(HDC hDC)
-{
-    KfConflicts();
-    if (m_stcaWatch.empty())
-        return;
-
-    HFONT font = GetRulerFont(m_esFont ? m_esFont : m_fonts.Ruler);
-    const DistUnit distUnit = Plugin()->UnitDist();
-    const AltUnit altUnit = Plugin()->UnitAlt();
-
-    int saved = SaveDC(hDC);
-    SetBkMode(hDC, TRANSPARENT);
-
-    for (const auto& entry : m_stcaWatch)
-    {
-        const StcaWatch& watch = entry.second;
-        const Stca::Conflict& c = watch.last;
-        // Only an actual loss of separation is drawn; predicted conflicts are not shown.
-        if (!(watch.raised && c.lossNow && watch.misses == 0))
-            continue;
-
-        CRadarTarget ra = GetPlugIn()->RadarTargetSelect(c.a.c_str());
-        CRadarTarget rb = GetPlugIn()->RadarTargetSelect(c.b.c_str());
-        if (!ra.IsValid() || !rb.IsValid() || !ra.GetPosition().IsValid() || !rb.GetPosition().IsValid())
-            continue;
-        const POINT pa = ConvertCoordFromPositionToPixel(ra.GetPosition().GetPosition());
-        const POINT pb = ConvertCoordFromPositionToPixel(rb.GetPosition().GetPosition());
-
-        const COLORREF color = Theme::SeparationLoss;
-        {
-            // Already inside the minima: tie the two aircraft together.
-            VectorCanvas canvas(hDC, color, Theme::StcaWidth);
-            canvas.Line(pa.x, pa.y, pb.x, pb.y);
-        }
-        const POINT labelAt = { (pa.x + pb.x) / 2, (pa.y + pb.y) / 2 };
-        const std::wstring text = L"SSA  " + Distance(c.nowNm, distUnit) + L"  " + Vertical(c.nowVerticalFt, altUnit);
-
-        const SIZE size = Theme::MeasureText(hDC, font, text);
-        RECT box = { labelAt.x - size.cx / 2 - 5, labelAt.y - size.cy - 10,
-                     labelAt.x + size.cx / 2 + 5, labelAt.y - 8 };
-        Theme::SmoothBox(hDC, box, &Theme::RdfBoxFill, &color, 4, 1);
-        Theme::DrawLine(hDC, box, text, font, color, DT_CENTER | DT_VCENTER);
-    }
-
-    RestoreDC(hDC, saved);
 }
 
 std::wstring CGalaxyATMSystemRadarScreen::StcaStatusLine()
