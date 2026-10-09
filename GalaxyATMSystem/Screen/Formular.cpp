@@ -278,7 +278,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         const char* planType = correlated ? fp.GetFlightPlanData().GetPlanType() : NULL;
         const bool vfr = planType != NULL && (planType[0] == 'V' || planType[0] == 'v');
         if (kind == FormularKind::Twr && vfr)
-            warnings.push_back({ L"V", Theme::FormularVfr, NULL });
+            warnings.push_back({ L"V", Theme::FormularVfr, &kFnFlightRule });
 
         for (FormularRun& run : warnings)
             run.color = RGB(GetRValue(run.color) * Theme::FormularWarningBrightnessPct / 100,
@@ -327,7 +327,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             if (vfr && ctrLabel && !expanded)
                 ident.push_back({ L"V", base, &kFnFlightRule });
             else if (vfr && kind == FormularKind::App && expanded)
-                ident.push_back({ L"V", Theme::FormularVfr, NULL });
+                ident.push_back({ L"V", Theme::FormularVfr, &kFnFlightRule });
         }
         if (ctrLabel && expanded && sq != NULL && *sq != '\0')
         {
@@ -342,7 +342,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         std::vector<FormularRun> levels;
         const bool belowTL = pos.GetFlightLevel() / 100 < tl;
         const int altFt = belowTL ? pos.GetPressureAltitude() : pos.GetFlightLevel();
-        const bool english = ctrLabel && plugin->IsEnglish(callsign);
+        const bool english = plugin->IsEnglish(callsign);
         levels.push_back({ Widen(FormatAltitudeUnit(altFt, altUnit).c_str()),
             base, correlated ? (ctrLabel ? &kFnAfl : &kFnAppAfl) : NULL });
         const int vs = rt.GetVerticalSpeed();
@@ -403,7 +403,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (m_osSpeed && ctrLabel)
             levels.push_back({ Widen(FormatGroundSpeedUnit(rt.GetGS(), plugin->UnitGs()).c_str()),
                 base, correlated ? &kFnGs : NULL });
-        if (english && !expanded)
+        if (english && (!expanded || !ctrLabel))
             levels.push_back({ L"\x221A", base, NULL });
         if (ctrLabel && correlated)
         {
@@ -820,12 +820,12 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
         if (!freeText.empty())
             lines.push_back(freeText);
 
-        // A middle click on the expanded CTR label opens the downlinked data under a row
+        // A middle click on the expanded label opens the downlinked data under a row
         // of page tabs; another middle click, or a click on mode-s, puts it away. Only
         // the Mode-S page exists so far; the other tabs are shown greyed.
         size_t tabLine = lines.size();
         bool modeSOpen = false;
-        if (expanded && correlated && ctrLabel)
+        if (expanded && correlated)
         {
             auto known = m_formulars.find(callsign);
             modeSOpen = known != m_formulars.end() && known->second.modeS;
@@ -940,7 +940,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             {
                 const FormularRun& run = lines[l][r];
                 RECT bg = { x - 1, y, x + runWidths[l][r] + 1, y + lineH };
-                const bool hot = registerObjects && run.fn != NULL && (ctrLabel || run.fn == &kFnCoordReply || IsMyCoordFn(run.fn)) && Hot(bg);
+                const bool hot = registerObjects && run.fn != NULL && Hot(bg);
                 const COLORREF back = hot ? Theme::HoverFill : run.back;
                 if (back != CLR_INVALID)
                 {
@@ -1140,7 +1140,7 @@ CGalaxyATMSystemRadarScreen::FormularKind CGalaxyATMSystemRadarScreen::CurrentFo
 
 bool CGalaxyATMSystemRadarScreen::OnSideButton()
 {
-    if (!Authorized() || CurrentFormularKind() != FormularKind::Ctr)
+    if (!Authorized())
         return false;
     POINT cursor;
     if (!CursorRadarPoint(cursor))
@@ -1166,7 +1166,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
 
     if (button == BUTTON_MIDDLE)
     {
-        if (m_formularHover == sCallsign && CurrentFormularKind() == FormularKind::Ctr)
+        if (m_formularHover == sCallsign)
         {
             it->second.modeS = !it->second.modeS;
             RequestRefresh();
@@ -1174,7 +1174,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
-    const bool freeTextRequested = button == kSideButton && CurrentFormularKind() == FormularKind::Ctr
+    const bool freeTextRequested = button == kSideButton
         && std::any_of(it->second.items.begin(), it->second.items.end(), [&pt](const FormularItem& item)
             { return item.fn == &kFnCallsign && PtInRect(&item.rect, pt); });
     if (button == kSideButton && !freeTextRequested)
@@ -1242,7 +1242,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
     if (hit != NULL && hit->fn == &kFnCallsign && !(fp.IsValid() && fp.GetCorrelatedRadarTarget().IsValid()))
         return;
 
-    if (hit != NULL && fp.IsValid() && hit->fn == &kFnCfl && button == BUTTON_LEFT)
+    if (hit != NULL && fp.IsValid() && IsCflFn(hit->fn) && button == BUTTON_LEFT)
     {
         if (!pickerWasOpen)
             OpenCflPicker(sCallsign);
@@ -1323,8 +1323,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
-    if (hit != NULL && fp.IsValid() && hit->fn == &kFnAsp && button == BUTTON_LEFT
-        && CurrentFormularKind() == FormularKind::Ctr)
+    if (hit != NULL && fp.IsValid() && hit->fn == &kFnAsp && button == BUTTON_LEFT)
     {
         if (!speedWasOpen)
             OpenSpeedWindow(sCallsign);
@@ -1332,8 +1331,8 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
-    if (hit != NULL && fp.IsValid() && hit->fn == &kFnSector
-        && button == BUTTON_LEFT && CurrentFormularKind() == FormularKind::Ctr)
+    if (hit != NULL && fp.IsValid() && (hit->fn == &kFnSector || hit->fn == &kFnTwrSector)
+        && button == BUTTON_LEFT)
     {
         if (!transferWasOpen)
             OpenTransferWindow(sCallsign);
@@ -1351,7 +1350,7 @@ void CGalaxyATMSystemRadarScreen::FormularClick(const char* sCallsign, POINT pt,
         return;
     }
 
-    if (hit != NULL && hit->fn == &kFnAfl && button == BUTTON_RIGHT)
+    if (hit != NULL && (hit->fn == &kFnAfl || hit->fn == &kFnAppAfl) && button == BUTTON_RIGHT)
     {
         Plugin()->ToggleEnglish(GetPlugIn()->FlightPlanSelect(sCallsign));
         RequestRefresh();
