@@ -54,11 +54,11 @@ static void LogConfigLoad(const Config& config, const char* when)
 CGalaxyATMSystemPlugin::CGalaxyATMSystemPlugin() : CPlugIn(
     EuroScopePlugIn::COMPATIBILITY_CODE,
     "Galaxy ATM System",
-    "0.10.0",
+    Version(),
     "ULLL Team",
     "©2024-2026")
 {
-    Log::Info("plugin", "Galaxy ATM System 0.10.0 loaded");
+    Log::Info("plugin", std::string("Galaxy ATM System ") + Version() + " loaded");
     m_config.Load(g_hModule);
     LogConfigLoad(m_config, "load");
 
@@ -93,6 +93,22 @@ void CGalaxyATMSystemPlugin::StartAllFetches()
     StartNotamFetch();
 }
 
+void CGalaxyATMSystemPlugin::RefreshFeed(Feed feed)
+{
+    if (!Unlocked())
+        return;
+    Log::Info("feeds", "refresh asked from the menu");
+    switch (feed)
+    {
+    case Feed::Metar:  StartMetarFetch();  break;
+    case Feed::Sigmet: StartSigmetFetch(); break;
+    case Feed::Atis:   StartAtisFetch();   break;
+    case Feed::Aup:    StartAupFetch();    break;
+    case Feed::Notam:  StartNotamFetch();  break;
+    default:           StartAllFetches();  break;
+    }
+}
+
 CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
 {
     m_squawk.Stop();
@@ -105,6 +121,7 @@ CGalaxyATMSystemPlugin::~CGalaxyATMSystemPlugin()
     m_login.Wait();
     m_aupFetch.Wait();
     m_notamFetch.Wait();
+    m_sweatboxFetch.Wait();
 
     Theme::ReleaseEuroScopeFace();
 }

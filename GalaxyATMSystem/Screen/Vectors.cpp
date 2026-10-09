@@ -247,7 +247,11 @@ void CGalaxyATMSystemRadarScreen::PollRouteClearKey()
     const bool down = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
     const bool entryOpen = AnyEntryOpen();
     const bool pressed = down && !m_routeClearKeyDown && !entryOpen && !m_entryOpenBeforeKey;
-    if (pressed && m_mapMenuOpen)
+    if (pressed && m_barMenu >= 0)
+    {
+        CloseBarMenu();
+    }
+    else if (pressed && m_mapMenuOpen)
     {
         CloseMapMenu();
     }

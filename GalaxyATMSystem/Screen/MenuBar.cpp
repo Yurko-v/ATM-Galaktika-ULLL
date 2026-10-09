@@ -5,11 +5,6 @@ using namespace Galaxy;
 
 namespace
 {
-    const wchar_t* const kMenuItems[] = {
-        L"Настройки", L"Вид", L"Карта", L"Аэродром", L"Списки",
-        L"Метео", L"Почта", L"Загрузка", L"Статистика", L"Архив", L"Справка",
-    };
-    const int kMenuItemCount = (int)_countof(kMenuItems);
 
     std::wstring KeyboardLanguage()
     {
@@ -64,10 +59,12 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
         contentRight = r.left - 2 * kGap;
     }
 
+    for (RECT& anchor : m_barAnchors)
+        anchor = { 0, 0, 0, 0 };
     int x = bar.left + kPadX;
-    for (int i = 0; i < kMenuItemCount; i++)
+    for (int i = 0; i < kBarMenuCount; i++)
     {
-        const wchar_t* text = Tr(kMenuItems[i]);
+        const wchar_t* text = Tr(kMenuBarItems[i]);
         HFONT font = m_fonts.Menu;
         SIZE sz = Theme::MeasureText(hDC, font, text);
 
@@ -75,6 +72,15 @@ void CGalaxyATMSystemRadarScreen::DrawMenuBar(HDC hDC)
             break;
 
         RECT r = { x, bar.top, x + sz.cx, bar.bottom };
+        // Each name opens its drop-down menu, once logged in.
+        const RECT cell = { x - kGap / 2, bar.top + 2, x + sz.cx + kGap / 2, bar.bottom - 2 };
+        m_barAnchors[i] = cell;
+        if (Authorized())
+        {
+            if (Hot(cell) || m_barMenu == i)
+                Theme::SmoothBox(hDC, cell, &Theme::MenuHover, NULL, 3);
+            AddScreenObject(SO_MENU_BAR_ITEM, std::to_string(i).c_str(), cell, false, "");
+        }
         Theme::DrawLine(hDC, r, text, font, Theme::MenuText, DT_LEFT | DT_VCENTER);
 
         x += sz.cx + kGap;

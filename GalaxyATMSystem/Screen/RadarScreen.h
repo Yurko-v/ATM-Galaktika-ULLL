@@ -637,9 +637,48 @@ private:
         bool enabled;
         bool separatorAfter;
         MenuCheck check = MenuCheck::None;
+        bool submenu = false;       // drawn with an arrow; opens a menu beside it
+        bool selected = false;      // highlighted as if hovered, while its submenu is open
     };
     RECT DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title, const std::vector<PanelMenuRow>& rows,
-        int windowType, int itemType, const wchar_t* subtitle = NULL);
+        int windowType, int itemType, const wchar_t* subtitle = NULL, std::vector<RECT>* rowRects = NULL,
+        int flipRight = INT_MIN);   // where the right edge goes when the menu does not fit right of `at`
+
+    // The drop-down menus of the menu bar (Настройки, Вид, Карта ...). Rows are built
+    // afresh for drawing and for a click, so both always see the same list.
+    enum class BarAction { None, Command, VecTime, VecDist, VecPlan, VecLevel, VecTimeMin, VecDistKm,
+                           FontSize, OsLines, OsSpeed, AltUnit, VsUnit, GsUnit, DistUnit, AltFilter,
+                           Measure, ClearRoutes, ClearSketches, ClearTexts, ResetRcFilters, RcSort, RcSortAsc,
+                           AtisText, AtisAirport, FetchAll, FetchMetar, FetchSigmet, FetchAtis, FetchAup, FetchNotam,
+                           ShowCommands, ShowAbout, OpenLog, OpenFolder };
+    struct BarMenuRow
+    {
+        std::wstring label;
+        bool enabled = true;
+        bool separatorAfter = false;
+        MenuCheck check = MenuCheck::None;
+        BarAction action = BarAction::None;
+        const char* command = NULL;
+        int value = 0;
+        std::string text;
+        int sub = -1;                           // opens submenu `sub` of this menu
+    };
+    static const int kBarMenuCount = 11;
+    int  m_barMenu = -1;                        // the open menu, -1 when none
+    int  m_barSub = -1;                         // the row whose submenu is open, -1 when none
+    bool m_barMenuButtonsDown = true;
+    RECT m_barAnchors[kBarMenuCount] = {};      // the menu names in the menu bar
+    RECT m_barMenuArea = { 0, 0, 0, 0 };
+    RECT m_barSubArea = { 0, 0, 0, 0 };
+    std::vector<RECT> m_barRowRects;            // rows of the open menu as last drawn
+    std::vector<int>  m_barRowSubs;             // and the submenu each opens, -1 for none
+    void OpenBarMenu(int menu);
+    void CloseBarMenu();
+    void OpenBarSub(int row);
+    std::vector<BarMenuRow> BarMenuRows(int menu, int sub = -1);
+    void RunBarMenuItem(int row, bool inSub);
+    void DrawBarMenu(HDC hDC);
+    void TickBarMenu();
     void OpenMapMenu(POINT at, HWND view);
     void CloseMapMenu();
     bool MapMenuItemEnabled(MapMenuItem item);
@@ -1081,6 +1120,16 @@ const int SO_SIGMET_AREA   = 70;
 const int SO_ZONE_AREA     = 71;
 
 const int SO_STCA_LABEL    = 179;
+const int SO_MENU_BAR_ITEM  = 180;
+const int SO_BAR_MENU       = 181;
+const int SO_BAR_MENU_ITEM  = 182;
+const int SO_BAR_SUB_MENU   = 183;
+const int SO_BAR_SUB_ITEM   = 184;
+
+inline const wchar_t* const kMenuBarItems[] = {
+    L"Настройки", L"Вид", L"Карта", L"Аэродром", L"Списки",
+    L"Метео", L"Почта", L"Загрузка", L"Статистика", L"Архив", L"Справка",
+};
 
 
 const int FN_ALTFILTER_FROM = 300;

@@ -107,7 +107,8 @@ bool CGalaxyATMSystemRadarScreen::RightClickOnEmptyRadar(POINT pt)
 {
     if (m_rulerArmed || m_rulerPlacing || m_mapTool != MapTool::None)
         return false;
-    if ((m_visible && PtInRect(&m_panelArea, pt)) || PtInRect(&m_menuBarArea, pt))
+    if ((m_visible && PtInRect(&m_panelArea, pt)) || PtInRect(&m_menuBarArea, pt)
+        || (m_barMenu >= 0 && (PtInRect(&m_barMenuArea, pt) || PtInRect(&m_barSubArea, pt))))
         return false;
     for (const auto& entry : m_formulars)
         if (!entry.second.items.empty() && PtInRect(&entry.second.area, pt))
@@ -131,6 +132,7 @@ void CGalaxyATMSystemRadarScreen::TickMapTools()
 
     TickCoordDecisionMenu();
     TickCallsignMenu();
+    TickBarMenu();
 
     if (m_mapMenuOpen)
     {
@@ -459,7 +461,8 @@ void CGalaxyATMSystemRadarScreen::DrawMapSketches(HDC hDC)
 }
 
 RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t* title,
-    const std::vector<PanelMenuRow>& rows, int windowType, int itemType, const wchar_t* subtitle)
+    const std::vector<PanelMenuRow>& rows, int windowType, int itemType, const wchar_t* subtitle,
+    std::vector<RECT>* rowRects, int flipRight)
 {
     const HFONT font = m_fonts.Body;
     const HFONT titleFont = m_fonts.Ruler;
@@ -481,14 +484,16 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t
     const int detailW = detail.empty() ? 0 : (int)Theme::MeasureText(hDC, subFont, detail).cx;
 
     int textW = 0;
-    bool anyCheck = false;
+    bool anyCheck = false, anySubmenu = false;
     for (const PanelMenuRow& row : rows)
     {
         textW = max(textW, (int)Theme::MeasureText(hDC, font, Tr(row.label)).cx);
         anyCheck = anyCheck || row.check != MenuCheck::None;
+        anySubmenu = anySubmenu || row.submenu;
     }
     const int checkW = anyCheck ? kCheckSize + checkGap : 0;
-    int wellW = max(textW + 2 * textPad + checkW + 2 * inset, 148);
+    const int arrowW = anySubmenu ? 16 : 0;
+    int wellW = max(textW + 2 * textPad + checkW + arrowW + 2 * inset, 148);
     if (title != NULL)
         wellW = max(wellW, headingW + detailW + 2 * textPad);
     int wellH = 2 * inset;
@@ -500,7 +505,7 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t
     const RECT ra = GetRadarArea();
     int left = at.x, top = at.y;
     if (left + width + shadow > ra.right)
-        left = max((int)ra.left, (int)at.x - width);
+        left = max((int)ra.left, (flipRight != INT_MIN ? flipRight : (int)at.x) - width);
     if (top + height + shadow > ra.bottom)
         top = max((int)ra.top, (int)ra.bottom - height - shadow);
     const RECT win = { left, top, left + width, top + height };
@@ -543,12 +548,16 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t
     Theme::OutlineBox(hDC, well, Theme::MenuWell, Theme::MenuWellEdge);
     AddScreenObject(windowType, "MENU", win, false, "");
 
+    if (rowRects != NULL)
+        rowRects->clear();
     int y = well.top + inset;
     for (size_t i = 0; i < rows.size(); i++)
     {
         const PanelMenuRow& item = rows[i];
         const RECT row = { well.left + inset, y, well.right - inset, y + rowH };
-        const bool hot = item.enabled && Hot(row);
+        if (rowRects != NULL)
+            rowRects->push_back(row);
+        const bool hot = item.enabled && (Hot(row) || item.selected);
         if (hot)
         {
             Theme::SmoothBox(hDC, row, &Theme::MenuHover, NULL, 3);
@@ -562,6 +571,17 @@ RECT CGalaxyATMSystemRadarScreen::DrawPanelMenu(HDC hDC, POINT at, const wchar_t
         const int textLeft = row.left + textPad + (item.check != MenuCheck::None ? checkW : 0);
         const RECT text = { textLeft, row.top, row.right - textPad, row.bottom };
         Theme::DrawLine(hDC, text, Tr(item.label), font, ink, DT_LEFT | DT_VCENTER | DT_NOPREFIX);
+        if (item.submenu)
+        {
+            // A small chevron pointing at where the submenu opens.
+            const float cx = (float)row.right - textPad, cy = (row.top + row.bottom) / 2.0f;
+            Gdiplus::Graphics g(hDC);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            Gdiplus::Pen pen(Theme::GdiColor(ink), 1.5f);
+            const Gdiplus::PointF chevron[3] = {
+                Gdiplus::PointF(cx - 3.0f, cy - 4.0f), Gdiplus::PointF(cx + 1.0f, cy), Gdiplus::PointF(cx - 3.0f, cy + 4.0f) };
+            g.DrawLines(&pen, chevron, 3);
+        }
         if (item.check != MenuCheck::None)
         {
             const int cy = (row.top + row.bottom - kCheckSize) / 2;

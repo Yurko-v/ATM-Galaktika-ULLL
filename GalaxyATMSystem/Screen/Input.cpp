@@ -192,6 +192,24 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
     case SO_COORD_MENU_ITEM:
         DecideCoordination(atoi(sObjectId) == 1);
         return;
+    case SO_MENU_BAR_ITEM:
+        if (Button == BUTTON_LEFT)
+        {
+            const int menu = atoi(sObjectId);
+            if (menu == m_barMenu)
+                CloseBarMenu();
+            else
+                OpenBarMenu(menu);
+        }
+        return;
+    case SO_BAR_MENU:
+    case SO_BAR_SUB_MENU:
+        return;
+    case SO_BAR_MENU_ITEM:
+    case SO_BAR_SUB_ITEM:
+        if (Button == BUTTON_LEFT)
+            RunBarMenuItem(atoi(sObjectId), ObjectType == SO_BAR_SUB_ITEM);
+        return;
     case SO_FT_WINDOW:
         return;
     case SO_COORD_WINDOW:
@@ -658,8 +676,7 @@ void CGalaxyATMSystemRadarScreen::OnClickScreenObject(int ObjectType, const char
         break;
     case SO_ATIS_LETTER_ROW:
     {
-        const std::vector<std::string> onAir = Plugin()->AtisAirportsOnAir();
-        const std::string icao = (!onAir.empty() && onAir.front() == sObjectId) ? std::string() : std::string(sObjectId);
+        const std::string icao = Plugin()->AirportIcao() == sObjectId ? std::string() : std::string(sObjectId);
         m_atisOpen = !m_atisOpen || m_atisIcao != icao;
         m_atisIcao = icao;
         m_atisScrollPx = 0;

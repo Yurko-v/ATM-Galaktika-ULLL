@@ -196,6 +196,7 @@
     <ClCompile Include="Screen\Targets.cpp" />
     <ClCompile Include="Screen\TransferWindow.cpp" />
     <ClCompile Include="Screen\CallsignMenu.cpp" />
+    <ClCompile Include="Screen\BarMenus.cpp" />
     <ClCompile Include="Screen\InfoLine.cpp" />
     <ClCompile Include="Screen\MapTools.cpp" />
     <ClCompile Include="Screen\Vectors.cpp" />

@@ -110,11 +110,20 @@ public:
 
     void ReloadConfig();
 
+    // Starts a download now instead of at its next period (the menu bar's Метео and Загрузка).
+    enum class Feed { All, Metar, Sigmet, Atis, Aup, Notam };
+    void RefreshFeed(Feed feed);
+
+    static const char* Version() { return "0.10.0"; }
+
     std::shared_ptr<const std::vector<Sigmet>> Sigmets() const;
 
     std::wstring AtisIndex(const std::string& icao = "") const;
     std::wstring AtisMessage(const std::string& icao = "") const;
     std::vector<std::string> AtisAirportsOnAir() const;
+    std::string AirportIcao() const;
+    // EuroScope delivers the home METAR itself, so the plugin does not download it.
+    bool MetarFromEuroScope() const { return m_gotLiveMetar; }
 
     std::wstring MyUserName() const;
 
@@ -183,7 +192,6 @@ public:
 private:
     void StartMetarFetch();
     void ApplyQnhHpa(int hpa);
-    std::string AirportIcao() const;
 
     void StartSigmetFetch();
 

@@ -285,6 +285,9 @@
     <ClCompile Include="Screen\CallsignMenu.cpp">
       <Filter>Screen</Filter>
     </ClCompile>
+    <ClCompile Include="Screen\BarMenus.cpp">
+      <Filter>Screen</Filter>
+    </ClCompile>
     <ClCompile Include="Screen\InfoLine.cpp">
       <Filter>Screen</Filter>
     </ClCompile>
