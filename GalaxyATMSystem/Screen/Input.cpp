@@ -981,9 +981,11 @@ void CGalaxyATMSystemRadarScreen::OnMoveScreenObject(int ObjectType, const char*
 
     if (ObjectType == SO_FORMULAR)
     {
+        m_formularDragging = !Released;
         if (Released)
         {
             m_dragOffset = { 0, 0 };
+            RequestRefresh();
             return;
         }
 

@@ -107,6 +107,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     const char* myCallsign = plugin->ControllerMyself().GetCallsign();
     const std::string myPositionId = ShownPositionId(myCallsign, PositionIdOf(plugin, myCallsign));
     const std::string homeAirport = plugin->AirportIcao();
+    const bool dragging = FormularDragging();
 
     // How many targets squawk each four digit code, indexed by the code read as decimal.
     auto codeIndex = [](const char* c)
@@ -945,8 +946,8 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
             {
                 const FormularRun& run = lines[l][r];
                 RECT bg = { x - 1, y, x + runWidths[l][r] + 1, y + lineH };
-                const bool hot = registerObjects && run.fn != NULL && Hot(bg);
-                const COLORREF back = hot ? Theme::HoverFill : run.back;
+                const bool hot = registerObjects && run.fn != NULL && !dragging && Hot(bg);
+                const COLORREF back = hot ? Theme::HoverFill : dragging ? CLR_INVALID : run.back;
                 if (back != CLR_INVALID)
                 {
                     flushGroup();
@@ -1118,7 +1119,7 @@ std::string CGalaxyATMSystemRadarScreen::ShownPositionId(const char* callsign, c
 bool CGalaxyATMSystemRadarScreen::HoveredCtrLabel(const char* callsign)
 {
     return m_formularsVisible && callsign != NULL && !m_formularHover.empty()
-        && m_formularHover == callsign && CurrentFormularKind() == FormularKind::Ctr;
+        && m_formularHover == callsign && CurrentFormularKind() == FormularKind::Ctr && !FormularDragging();
 }
 
 CGalaxyATMSystemRadarScreen::FormularKind CGalaxyATMSystemRadarScreen::CurrentFormularKind()

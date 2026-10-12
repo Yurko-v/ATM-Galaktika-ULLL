@@ -811,6 +811,13 @@ private:
     void TickEntry();
     void CommitEntry();
     POINT m_dragOffset;
+    // A label being moved shows no hover highlight. The button check covers a release
+    // EuroScope did not report.
+    bool m_formularDragging = false;
+    bool FormularDragging() const
+    {
+        return m_formularDragging && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    }
     UINT_PTR m_timerId;
     UINT_PTR m_pollTimerId;
 
