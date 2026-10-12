@@ -158,7 +158,8 @@ namespace Theme
     const double   VectorHeadLength  = 7.0;
 
     const float    WakeArcWidth     = 2.0f;
-    const double   WakeArcRadiusPx    = 25.0;
+    const double   WakeArcRadiusPx    = 25.0;   // floor when zoomed out
+    const double   WakeArcRadiusNm    = 1.0;    // ground size once that is bigger than the floor
     const float    RouteWidth         = 1.5f;
     const COLORREF RouteColor         = RGB(0xF0, 0xD7, 0x5A);
     const double   WakeArcStepPx      = 9.0;

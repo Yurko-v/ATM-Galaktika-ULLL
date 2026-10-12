@@ -28,61 +28,45 @@ namespace
     }
 }
 
-std::vector<Stca::Area> CGalaxyATMSystemRadarScreen::StcaAreas()
+// The minima zones: every .ese sector whose first owner has a rule in the config.
+// Built once per config load; the sector file is read only once anyway.
+const std::vector<Stca::Zone>& CGalaxyATMSystemRadarScreen::StcaZones()
 {
-    std::vector<Stca::Area> out;
-    for (const StcaAreaConfig& cfg : Plugin()->GetConfig().StcaAreas())
+    const Config& config = Plugin()->GetConfig();
+    if (m_stcaZonesGeneration == config.Generation())
+        return m_stcaZones;
+    m_stcaZonesGeneration = config.Generation();
+    m_stcaZones.clear();
+
+    std::map<std::string, int> perPosition;
+    for (const AirspaceSector& sector : AirspaceSectors())
     {
-        CPosition centre;
-        bool found = false;
-        if (cfg.hasPoint)
-        {
-            centre = cfg.point;
-            found = true;
-        }
-        else
-        {
-            auto cached = m_stcaAreaCentres.find(cfg.id);
-            if (cached != m_stcaAreaCentres.end())
-            {
-                centre = cached->second;
-                found = true;
-            }
-            else
-            {
-                const std::string icao = Narrow(cfg.id);
-                for (CSectorElement airport = GetPlugIn()->SectorFileElementSelectFirst(SECTOR_ELEMENT_AIRPORT);
-                     airport.IsValid();
-                     airport = GetPlugIn()->SectorFileElementSelectNext(airport, SECTOR_ELEMENT_AIRPORT))
-                {
-                    const char* name = airport.GetName();
-                    if (name != NULL && _stricmp(name, icao.c_str()) == 0 && airport.GetPosition(&centre, 0))
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                // Not cached when missing: the sector file may not be loaded yet.
-                if (found)
-                    m_stcaAreaCentres[cfg.id] = centre;
-                else if (m_stcaWarnedAreas.insert(cfg.id).second)
-                    Log::Warn("stca", "aerodrome area " + icao + " has no Point and no airport of that name"
-                        " in the sector file - the en-route minimum applies there");
-            }
-        }
-        if (!found)
+        if (sector.owners.empty())
+            continue;
+        const std::string callsign = EsePositionCallsign(sector.owners[0]);
+        const StcaZoneRule* rule = callsign.empty() ? NULL : config.StcaZoneRuleFor(Widen(callsign.c_str()));
+        if (rule == NULL)
             continue;
 
-        Stca::Area area;
-        area.name = Narrow(cfg.id);
-        area.lat = centre.m_Latitude;
-        area.lon = centre.m_Longitude;
-        area.radiusNm = cfg.radiusNm;
-        area.ceilingFt = cfg.ceilingFt;
-        area.lateralNm = cfg.lateralNm;
-        out.push_back(area);
+        Stca::Zone zone;
+        zone.name = callsign;
+        zone.floorFt = sector.bottomFt;
+        zone.ceilingFt = sector.topFt;
+        zone.lateralNm = rule->lateralNm;
+        zone.behindHeavyNm = rule->behindHeavyNm;
+        zone.behindSuperNm = rule->behindSuperNm;
+        for (const CPosition& p : sector.ring)
+            zone.ring.push_back({ p.m_Latitude, p.m_Longitude });
+        Stca::Bound(zone);
+        m_stcaZones.push_back(zone);
+        perPosition[callsign]++;
     }
-    return out;
+
+    std::string summary;
+    for (const auto& entry : perPosition)
+        summary += (summary.empty() ? "" : ", ") + entry.first + " " + std::to_string(entry.second);
+    Log::Info("stca", "minima zones from the .ese: " + (summary.empty() ? std::string("none - the en-route minimum applies everywhere") : summary));
+    return m_stcaZones;
 }
 
 void CGalaxyATMSystemRadarScreen::RunStca()
@@ -100,7 +84,7 @@ void CGalaxyATMSystemRadarScreen::RunStca()
     QueryPerformanceCounter(&from);
 
     Stca::Settings settings = config.StcaSettings();
-    settings.areas = StcaAreas();
+    settings.zones = StcaZones();
     const int transitionFt = Plugin()->TransitionLevelFL() * 100;
 
     std::vector<Stca::TrackState> states;
@@ -148,6 +132,7 @@ void CGalaxyATMSystemRadarScreen::RunStca()
         CFlightPlan fp = rt.GetCorrelatedFlightPlan();
         if (fp.IsValid())
         {
+            in.wtc = fp.GetFlightPlanData().GetAircraftWtc();
             // EuroScope falls back to the final level when no CFL is set, which is a
             // fair limit too: nobody climbs past their requested level. 1 and 2 mean
             // cleared for an ILS or a visual approach, with no level to stop at.
@@ -310,9 +295,9 @@ std::wstring CGalaxyATMSystemRadarScreen::StcaStatusLine()
     const Stca::Settings& s = config.StcaSettings();
     wchar_t line[512];
     swprintf_s(line, Tr(L"%s, целей %d, расчёт %.1f мс; КФ %d, SSA %d, подавлено %d; "
-        L"трасса %.1f км, %d ft, прогноз %d с, зон аэродрома %d; склонение сектора %+.1f°"),
+        L"трасса %.1f км, %d ft, прогноз %d с, зон с нормами %d; склонение сектора %+.1f°"),
         m_stcaOn ? Tr(L"включён") : Tr(L"выключен"), m_stcaTracks, m_stcaLastMs, predicted, lost, inhibited,
-        s.lateralNm * 1.852, (int)s.verticalFt, s.lookaheadSec, (int)StcaAreas().size(), m_stcaVariation);
+        s.lateralNm * 1.852, (int)s.verticalFt, s.lookaheadSec, (int)StcaZones().size(), m_stcaVariation);
     std::wstring out = line;
     if (m_stcaOffsetSamples > 0)
     {

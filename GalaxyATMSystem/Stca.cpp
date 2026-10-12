@@ -40,6 +40,7 @@ namespace Stca
         {
             double x = 0.0, y = 0.0;    // NM east and north of the position the state starts from
             double alt = 0.0;
+            double hdg = 0.0;           // true track at this second
         };
 
         // The path one aircraft is expected to fly, one sample a second from now.
@@ -56,13 +57,16 @@ namespace Stca
                 return 0.0;
             const double rate = fabs(t.turnDegSec);
 
-            // Turning onto an assigned heading: the turn ends there, however far it is.
+            // Turning onto an assigned heading: the turn ends there. More than half a
+            // circle to go means it is turning away from it - wind drift or noise on a
+            // track already near the heading - and is not followed round the circle.
             if (t.assignedHeadingDeg >= 0.0)
             {
                 const double togo = t.turnDegSec > 0.0
                     ? Wrap360(t.assignedHeadingDeg - t.trackDeg)
                     : Wrap360(t.trackDeg - t.assignedHeadingDeg);
-                return togo / rate;
+                if (togo <= 180.0)
+                    return togo / rate;
             }
 
             // Otherwise nobody knows where it stops; follow it for a while, then straight.
@@ -92,6 +96,7 @@ namespace Stca
             path.at.reserve(s.lookaheadSec + 1);
             for (int step = 0; step <= steps; step++)
             {
+                now.hdg = heading;
                 if (step >= lead)
                     path.at.push_back(now);
 
@@ -131,24 +136,73 @@ namespace Stca
             lon = t.lon + p.x / (60.0 * cos(t.lat * kRad));
         }
 
-        // The lateral minimum for two points: the aerodrome one only when both are
-        // inside the same aerodrome area, otherwise the en-route one.
-        double LateralMinimum(double latA, double lonA, double altA, double latB, double lonB, double altB,
-            const Settings& s)
+        bool InsideRing(const std::vector<LatLon>& ring, double lat, double lon)
         {
-            double minimum = s.lateralNm;
-            bool found = false;
-            for (const Area& area : s.areas)
+            bool inside = false;
+            for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
             {
-                if (altA > area.ceilingFt || altB > area.ceilingFt)
-                    continue;
-                if (DistanceNm(area.lat, area.lon, latA, lonA) > area.radiusNm
-                    || DistanceNm(area.lat, area.lon, latB, lonB) > area.radiusNm)
-                    continue;
-                // Overlapping areas: keep the larger minimum of the ones that apply.
-                minimum = found ? (std::max)(minimum, area.lateralNm) : area.lateralNm;
-                found = true;
+                const LatLon& a = ring[i];
+                const LatLon& b = ring[j];
+                if ((a.lat > lat) != (b.lat > lat)
+                    && lon < (b.lon - a.lon) * (lat - a.lat) / (b.lat - a.lat) + a.lon)
+                    inside = !inside;
             }
+            return inside;
+        }
+
+        // The smallest zone around a point, or NULL outside them all.
+        const Zone* ZoneAt(double lat, double lon, double alt, const Settings& s)
+        {
+            const Zone* best = NULL;
+            for (const Zone& zone : s.zones)
+            {
+                if (alt < zone.floorFt || alt >= zone.ceilingFt
+                    || lat < zone.minLat || lat > zone.maxLat || lon < zone.minLon || lon > zone.maxLon)
+                    continue;
+                if ((best == NULL || zone.area < best->area) && InsideRing(zone.ring, lat, lon))
+                    best = &zone;
+            }
+            return best;
+        }
+
+        // Whether the follower flies in the leader's wake: in the half behind it, not
+        // above it, and not heading the other way.
+        bool Behind(const Sample& leader, double dx, double dy, const Sample& follower, const Settings& s)
+        {
+            if (follower.alt > leader.alt + s.verticalToleranceFt)
+                return false;
+            if (fabs(Wrap180(follower.hdg - leader.hdg)) > 90.0)
+                return false;
+            const double h = leader.hdg * kRad;
+            return dx * sin(h) + dy * cos(h) < 0.0;
+        }
+
+        double WakeMinimum(const Zone* zone, char leaderWtc)
+        {
+            if (zone == NULL)
+                return 0.0;
+            if (leaderWtc == 'J')
+                return zone->behindSuperNm;
+            if (leaderWtc == 'H')
+                return zone->behindHeavyNm;
+            return 0.0;
+        }
+
+        // The lateral minimum for two aircraft: the larger of the minima of the zones
+        // they are in, the en-route one outside the zones, and a wake minimum when one
+        // follows a heavy or a super. dx, dy is where b is from a, in NM.
+        double LateralMinimum(const TrackState& ta, const Sample& sa, double latA, double lonA,
+            const TrackState& tb, const Sample& sb, double latB, double lonB,
+            double dx, double dy, const Settings& s)
+        {
+            const Zone* za = ZoneAt(latA, lonA, sa.alt, s);
+            const Zone* zb = ZoneAt(latB, lonB, sb.alt, s);
+            double minimum = (std::max)(za != NULL ? za->lateralNm : s.lateralNm,
+                zb != NULL ? zb->lateralNm : s.lateralNm);
+            if (Behind(sa, dx, dy, sb, s))
+                minimum = (std::max)(minimum, (std::max)(WakeMinimum(za, ta.wtc), WakeMinimum(zb, ta.wtc)));
+            if (Behind(sb, -dx, -dy, sa, s))
+                minimum = (std::max)(minimum, (std::max)(WakeMinimum(za, tb.wtc), WakeMinimum(zb, tb.wtc)));
             return minimum;
         }
 
@@ -175,6 +229,24 @@ namespace Stca
         }
     }
 
+    void Bound(Zone& zone)
+    {
+        zone.minLat = zone.minLon = 1e9;
+        zone.maxLat = zone.maxLon = -1e9;
+        double twice = 0.0;
+        for (size_t i = 0, j = zone.ring.size() - 1; i < zone.ring.size(); j = i++)
+        {
+            const LatLon& a = zone.ring[i];
+            const LatLon& b = zone.ring[j];
+            zone.minLat = (std::min)(zone.minLat, a.lat);
+            zone.maxLat = (std::max)(zone.maxLat, a.lat);
+            zone.minLon = (std::min)(zone.minLon, a.lon);
+            zone.maxLon = (std::max)(zone.maxLon, a.lon);
+            twice += (b.lon - a.lon) * cos((a.lat + b.lat) / 2.0 * kRad) * (a.lat + b.lat);
+        }
+        zone.area = fabs(twice) / 2.0;
+    }
+
     double TrueBearing(double lat1, double lon1, double lat2, double lon2)
     {
         const double p1 = lat1 * kRad, p2 = lat2 * kRad;
@@ -198,6 +270,7 @@ namespace Stca
         out.callsign = input.callsign;
         out.cflFt = input.cflFt;
         out.assignedHeadingDeg = input.assignedHeadingDeg;
+        out.wtc = input.wtc;
         if (input.history.empty() || !input.modeC)
             return out;
 
@@ -281,8 +354,8 @@ namespace Stca
         }
 
         double widestLateral = s.lateralNm;
-        for (const Area& area : s.areas)
-            widestLateral = (std::max)(widestLateral, area.lateralNm);
+        for (const Zone& zone : s.zones)
+            widestLateral = (std::max)({ widestLateral, zone.lateralNm, zone.behindHeavyNm, zone.behindSuperNm });
         const double widestVertical = (std::max)(s.verticalFt, s.verticalHighFt);
 
         std::vector<Conflict> out;
@@ -335,7 +408,7 @@ namespace Stca
                     double latA, lonA, latB, lonB;
                     ToLatLon(ta, sa, latA, lonA);
                     ToLatLon(tb, sb, latB, lonB);
-                    const double lateralMin = LateralMinimum(latA, lonA, sa.alt, latB, lonB, sb.alt, s);
+                    const double lateralMin = LateralMinimum(ta, sa, latA, lonA, tb, sb, latB, lonB, dx, dy, s);
                     if (horizontal >= lateralMin)
                         continue;
 

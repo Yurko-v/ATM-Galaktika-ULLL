@@ -355,9 +355,9 @@ namespace Lang
             { L"Щелчок - больше не предупреждать об этой паре, пока они не разойдутся",
                                                  L"Click - stop alerting for this pair until they separate" },
             { L"%s, целей %d, расчёт %.1f мс; КФ %d, SSA %d, подавлено %d; "
-              L"трасса %.1f км, %d ft, прогноз %d с, зон аэродрома %d; склонение сектора %+.1f°",
+              L"трасса %.1f км, %d ft, прогноз %d с, зон с нормами %d; склонение сектора %+.1f°",
                                                  L"%s, %d targets, %.1f ms; CNF %d, SSA %d, inhibited %d; "
-                                                 L"en-route %.1f km, %d ft, look-ahead %d s, aerodrome areas %d; sector variation %+.1f°" },
+                                                 L"en-route %.1f km, %d ft, look-ahead %d s, minima zones %d; sector variation %+.1f°" },
             { L"; курс EuroScope отличается от истинного на %+.1f° (по %d бортам)",
                                                  L"; EuroScope track differs from true by %+.1f° (%d aircraft)" },
             { L"Пеленгатор",                     L"Direction finder" },

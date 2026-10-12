@@ -19,8 +19,9 @@
 //     assigned heading when the aircraft is turning onto one;
 //   * finds the time of the first loss and the closest point of approach rather
 //     than only saying "conflict";
-//   * applies the aerodrome minimum only where both aircraft are inside an
-//     aerodrome area, and the en-route minimum everywhere else.
+//   * takes the lateral minimum from the zone each aircraft is in (a sector of the
+//     .ese, by the position that owns it), with a wake minimum behind a heavy or a
+//     super where that zone has one, and the en-route minimum outside every zone.
 namespace Stca
 {
     struct HistoryPoint
@@ -39,6 +40,7 @@ namespace Stca
         double fallbackVsFpm = 0.0;
         double cflFt = -1.0;                    // cleared level on the altFt reference; < 0 when none
         double assignedHeadingDeg = -1.0;       // true heading the aircraft was told to fly; < 0 when none
+        char   wtc = '?';                       // wake category from the flight plan: L, M, H, J
         bool   modeC = true;
     };
 
@@ -54,16 +56,31 @@ namespace Stca
         double vsFpm = 0.0;
         double cflFt = -1.0;
         double assignedHeadingDeg = -1.0;
+        char   wtc = '?';
     };
 
-    struct Area
+    struct LatLon
     {
-        std::string name;
         double lat = 0.0, lon = 0.0;
-        double radiusNm = 30.0;
-        double ceilingFt = 10000.0;
-        double lateralNm = 2.7;
     };
+
+    // A piece of airspace with its own lateral minimum. Where zones overlap the
+    // smallest one counts, the way a tower sector sits inside an approach one.
+    struct Zone
+    {
+        std::string name;                   // the position whose minima apply, for the log
+        std::vector<LatLon> ring;
+        double floorFt = 0.0, ceilingFt = 0.0;
+        double lateralNm = 5.4;
+        double behindHeavyNm = 0.0;         // following an H; 0 when the zone has no wake minimum
+        double behindSuperNm = 0.0;         // following a J
+        // Filled by Bound.
+        double minLat = 0.0, maxLat = 0.0, minLon = 0.0, maxLon = 0.0;
+        double area = 0.0;
+    };
+
+    // Works out the bounding box and the area a zone is looked up by.
+    void Bound(Zone& zone);
 
     struct Settings
     {
@@ -79,7 +96,7 @@ namespace Stca
         bool   turns = true;
         double maxTurnSec = 30.0;           // how long a turn in progress is followed
         double maxTurnDeg = 90.0;
-        std::vector<Area> areas;
+        std::vector<Zone> zones;
     };
 
     struct Conflict

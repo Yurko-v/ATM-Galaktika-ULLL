@@ -106,6 +106,7 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
     const FormularFn* const remarkFn = (kind == FormularKind::App) ? &kFnAppRemark : &kFnRemark;
     const char* myCallsign = plugin->ControllerMyself().GetCallsign();
     const std::string myPositionId = ShownPositionId(myCallsign, PositionIdOf(plugin, myCallsign));
+    const std::string homeAirport = plugin->AirportIcao();
 
     // How many targets squawk each four digit code, indexed by the code read as decimal.
     auto codeIndex = [](const char* c)
@@ -787,11 +788,15 @@ void CGalaxyATMSystemRadarScreen::DrawFormulars(HDC hDC, bool registerObjects)
                 const char* ades = fpd.GetDestination();
                 if (ades != NULL && *ades != '\0')
                     planLine.push_back({ Widen(ades), base, &kFnAdes });
-                const char* arwy = fpd.GetArrivalRwy();
-                if (arwy != NULL && *arwy != '\0')
-                    planLine.push_back({ Widen(arwy), Theme::FormularGreen, &kFnArwy });
-                else
-                    planLine.push_back({ L"ARWY", base, &kFnArwy });
+                // The arrival runway only concerns flights landing at our own aerodrome.
+                if (ades != NULL && !homeAirport.empty() && _stricmp(ades, homeAirport.c_str()) == 0)
+                {
+                    const char* arwy = fpd.GetArrivalRwy();
+                    if (arwy != NULL && *arwy != '\0')
+                        planLine.push_back({ Widen(arwy), Theme::FormularGreen, &kFnArwy });
+                    else
+                        planLine.push_back({ L"ARWY", base, &kFnArwy });
+                }
                 extra.push_back(planLine);
 
                 extra.push_back(std::vector<FormularRun>(1,

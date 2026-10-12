@@ -168,6 +168,24 @@ void CGalaxyATMSystemPlugin::StartSigmetFetch()
         });
 }
 
+// A SIGMET past its validity comes off the scope at once rather than at the next
+// download, which never comes while the feed cannot be reached.
+void CGalaxyATMSystemPlugin::DropExpiredSigmets()
+{
+    const long long now = (long long)time(NULL);
+    auto expired = [now](const Sigmet& s) { return s.validTo > 0 && s.validTo <= now; };
+
+    std::lock_guard<std::mutex> lock(m_sigmetMutex);
+    if (!m_sigmets || std::none_of(m_sigmets->begin(), m_sigmets->end(), expired))
+        return;
+    auto kept = std::make_shared<std::vector<Sigmet>>();
+    for (const Sigmet& s : *m_sigmets)
+        if (!expired(s))
+            kept->push_back(s);
+    Log::Info("sigmet", std::to_string(m_sigmets->size() - kept->size()) + " expired, taken off the scope");
+    m_sigmets = kept;
+}
+
 void CGalaxyATMSystemPlugin::OnNewMetarReceived(const char* sStation, const char* sFullMetar)
 {
     if (sStation == NULL || sFullMetar == NULL)

@@ -641,6 +641,9 @@ bool ParseNotams(const std::string& body, std::vector<ZoneBooking>& out)
             continue;
         if (end < start)
             continue;
+        // A readable NOTAM makes the list valid even when it names no zone, so a file
+        // whose zone NOTAMs were all cancelled clears the old ones.
+        any = true;
 
         int lower = 0, upper = 999;
         ParseNotamLevel(NotamField(msg, L"F)"), lower);
@@ -662,7 +665,6 @@ bool ParseNotams(const std::string& body, std::vector<ZoneBooking>& out)
             b.start = start;
             b.end = end;
             out.push_back(std::move(b));
-            any = true;
         }
     }
 

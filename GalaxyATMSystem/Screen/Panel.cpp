@@ -43,10 +43,84 @@ std::string CGalaxyATMSystemRadarScreen::PanelKey()
     HWND fg = GetForegroundWindow();
     const HKL layout = GetKeyboardLayout(fg != NULL ? GetWindowThreadProcessId(fg, NULL) : 0);
     char key[256];
-    sprintf_s(key, "%ld,%ld,%ld,%ld|%ld,%ld|%d%d|%lld|%ld|%p",
+    sprintf_s(key, "%ld,%ld,%ld,%ld|%ld,%ld|%d%d|%ld|%p|",
         ra.left, ra.top, ra.right, ra.bottom, tb.top, tb.bottom, m_collapsed ? 1 : 0, Authorized() ? 1 : 0,
-        (long long)time(NULL), lround(DisplayWidthNM() * 10.0), (void*)layout);
-    return key;
+        lround(DisplayWidthNM() * 10.0), (void*)layout);
+    return key + PanelContent();
+}
+
+// Everything on the panel that can change without a click or a command. Read once a
+// second; the clock and the timer tick on their own over the kept bitmap.
+const std::string& CGalaxyATMSystemRadarScreen::PanelContent()
+{
+    const time_t now = time(NULL);
+    if (now == m_panelContentAt && !m_panelContent.empty())
+        return m_panelContent;
+    m_panelContentAt = now;
+
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    std::wstring mode, designation, role, user;
+    COLORREF modeColor;
+    GetWorkMode(mode, modeColor);
+    GetUserInfo(designation, role, user);
+    CGalaxyATMSystemPlugin* plugin = Plugin();
+
+    char head[96];
+    sprintf_s(head, "%04d%02d%02d|%d,%d,%d|%d,%d,%d,%d|%d|",
+        st.wYear, st.wMonth, st.wDay,
+        plugin->AltFilterFromFL(), plugin->AltFilterToFL(), plugin->AltFilterEnabled() ? 1 : 0,
+        (int)plugin->UnitAlt(), (int)plugin->UnitVs(), (int)plugin->UnitGs(), (int)plugin->UnitDist(),
+        plugin->TagFontSize());
+    std::wstring text = mode + L"|" + designation + L"|" + role + L"|" + user + L"|"
+        + plugin->QnhMmHg() + L"/" + plugin->QnhHpa() + L"|" + plugin->TransitionLevel() + L"|"
+        + GetDistressCodes() + L"|" + GetDuplicateCodes();
+    m_panelContent = head + Narrow(text);
+    return m_panelContent;
+}
+
+std::wstring CGalaxyATMSystemRadarScreen::TimerText() const
+{
+    if (!m_timerRunning && m_timerElapsedMs == 0)
+        return L"---";
+    ULONGLONG elapsed = m_timerElapsedMs;
+    if (m_timerRunning)
+        elapsed += GetTickCount64() - m_timerStartTick;
+    const ULONGLONG totalSec = elapsed / 1000;
+    wchar_t buf[16];
+    swprintf_s(buf, L"%02llu:%02llu:%02llu", totalSec / 3600, (totalSec / 60) % 60, totalSec % 60);
+    return buf;
+}
+
+// Repaints the clock digits, and the timer while it runs, over the kept panel bitmap.
+void CGalaxyATMSystemRadarScreen::DrawPanelClock(HDC hDC)
+{
+    int saved = SaveDC(hDC);
+    SetBkMode(hDC, TRANSPARENT);
+    if (m_panelClockRect.right > m_panelClockRect.left)
+    {
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        wchar_t clock[16];
+        swprintf_s(clock, L"%02d:%02d:%02d", st.wHour, st.wMinute, st.wSecond);
+        // The collapse toggle shares the clock's row on the right; leave it alone.
+        RECT erase = m_panelClockRect;
+        erase.right = min(erase.right, m_panelArea.right - 18);
+        HBRUSH back = CreateSolidBrush(Theme::Background);
+        FillRect(hDC, &erase, back);
+        DeleteObject(back);
+        Theme::DrawLine(hDC, m_panelClockRect, clock, m_fonts.Clock, Theme::Text, DT_CENTER | DT_VCENTER);
+    }
+    if (m_timerRunning && m_panelTimerRect.right > m_panelTimerRect.left)
+    {
+        RECT inner = m_panelTimerRect;
+        InflateRect(&inner, -2, -2);
+        HBRUSH fill = CreateSolidBrush(Theme::ControlFill);
+        FillRect(hDC, &inner, fill);
+        DeleteObject(fill);
+        Theme::DrawLine(hDC, m_panelTimerRect, TimerText(), m_fonts.Body, Theme::Text, DT_CENTER | DT_VCENTER);
+    }
+    RestoreDC(hDC, saved);
 }
 
 void CGalaxyATMSystemRadarScreen::DrawPanelAndMenu(HDC hDC)
@@ -61,6 +135,7 @@ void CGalaxyATMSystemRadarScreen::DrawPanelAndMenu(HDC hDC)
             BitBlt(hDC, r.left, r.top, r.right - r.left, r.bottom - r.top, snap.dc, 0, y, SRCCOPY);
             y += r.bottom - r.top;
         }
+        DrawPanelClock(hDC);
         for (const RecordedObject& o : snap.objects)
             CRadarScreen::AddScreenObject(o.type, o.id.c_str(), o.area, o.moveable, o.hasTip ? o.tip.c_str() : NULL);
         m_hotRects.insert(m_hotRects.end(), snap.hotRects.begin(), snap.hotRects.end());
@@ -221,6 +296,7 @@ int CGalaxyATMSystemRadarScreen::DrawHeader(HDC hDC, int y)
     swprintf_s(date, L"%02d.%02d.%04d", st.wDay, st.wMonth, st.wYear);
 
     RECT clockR = { m_panelArea.left, y + L::HDR_TOP, m_panelArea.right, y + L::HDR_TOP + L::CLOCK_H };
+    m_panelClockRect = clockR;
     Theme::DrawLine(hDC, clockR, clock, m_fonts.Clock, Theme::Text, DT_CENTER | DT_VCENTER);
 
     std::wstring mode; COLORREF modeColor;
@@ -274,18 +350,8 @@ int CGalaxyATMSystemRadarScreen::DrawBlockTimer(HDC hDC, int y)
     DrawToggleChip(hDC, btn, L"C", m_timerRunning, SO_TIMER_TOGGLE, "TIMER_TOGGLE",
         Tr("ЛКМ - пуск/стоп таймера, ПКМ - сброс"));
 
-    std::wstring text = L"---";
-    if (m_timerRunning || m_timerElapsedMs > 0)
-    {
-        ULONGLONG elapsed = m_timerElapsedMs;
-        if (m_timerRunning)
-            elapsed += GetTickCount64() - m_timerStartTick;
-        ULONGLONG totalSec = elapsed / 1000;
-        wchar_t buf[16];
-        swprintf_s(buf, L"%02llu:%02llu:%02llu", totalSec / 3600, (totalSec / 60) % 60, totalSec % 60);
-        text = buf;
-    }
-    DrawOutlinedField(hDC, field, text, m_fonts.Body);
+    m_panelTimerRect = field;
+    DrawOutlinedField(hDC, field, TimerText(), m_fonts.Body);
 
     return box.bottom;
 }

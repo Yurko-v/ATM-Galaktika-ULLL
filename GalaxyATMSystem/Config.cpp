@@ -14,6 +14,16 @@ namespace
         return s;
     }
 
+    // '*' matches any run of characters, including none.
+    bool WildcardMatch(const wchar_t* pattern, const wchar_t* text)
+    {
+        if (*pattern == L'*')
+            return WildcardMatch(pattern + 1, text) || (*text != L'\0' && WildcardMatch(pattern, text + 1));
+        if (*pattern == L'\0')
+            return *text == L'\0';
+        return *pattern == *text && WildcardMatch(pattern + 1, text + 1);
+    }
+
     std::wstring ModuleDir(HINSTANCE hModule)
     {
         wchar_t path[MAX_PATH] = { 0 };
@@ -104,7 +114,9 @@ namespace
 
 void Config::Load(HINSTANCE hModule)
 {
+    static unsigned loads = 0;
     *this = Config();
+    m_Generation = ++loads;
     m_Path = ModuleDir(hModule) + L"GalaxyATMSystem.json";
 
     std::ifstream file(m_Path, std::ios::binary);
@@ -482,27 +494,22 @@ void Config::Load(HINSTANCE hModule)
             if (const Json::Value* v = stca->Find(L"Turns"))
                 s.turns = v->AsBool(s.turns);
 
-            if (const Json::Value* areas = stca->Find(L"Areas"))
+            // The old circular "Areas" are no longer read: the zones come from the .ese.
+            if (const Json::Value* zones = stca->Find(L"Zones"))
             {
-                if (areas->kind == Json::Value::Kind::Object)
+                if (zones->kind == Json::Value::Kind::Object)
                 {
-                    m_StcaAreas.clear();
-                    for (const auto& [key, entry] : areas->obj)
+                    m_StcaZoneRules.clear();
+                    for (const auto& [key, entry] : zones->obj)
                     {
-                        StcaAreaConfig area;
-                        area.id = ToUpper(key);
                         if (entry.kind != Json::Value::Kind::Object)
                             continue;
-                        if (const Json::Value* v = entry.Find(L"Point"))
-                            area.hasPoint = ParseGeoPoint(*v, area.point);
-                        if (const Json::Value* v = entry.Find(L"RadiusNm"))
-                            area.radiusNm = max(1.0, min(200.0, v->AsNumber(area.radiusNm)));
-                        if (const Json::Value* v = entry.Find(L"RadiusKm"))
-                            area.radiusNm = max(1.0, min(200.0, v->AsNumber(area.radiusNm * 1.852) / 1.852));
-                        if (const Json::Value* v = entry.Find(L"CeilingFt"))
-                            area.ceilingFt = max(0.0, min(60000.0, v->AsNumber(area.ceilingFt)));
-                        distance(entry, L"LateralKm", L"LateralNm", area.lateralNm);
-                        m_StcaAreas.push_back(area);
+                        StcaZoneRule rule;
+                        rule.pattern = ToUpper(key);
+                        distance(entry, L"LateralKm", L"LateralNm", rule.lateralNm);
+                        distance(entry, L"BehindHeavyKm", L"BehindHeavyNm", rule.behindHeavyNm);
+                        distance(entry, L"BehindSuperKm", L"BehindSuperNm", rule.behindSuperNm);
+                        m_StcaZoneRules.push_back(rule);
                     }
                 }
             }
@@ -553,6 +560,21 @@ const RdfStation* Config::RdfStationFor(const std::wstring& positionCallsign) co
     // No Default means positions that are not listed have no АРП at all, rather than
     // borrowing one from another sector.
     return byId(m_RdfDefault);
+}
+
+const StcaZoneRule* Config::StcaZoneRuleFor(const std::wstring& positionCallsign) const
+{
+    const std::wstring callsign = ToUpper(positionCallsign);
+    const StcaZoneRule* best = NULL;
+    for (const StcaZoneRule& rule : m_StcaZoneRules)
+    {
+        if (rule.pattern == callsign)
+            return &rule;
+        if (WildcardMatch(rule.pattern.c_str(), callsign.c_str())
+            && (best == NULL || rule.pattern.size() > best->pattern.size()))
+            best = &rule;
+    }
+    return best;
 }
 
 bool Config::FindPosition(const std::string& callsign,

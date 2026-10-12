@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <string>
 #include <map>
 #include <vector>
@@ -35,7 +36,8 @@ namespace Json
                 return fallback;
             wchar_t* end = nullptr;
             double v = wcstod(str.c_str(), &end);
-            return (end != NULL && *end == L'\0') ? v : fallback;
+            // wcstod also reads "nan" and "inf", which pass every range check after it.
+            return (end != NULL && *end == L'\0' && std::isfinite(v)) ? v : fallback;
         }
 
         long long AsInt(long long fallback = 0) const

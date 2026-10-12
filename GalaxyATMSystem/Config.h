@@ -40,17 +40,15 @@ struct RdfStation
     double variation = 0.0;
 };
 
-// An aerodrome area for the conflict alert: inside it, below its ceiling, the
-// aerodrome lateral minimum applies. Centred on the sector file airport named by
-// the id unless a Point is given.
-struct StcaAreaConfig
+// Conflict alert minima for the zone of a position: the .ese sectors whose first
+// owner is that position. The pattern is a position callsign, '*' standing for any
+// run of characters, so ULLL_*CTR covers ULLL_CTR and ULLL_R2_CTR alike.
+struct StcaZoneRule
 {
-    std::wstring id;
-    bool hasPoint = false;
-    EuroScopePlugIn::CPosition point;
-    double radiusNm = 30.0;
-    double ceilingFt = 10000.0;
-    double lateralNm = 2.7;
+    std::wstring pattern;
+    double lateralNm = 5.4;
+    double behindHeavyNm = 0.0;     // wake minimum behind an H; 0 for none
+    double behindSuperNm = 0.0;     // behind a J
 };
 
 class Config
@@ -117,13 +115,18 @@ public:
     const RdfStation* RdfStationFor(const std::wstring& positionCallsign) const;
 
     bool StcaEnabled() const { return m_StcaEnabled; }
-    // The settings without area centres; the screen fills those from the sector file.
+    // The settings without zones; the screen builds those from the .ese sectors.
     const Stca::Settings& StcaSettings() const { return m_StcaSettings; }
-    const std::vector<StcaAreaConfig>& StcaAreas() const { return m_StcaAreas; }
+    const std::vector<StcaZoneRule>& StcaZoneRules() const { return m_StcaZoneRules; }
+    // The rule for a position callsign: an exact one first, otherwise the longest
+    // matching pattern. NULL when none matches - the en-route minimum applies there.
+    const StcaZoneRule* StcaZoneRuleFor(const std::wstring& positionCallsign) const;
 
     size_t PositionCount() const { return m_Positions.size(); }
 
     const std::wstring& LoadError() const { return m_LoadError; }
+    // Different after every Load, for whoever caches something built from the config.
+    unsigned Generation() const { return m_Generation; }
     const std::wstring& ConfigPath() const { return m_Path; }
 
 private:
@@ -166,10 +169,17 @@ private:
     std::map<std::wstring, std::wstring> m_RdfByPosition;
     bool m_StcaEnabled = true;
     Stca::Settings m_StcaSettings;
-    // Pulkovo, as agreed: 5 km within 30 NM below 10 000 ft, 10 km everywhere else.
-    std::vector<StcaAreaConfig> m_StcaAreas = { StcaAreaConfig{ L"ULLI" } };
+    // As agreed for Pulkovo: 5 km in the tower zone; 5 km in the radar approach zone,
+    // 10 km behind a heavy and 15 km behind a super; 10 km at approach and control.
+    std::vector<StcaZoneRule> m_StcaZoneRules = {
+        StcaZoneRule{ L"ULLI_*TWR", 5.0 / 1.852 },
+        StcaZoneRule{ L"ULLI_R_APP", 5.0 / 1.852, 10.0 / 1.852, 15.0 / 1.852 },
+        StcaZoneRule{ L"ULLL_*APP", 10.0 / 1.852 },
+        StcaZoneRule{ L"ULLL_*CTR", 10.0 / 1.852 },
+    };
     std::map<std::wstring, PositionInfo> m_Positions;
     std::map<std::wstring, std::wstring> m_UserNames;
     std::wstring m_LoadError;
     std::wstring m_Path;
+    unsigned m_Generation = 0;
 };

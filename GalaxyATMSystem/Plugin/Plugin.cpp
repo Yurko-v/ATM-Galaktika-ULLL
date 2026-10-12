@@ -193,6 +193,7 @@ void CGalaxyATMSystemPlugin::OnTimer(int Counter)
     }
 
     ApplySquawkAnswers();
+    DropExpiredSigmets();
 
     int sigmetPeriod = max(60, m_config.SigmetRefreshMinutes() * 60);
     if (Counter > 0 && Counter % sigmetPeriod == 0)

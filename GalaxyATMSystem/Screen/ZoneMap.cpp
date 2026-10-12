@@ -80,8 +80,10 @@ std::string CGalaxyATMSystemRadarScreen::ZoneLayerKey()
     const Config& cfg = Plugin()->GetConfig();
     const std::vector<Zone>& zones = cfg.Zones();
     char head[160];
-    sprintf_s(head, "|%d|%d,%p,%zu|%d,%p|", Theme::AntiAliasOn() ? 1 : 0,
-        m_zonesVisible ? 1 : 0, (const void*)zones.data(), zones.size(),
+    // The generation, not the address of the zone list: a reloaded list can land at
+    // the same address with the same count and different shapes.
+    sprintf_s(head, "|%d|%d,%u,%zu|%d,%p|", Theme::AntiAliasOn() ? 1 : 0,
+        m_zonesVisible ? 1 : 0, cfg.Generation(), zones.size(),
         m_sigmetsVisible ? 1 : 0, (const void*)m_sigmets.get());
     std::string key = ViewKey() + head;
     for (ZoneKind kind : { ZoneKind::Prohibited, ZoneKind::Restricted, ZoneKind::Danger })

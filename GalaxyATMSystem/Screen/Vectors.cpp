@@ -362,6 +362,8 @@ void CGalaxyATMSystemRadarScreen::DrawRoutes(HDC hDC)
 
 void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
 {
+    // fixed pixel size when zoomed out, grows with the map when zoomed in
+    const double scale = (std::max)(1.0, Theme::WakeArcRadiusNm * m_framePxPerNm / Theme::WakeArcRadiusPx);
     std::unique_ptr<VectorCanvas> canvas;
     for (const FrameTarget& t : m_frameTargets)
     {
@@ -399,7 +401,7 @@ void CGalaxyATMSystemRadarScreen::DrawWakeArcs(HDC hDC)
         canvas->pen.SetColor(Gdiplus::Color(GetRValue(color), GetGValue(color), GetBValue(color)));
         for (int i = 0; i < arcs; i++)
         {
-            double r = Theme::WakeArcRadiusPx + i * Theme::WakeArcStepPx;
+            double r = (Theme::WakeArcRadiusPx + i * Theme::WakeArcStepPx) * scale;
             canvas->g.DrawArc(&canvas->pen,
                 (Gdiplus::REAL)(c.x - r), (Gdiplus::REAL)(c.y - r),
                 (Gdiplus::REAL)(2.0 * r), (Gdiplus::REAL)(2.0 * r),

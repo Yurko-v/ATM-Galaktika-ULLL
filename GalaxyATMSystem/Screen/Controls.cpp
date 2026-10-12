@@ -262,8 +262,17 @@ void CGalaxyATMSystemRadarScreen::TickHot()
                 index = i;
     if (index != m_hotIndex)
     {
+        // Hovering label items must not repaint the whole panel, only hovers on its own items.
+        auto onPanel = [&](const RECT& r)
+        {
+            RECT hit;
+            return IntersectRect(&hit, &r, &m_menuBarArea) || IntersectRect(&hit, &r, &m_panelBackArea);
+        };
+        const RECT hot = index >= 0 ? m_hotRects[index] : RECT{ 0, 0, 0, 0 };
+        if (onPanel(m_hotRect) || onPanel(hot))
+            m_panelDirty = true;
         m_hotIndex = index;
-        m_panelDirty = true;
+        m_hotRect = hot;
         RequestRefresh();
     }
 }

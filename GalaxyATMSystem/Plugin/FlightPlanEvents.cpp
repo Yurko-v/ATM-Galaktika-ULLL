@@ -65,16 +65,6 @@ namespace
     }
 }
 
-bool CGalaxyATMSystemPlugin::BroadcastScratchMark(CFlightPlan fp, const char* mark, bool on)
-{
-    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
-    const std::string scratch = cad.GetScratchPadString();
-    const std::string msg = std::string(mark) + (on ? "/1" : "/0");
-    const bool sent = cad.SetScratchPadString(msg.c_str());
-    cad.SetScratchPadString(scratch.c_str());
-    return sent;
-}
-
 bool CGalaxyATMSystemPlugin::BroadcastScratch(CFlightPlan fp, const std::string& msg, const char* what)
 {
     const std::string callsign = fp.GetCallsign();
@@ -226,15 +216,7 @@ void CGalaxyATMSystemPlugin::ToggleSharedMarker(CFlightPlan fp)
         m_sharedMarked.insert(callsign);
     else
         m_sharedMarked.erase(callsign);
-
-    std::string tracker;
-    if (TrackedBySomeoneElse(fp, tracker))
-    {
-        Log::Info("formular", callsign + ": shared marker set only locally, tracked by " + tracker);
-        return;
-    }
-    if (!BroadcastScratchMark(fp, kSharedMarkerMark, on))
-        Log::Error("formular", callsign + ": shared marker broadcast refused by EuroScope");
+    BroadcastScratch(fp, std::string(kSharedMarkerMark) + (on ? "/1" : "/0"), "shared marker");
 }
 
 void CGalaxyATMSystemPlugin::ToggleEnglish(CFlightPlan fp)
@@ -256,8 +238,7 @@ void CGalaxyATMSystemPlugin::ToggleEnglish(CFlightPlan fp)
     }
 
     fp.GetControllerAssignedData().SetFlightStripAnnotation(kEnglishAnnotation, on ? kEnglishMark : "");
-    if (!BroadcastScratchMark(fp, kEnglishMark, on))
-        Log::Error("formular", callsign + ": English mark broadcast refused by EuroScope");
+    BroadcastScratch(fp, std::string(kEnglishMark) + (on ? "/1" : "/0"), "English mark");
 }
 
 void CGalaxyATMSystemPlugin::OnFlightPlanFlightStripPushed(CFlightPlan FlightPlan,

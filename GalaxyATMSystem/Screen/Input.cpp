@@ -30,7 +30,9 @@ namespace
 
 void CGalaxyATMSystemRadarScreen::UpdateWheelHook()
 {
-    if (WantsWheel())
+    // A screen being deleted is already out of g_screens; it must not stay the hook's
+    // target, or the next mouse message calls into the deleted object.
+    if (WantsWheel() && g_screens.count(this) != 0)
     {
         if (g_wheelScreen == NULL || m_cflOpen || m_spdOpen || m_ahdgOpen || m_xfrOpen || m_atisOpen)
             g_wheelScreen = this;
@@ -71,7 +73,6 @@ void CGalaxyATMSystemRadarScreen::ReleaseWheelHook()
 
 bool CGalaxyATMSystemRadarScreen::OnMouseWheel(int delta)
 {
-    m_panelDirty = true;
     if (delta == 0 || !Authorized())
         return false;
     const int rows = delta > 0 ? -max(1, delta / WHEEL_DELTA) : max(1, -delta / WHEEL_DELTA);
@@ -153,6 +154,7 @@ bool CGalaxyATMSystemRadarScreen::WheelDropdown(POINT cursor, int rows)
         m_vecTimeMin = picked;
     else
         Plugin()->SetTagFontSize(picked);
+    m_panelDirty = true;
     RequestRefresh();
     return true;
 }

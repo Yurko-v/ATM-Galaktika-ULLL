@@ -113,7 +113,14 @@ private:
     RECT m_panelBackArea = { 0, 0, 0, 0 };
     bool m_panelBackRounded = false;
     RECT m_menuBarArea = { 0, 0, 0, 0 };
+    RECT m_panelClockRect = { 0, 0, 0, 0 };     // the ticking parts, painted over the snapshot
+    RECT m_panelTimerRect = { 0, 0, 0, 0 };
+    std::string m_panelContent;
+    time_t m_panelContentAt = 0;
     std::string PanelKey();
+    const std::string& PanelContent();
+    void DrawPanelClock(HDC hDC);
+    std::wstring TimerText() const;
     void DrawPanelAndMenu(HDC hDC);
 
     struct ZoneLayer
@@ -174,14 +181,14 @@ private:
     };
     bool m_stcaOn = true;
     std::map<std::string, StcaWatch> m_stcaWatch;   // keyed "A|B", A < B
-    std::map<std::wstring, EuroScopePlugIn::CPosition> m_stcaAreaCentres;
-    std::set<std::wstring> m_stcaWarnedAreas;
+    std::vector<Stca::Zone> m_stcaZones;
+    unsigned m_stcaZonesGeneration = 0;            // config generation the zones were built for
     double m_stcaVariation = 0.0;                   // sector file magnetic variation, east positive
     double m_stcaTrackHeadingOffset = 0.0;          // GetTrackHeading minus the true track, for .stca
     int    m_stcaOffsetSamples = 0;
     int    m_stcaTracks = 0;
     double m_stcaLastMs = 0.0;
-    std::vector<Stca::Area> StcaAreas();
+    const std::vector<Stca::Zone>& StcaZones();
     void RunStca();
     bool StcaShown(const StcaWatch& watch) const;
     void InhibitStca(const char* pairKey);
@@ -300,6 +307,7 @@ private:
     POINT m_hotCursor = { 0, 0 };
     bool  m_hotValid = false;
     int   m_hotIndex = -1;
+    RECT  m_hotRect = { 0, 0, 0, 0 };
     std::vector<RECT> m_hotRects;
     bool Hot(const RECT& r);
     void AddButton(HDC hDC, int type, const char* id, RECT r, const char* tip);

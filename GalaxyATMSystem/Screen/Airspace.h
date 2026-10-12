@@ -174,6 +174,13 @@ namespace Galaxy
         return fabs(twice) / 2.0;
     }
 
+    // Position id (the OWNER entries) to callsign, from [POSITIONS] of the same file.
+    inline std::map<std::string, std::string>& EsePositionCallsigns()
+    {
+        static std::map<std::string, std::string> callsigns;
+        return callsigns;
+    }
+
     inline const std::vector<AirspaceSector>& AirspaceSectors()
     {
         static std::vector<AirspaceSector> sectors;
@@ -194,6 +201,7 @@ namespace Galaxy
         std::vector<std::pair<AirspaceSector, std::vector<std::string>>> pending;
         std::vector<CPosition>* line = NULL;
         bool inAirspace = false;
+        bool inPositions = false;
         char buf[2048];
         while (fgets(buf, sizeof(buf), f) != NULL)
         {
@@ -205,7 +213,16 @@ namespace Galaxy
             if (text[0] == '[')
             {
                 inAirspace = _stricmp(text.c_str(), "[AIRSPACE]") == 0;
+                inPositions = _stricmp(text.c_str(), "[POSITIONS]") == 0;
                 line = NULL;
+                continue;
+            }
+            if (inPositions)
+            {
+                // callsign:name:frequency:id:...; the first position with an id keeps it.
+                const std::vector<std::string> fields = SplitColons(text);
+                if (fields.size() >= 4 && !fields[3].empty())
+                    EsePositionCallsigns().emplace(fields[3], fields[0]);
                 continue;
             }
             if (!inAirspace)
@@ -275,6 +292,14 @@ namespace Galaxy
             s.home = s.name.compare(0, kFirPrefixLength, homeFir) == 0;
         Log::Info("airspace", Log::Utf8(file) + ": " + std::to_string(sectors.size()) + " sectors");
         return sectors;
+    }
+
+    // The callsign of an OWNER id, or empty when [POSITIONS] has no such id.
+    inline std::string EsePositionCallsign(const std::string& id)
+    {
+        AirspaceSectors();
+        auto found = EsePositionCallsigns().find(id);
+        return found != EsePositionCallsigns().end() ? found->second : std::string();
     }
 
     inline bool InsideRing(const std::vector<CPosition>& ring, const CPosition& p)

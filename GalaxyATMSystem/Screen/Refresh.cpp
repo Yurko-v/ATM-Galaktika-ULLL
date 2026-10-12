@@ -111,7 +111,10 @@ void CGalaxyATMSystemRadarScreen::RefreshPhase(HDC hDC, int Phase)
 
     UpdateZoneActivity();
 
-    m_sigmets = Plugin()->Sigmets();
+    std::shared_ptr<const std::vector<Sigmet>> sigmets = Plugin()->Sigmets();
+    if (sigmets != m_sigmets)
+        m_sigmetInfoIndex = -1;     // the open card's index means another SIGMET in a new list
+    m_sigmets = sigmets;
 
     if (Phase == REFRESH_PHASE_BEFORE_TAGS)
     {

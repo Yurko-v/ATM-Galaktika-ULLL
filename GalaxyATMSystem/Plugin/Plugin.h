@@ -194,6 +194,7 @@ private:
     void ApplyQnhHpa(int hpa);
 
     void StartSigmetFetch();
+    void DropExpiredSigmets();
 
     Config m_config;
 
@@ -275,7 +276,6 @@ private:
 
     std::set<std::string> m_english;
     std::set<std::string> m_sharedMarked;
-    bool BroadcastScratchMark(EuroScopePlugIn::CFlightPlan fp, const char* mark, bool on);
     bool BroadcastScratch(EuroScopePlugIn::CFlightPlan fp, const std::string& msg, const char* what);
     void ReadSharedScratch(EuroScopePlugIn::CFlightPlan& fp, const char* scratch);
 
