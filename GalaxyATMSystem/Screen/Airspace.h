@@ -559,20 +559,43 @@ namespace Galaxy
                 }
                 neverInHomeZone = zone == NULL;
             }
-            if (zone != NULL)
-                holder = ZoneHolder(*zone, online);
-
-            std::string lastInside;
-            for (int i = from; zone != NULL && i < route.GetPointsNumber(); i++)
+            const auto exitOf = [&](const std::string& who, const std::set<std::string>& on)
             {
-                if (!InsideZoneOf(holder, online, route.GetPointPosition(i), levelOver(i)))
+                std::string lastInside;
+                for (int i = from; i < route.GetPointsNumber(); i++)
                 {
-                    point = lastInside;
-                    break;
+                    if (!InsideZoneOf(who, on, route.GetPointPosition(i), levelOver(i)))
+                        return lastInside;
+                    const char* name = route.GetPointName(i);
+                    if (name != NULL && *name != '\0')
+                        lastInside = name;
                 }
-                const char* name = route.GetPointName(i);
-                if (name != NULL && *name != '\0')
-                    lastInside = name;
+                return std::string();
+            };
+
+            if (zone != NULL)
+            {
+                holder = ZoneHolder(*zone, online);
+                if (staffed(*zone))
+                    point = exitOf(holder, online);
+                else
+                {
+                    // Nobody along the route is on: the zone goes to the first of its owners whose
+                    // zone, with them logged in, still has a point ahead. In ACC-SE (R2:R:...) with
+                    // the flight about to leave it, R2's zone has none; R's takes in ACC-N and R5's
+                    // Petrozavodsk too, and ends at UMDEL.
+                    for (const std::string& id : zone->owners)
+                    {
+                        std::set<std::string> assumed = online;
+                        assumed.insert(id);
+                        point = exitOf(id, assumed);
+                        if (!point.empty())
+                        {
+                            holder = id;
+                            break;
+                        }
+                    }
+                }
             }
         }
 
