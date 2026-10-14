@@ -248,13 +248,9 @@ COLORREF CGalaxyATMSystemRadarScreen::PopupFrame(const PopupPlacement& popup) co
 void CGalaxyATMSystemRadarScreen::TickHot()
 {
     POINT cursor;
-    HWND view = NULL;
-    m_hotValid = CursorRadarPoint(cursor, &view);
+    m_hotValid = CursorRadarPoint(cursor);
     if (m_hotValid)
-    {
         m_hotCursor = cursor;
-        RadarCursor::Attach(view, GetRadarArea());
-    }
     int index = -1;
     if (m_hotValid)
         for (int i = (int)m_hotRects.size() - 1; i >= 0 && index < 0; i--)

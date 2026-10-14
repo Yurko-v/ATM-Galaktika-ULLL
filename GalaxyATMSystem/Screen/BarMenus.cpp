@@ -14,8 +14,10 @@ namespace
                    MenuDownload, MenuStatistics, MenuArchive, MenuHelp };
 
     // Submenus, numbered within their menu.
-    enum SettingsSub { SubLanguage, SubAltUnit, SubVsUnit, SubGsUnit, SubDistUnit, SubRulerButton };
-    enum ViewSub { SubLabelKind, SubFontSize, SubLines, SubVecTime, SubVecDist };
+    enum SettingsSub { SubLanguage, SubUnitPreset, SubAltUnit, SubVsUnit, SubGsUnit, SubDistUnit,
+                       SubAltFrom, SubAltTo, SubCodes, SubRulerButton, SubPanel, SubStca, SubDiagnostics,
+                       SubConfig, SubWindows, SubSettingsFile, SubReset, SubAccount };
+    enum ViewSub { SubZoom, SubLabelKind, SubFontSize, SubLines, SubVecTime, SubVecDist };
     enum AerodromeSub { SubAtisAirport };
     enum ListsSub { SubRcScale, SubRcSort };
     enum WeatherSub { SubSigmetList };
@@ -53,11 +55,58 @@ namespace
         return slash == std::wstring::npos ? std::wstring() : p.substr(0, slash + 1);
     }
 
+    // Where Настройки › Файл настроек writes and reads.
+    std::wstring SettingsFilePath()
+    {
+        const std::wstring folder = PluginFolder();
+        return folder.empty() ? folder : folder + L"GalaxyATMSystem.settings.txt";
+    }
+
     std::wstring FlText(int fl)
     {
         wchar_t buf[8];
         swprintf_s(buf, L"F%03d", fl);
         return buf;
+    }
+
+    // All four units at once.
+    struct UnitPreset
+    {
+        const wchar_t* name;
+        AltUnit alt;
+        VsUnit vs;
+        GsUnit gs;
+        DistUnit dist;
+    };
+    const UnitPreset kUnitPresets[] = {
+        { L"ИКАО: FL, фут/мин, узлы, мили",     AltUnit::FL, VsUnit::FtMin, GsUnit::Knots, DistUnit::NM },
+        { L"Смешанные: FL, фут/мин, узлы, км",  AltUnit::FL, VsUnit::FtMin, GsUnit::Knots, DistUnit::Km },
+        { L"Метрические: м, м/с, км/ч, км",     AltUnit::M,  VsUnit::MS,    GsUnit::Kmh,   DistUnit::Km },
+        { L"Эшелон и метры: м/с, км/ч, км",     AltUnit::FLM, VsUnit::MS,   GsUnit::Kmh,   DistUnit::Km },
+    };
+
+    const int kAltFromSteps[] = { 0, 10, 20, 30, 50, 60, 80, 100, 150, 200, 250, 290, 310, 350, 410 };
+    const int kAltToSteps[]   = { 30, 50, 60, 80, 100, 150, 200, 250, 290, 310, 350, 410, 450, 600, 999 };
+
+    // Widths of the view, from edge to edge as the panel's scale shows it, in the
+    // distance unit chosen.
+    const int kZoomWidths[] = { 20, 50, 100, 150, 200, 300, 500, 800 };
+
+    const wchar_t* const kFormularKindLabels[] = {
+        L"По позиции", L"РДЦ (Контроль)", L"ДПК/ДПП (Круг/Подход)", L"КДП (Вышка)" };
+
+    const wchar_t* YesNo(bool on) { return Tr(on ? L"да" : L"нет"); }
+
+    std::wstring DistText(double nm, DistUnit unit)
+    {
+        wchar_t buf[32];
+        swprintf_s(buf, L"%.1f ", unit == DistUnit::NM ? nm : nm * 1.852);
+        return buf + std::wstring(unit == DistUnit::NM ? L"NM" : Tr(L"км"));
+    }
+
+    std::wstring AltUnitName(AltUnit u)
+    {
+        return u == AltUnit::FL ? std::wstring(L"FL") : Tr(u == AltUnit::M ? L"Метры" : L"Эшелон и метры");
     }
 }
 
@@ -164,15 +213,106 @@ std::vector<CGalaxyATMSystemRadarScreen::BarMenuRow> CGalaxyATMSystemRadarScreen
             valued(Tr(L"Морские мили"), BarAction::DistUnit, (int)DistUnit::NM, plugin->UnitDist() == DistUnit::NM);
             valued(Tr(L"Километры"), BarAction::DistUnit, (int)DistUnit::Km, plugin->UnitDist() == DistUnit::Km);
             return rows;
+        case SubUnitPreset:
+            for (int i = 0; i < (int)_countof(kUnitPresets); i++)
+            {
+                const UnitPreset& p = kUnitPresets[i];
+                valued(Tr(p.name), BarAction::UnitPreset, i, plugin->UnitAlt() == p.alt && plugin->UnitVs() == p.vs
+                    && plugin->UnitGs() == p.gs && plugin->UnitDist() == p.dist);
+            }
+            return rows;
+        case SubAltFrom:
+        case SubAltTo:
+        {
+            const bool from = sub == SubAltFrom;
+            const int current = from ? plugin->AltFilterFromFL() : plugin->AltFilterToFL();
+            const int* steps = from ? kAltFromSteps : kAltToSteps;
+            const int count = from ? (int)_countof(kAltFromSteps) : (int)_countof(kAltToSteps);
+            for (int i = 0; i < count; i++)
+                valued(FlText(steps[i]), from ? BarAction::AltFilterFrom : BarAction::AltFilterTo, steps[i],
+                    current == steps[i]).separatorAfter = i == count - 1;
+            add(Tr(L"Ввести вручную..."), from ? BarAction::AltFilterFromEdit : BarAction::AltFilterToEdit);
+            return rows;
+        }
+        case SubCodes:
+            add(Tr(L"Пропускать все коды (ВСЕ)"), BarAction::CodeAll, mark(m_codeAll));
+            add(Tr(L"Без привязки (БП)"), BarAction::CodeBp, mark(m_codeBp));
+            add(Tr(L"Источник ВВ1 включён"), BarAction::CodeExtra, mark(m_codeExtra), true, true);
+            info(Tr(L"Коды ВВ1: ") + (m_codeFilter.empty() ? std::wstring(Tr(L"не заданы")) : m_codeFilter.substr(0, 40)));
+            add(Tr(L"Изменить коды ВВ1..."), BarAction::CodeFilterEdit);
+            return rows;
         case SubRulerButton:
             command(L"Без боковой кнопки", ".rulerbtn 0", mark(m_rulerButton == 0));
             command(L"Боковая кнопка 1", ".rulerbtn 1", mark(m_rulerButton == VK_XBUTTON1));
             command(L"Боковая кнопка 2", ".rulerbtn 2", mark(m_rulerButton == VK_XBUTTON2));
             return rows;
+        case SubPanel:
+            add(Tr(L"Свернуть панель"), BarAction::PanelCollapse, mark(m_collapsed));
+            command(L"Скрыть панель (.ulll)", ".ulll");
+            return rows;
+        case SubStca:
+        {
+            const Stca::Settings& stca = cfg.StcaSettings();
+            command(L"Конфликты (STCA)", ".stca", mark(m_stcaOn && cfg.StcaEnabled()), true).enabled = cfg.StcaEnabled();
+            if (!cfg.StcaEnabled())
+                info(Tr(L"Выключено в GalaxyATMSystem.json"));
+            info(Tr(L"Прогноз: ") + std::to_wstring(stca.lookaheadSec) + Tr(L" с"));
+            info(Tr(L"Боковой минимум: ") + DistText(stca.lateralNm, plugin->UnitDist()));
+            info(Tr(L"Вертикальный минимум: ") + std::to_wstring((int)stca.verticalFt) + Tr(L" фт, выше ")
+                + FlText((int)(stca.highFromFt / 100.0)) + L" - " + std::to_wstring((int)stca.verticalHighFt) + Tr(L" фт"));
+            info(Tr(L"Не проверяются ниже ") + std::to_wstring((int)stca.minAltitudeFt) + Tr(L" фт"));
+            info(std::wstring(Tr(L"Учёт разворотов: ")) + YesNo(stca.turns));
+            info(Tr(L"Зон с минимумами: ") + std::to_wstring(StcaZones().size()), true);
+            command(L"Состояние STCA в сообщения", ".stcainfo");
+            return rows;
+        }
+        case SubDiagnostics:
+            command(L"Замер быстродействия", ".galaxyperf", mark(m_perfOn));
+            command(L"Диагностика выбранного борта", ".galaxydiag");
+            command(L"Символы целей", ".symbols");
+            command(L"Состояние STCA в сообщения", ".stcainfo", MenuCheck::None, true);
+            add(Tr(L"Открыть журнал"), BarAction::OpenLog);
+            return rows;
+        case SubConfig:
+            command(L"Перечитать конфигурацию", ".reload");
+            add(Tr(L"Открыть GalaxyATMSystem.json"), BarAction::OpenConfigFile, MenuCheck::None,
+                !cfg.ConfigPath().empty());
+            add(Tr(L"Открыть папку плагина"), BarAction::OpenFolder, MenuCheck::None, true, true);
+            info(Tr(L"Постов: ") + std::to_wstring(cfg.PositionCount()) + Tr(L", зон: ")
+                + std::to_wstring(cfg.Zones().size()));
+            info(cfg.LoadError().empty() ? std::wstring(Tr(L"Прочитана без ошибок")) : cfg.LoadError().substr(0, 80));
+            return rows;
+        case SubWindows:
+            add(Tr(L"Вернуть окна на место"), BarAction::ResetWindows, MenuCheck::None, true, true);
+            info(Tr(L"Список РЦ: ") + std::wstring(Tr(!m_rcOpen ? L"закрыт" : m_rcFloating ? L"вне EuroScope"
+                : L"на радаре")));
+            return rows;
+        case SubSettingsFile:
+        {
+            const std::wstring path = SettingsFilePath();
+            const bool exists = !path.empty() && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+            add(Tr(L"Сохранить настройки в файл"), BarAction::ExportSettings, MenuCheck::None, !path.empty());
+            add(Tr(L"Загрузить настройки из файла"), BarAction::ImportSettings, MenuCheck::None, exists);
+            add(Tr(L"Открыть файл настроек"), BarAction::OpenSettingsFile, MenuCheck::None, exists, true);
+            info(exists ? std::wstring(L"GalaxyATMSystem.settings.txt") : std::wstring(Tr(L"Файл ещё не сохранён")));
+            return rows;
+        }
+        case SubReset:
+            info(Tr(L"Язык и сохранённый вход не меняются"), true);
+            add(Tr(L"Сбросить все настройки"), BarAction::ResetSettings);
+            return rows;
+        case SubAccount:
+        {
+            const CGalaxyATMSystemPlugin::SavedLogin& saved = plugin->SavedIdentity();
+            info(saved.Complete() ? Tr(L"Сохранён вход: CID ") + saved.cid : std::wstring(Tr(L"Вход не сохранён")), true);
+            add(Tr(L"Забыть сохранённый вход"), BarAction::ForgetLogin, MenuCheck::None, saved.Complete());
+            return rows;
+        }
         default:
             break;
         }
         submenu(Tr(L"Язык"), SubLanguage, true);
+        submenu(Tr(L"Набор единиц"), SubUnitPreset);
         submenu(Tr(L"Высота"), SubAltUnit);
         submenu(Tr(L"Вертикальная скорость"), SubVsUnit);
         submenu(Tr(L"Путевая скорость"), SubGsUnit);
@@ -180,15 +320,33 @@ std::vector<CGalaxyATMSystemRadarScreen::BarMenuRow> CGalaxyATMSystemRadarScreen
         add(Tr(L"Фильтр высот ") + FlText(min(plugin->AltFilterFromFL(), plugin->AltFilterToFL())) + L"-"
             + FlText(max(plugin->AltFilterFromFL(), plugin->AltFilterToFL())),
             BarAction::AltFilter, mark(plugin->AltFilterEnabled()));
-        submenu(Tr(L"Боковая кнопка линейки"), SubRulerButton, true);
-        command(L"Замер быстродействия", ".galaxyperf", mark(m_perfOn));
-        command(L"Перечитать конфигурацию", ".reload", MenuCheck::None, true);
+        submenu(Tr(L"Нижняя граница: ") + FlText(plugin->AltFilterFromFL()), SubAltFrom);
+        submenu(Tr(L"Верхняя граница: ") + FlText(plugin->AltFilterToFL()), SubAltTo, true);
+        submenu(Tr(L"Коды ответчика"), SubCodes);
+        submenu(Tr(L"Боковая кнопка линейки"), SubRulerButton);
+        submenu(Tr(L"Панель"), SubPanel);
+        submenu(Tr(L"Окна"), SubWindows, true);
+        submenu(Tr(L"Параметры STCA"), SubStca);
+        submenu(Tr(L"Диагностика"), SubDiagnostics);
+        submenu(Tr(L"Конфигурация"), SubConfig, true);
+        add(Tr(L"Показать текущие настройки"), BarAction::ShowSettings);
+        submenu(Tr(L"Файл настроек"), SubSettingsFile);
+        submenu(Tr(L"Сбросить настройки"), SubReset, true);
+        submenu(Tr(L"Учётная запись"), SubAccount);
         command(L"Выйти из системы", ".logout");
         break;
 
     case MenuView:
+    {
+        const DistUnit unit = plugin->UnitDist();
+        const wchar_t* const unitName = unit == DistUnit::NM ? L"NM" : Tr(L"км");
+        const double width = DisplayWidthNM() * (unit == DistUnit::NM ? 1.0 : 1.852);
         switch (sub)
         {
+        case SubZoom:
+            for (int w : kZoomWidths)
+                valued(std::to_wstring(w) + L" " + unitName, BarAction::ZoomSpan, w, fabs(width - w) < w * 0.03);
+            return rows;
         case SubLabelKind:
             command(L"По позиции", ".formular auto", mark(m_formularKindSetting == FormularKindSetting::Auto));
             command(L"РДЦ (Контроль)", ".formular ctr", mark(m_formularKindSetting == FormularKindSetting::Ctr));
@@ -217,6 +375,7 @@ std::vector<CGalaxyATMSystemRadarScreen::BarMenuRow> CGalaxyATMSystemRadarScreen
         default:
             break;
         }
+        submenu(Tr(L"Масштаб: ") + std::to_wstring((int)lround(width)) + L" " + unitName, SubZoom, true);
         command(L"Показывать метки", ".formular", mark(m_formularsVisible));
         submenu(Tr(L"Вид метки"), SubLabelKind);
         submenu(Tr(L"Шрифт метки"), SubFontSize);
@@ -229,6 +388,7 @@ std::vector<CGalaxyATMSystemRadarScreen::BarMenuRow> CGalaxyATMSystemRadarScreen
         add(Tr(L"Вектор по плану"), BarAction::VecPlan, mark(m_vecByPlan));
         add(Tr(L"Высота на векторе"), BarAction::VecLevel, mark(m_vecShowLevel));
         break;
+    }
 
     case MenuMap:
         command(L"SIGMET", ".sigmet", mark(m_sigmetsVisible));
@@ -397,6 +557,8 @@ void CGalaxyATMSystemRadarScreen::RunBarMenuItem(int index, bool inSub)
     }
 
     Log::Info("menu", Narrow(kMenuBarItems[m_barMenu]) + ": " + Narrow(row.label.c_str()));
+    // Where a value typed in by hand is asked for: over the row that opened the submenu.
+    const RECT editAt = m_barSub >= 0 && m_barSub < (int)m_barRowRects.size() ? m_barRowRects[m_barSub] : m_barMenuArea;
     if (row.check == MenuCheck::None)
         CloseBarMenu();
 
@@ -430,6 +592,90 @@ void CGalaxyATMSystemRadarScreen::RunBarMenuItem(int index, bool inSub)
     case BarAction::GsUnit:       plugin->SetUnitGs((GsUnit)row.value);     break;
     case BarAction::DistUnit:     plugin->SetUnitDist((DistUnit)row.value); break;
     case BarAction::AltFilter:    plugin->SetAltFilterEnabled(!plugin->AltFilterEnabled()); break;
+    case BarAction::UnitPreset:
+        if (row.value >= 0 && row.value < (int)_countof(kUnitPresets))
+        {
+            const UnitPreset& p = kUnitPresets[row.value];
+            plugin->SetUnitAlt(p.alt);
+            plugin->SetUnitVs(p.vs);
+            plugin->SetUnitGs(p.gs);
+            plugin->SetUnitDist(p.dist);
+        }
+        break;
+    case BarAction::AltFilterFrom:     plugin->SetAltFilterFromFL(row.value); break;
+    case BarAction::AltFilterTo:       plugin->SetAltFilterToFL(row.value);   break;
+    case BarAction::AltFilterFromEdit: OpenAltFilterPicker(editAt, true);     break;
+    case BarAction::AltFilterToEdit:   OpenAltFilterPicker(editAt, false);    break;
+    case BarAction::CodeAll:      m_codeAll = !m_codeAll;               break;
+    case BarAction::CodeBp:       m_codeBp = !m_codeBp;                 break;
+    case BarAction::CodeExtra:    m_codeExtra = !m_codeExtra;           break;
+    case BarAction::CodeFilterEdit:
+        GetPlugIn()->OpenPopupEdit(editAt, FN_CODE_FILTER, Narrow(m_codeFilter).c_str());
+        break;
+    case BarAction::PanelCollapse: m_collapsed = !m_collapsed;          break;
+    case BarAction::ShowSettings:
+        SayCurrentSettings();
+        break;
+    case BarAction::ZoomSpan:
+    {
+        const double widthNM = DisplayWidthNM();
+        const double wantNM = plugin->UnitDist() == DistUnit::NM ? row.value : row.value / 1.852;
+        if (widthNM > 0.0)
+            ZoomToSpanNM(DisplaySpanNM() * wantNM / widthNM);
+        SyncSliderFromZoom();
+        break;
+    }
+    case BarAction::ResetWindows:
+        ResetWindowPositions();
+        break;
+    case BarAction::ExportSettings:
+    {
+        const std::wstring path = SettingsFilePath();
+        Say(plugin, L"Настройки", ExportSettings(path) ? Tr(L"настройки сохранены: ") + path
+            : Tr(L"не удалось записать ") + path);
+        break;
+    }
+    case BarAction::ImportSettings:
+    {
+        const std::wstring path = SettingsFilePath();
+        const int found = ImportSettings(path);
+        Say(plugin, L"Настройки", found < 0 ? Tr(L"не удалось прочитать ") + path
+            : found == 0 ? Tr(L"в файле нет настроек: ") + path
+            : Tr(L"настройки загружены: ") + std::to_wstring(found));
+        break;
+    }
+    case BarAction::OpenSettingsFile:
+    {
+        const std::wstring path = SettingsFilePath();
+        ShellExecuteW(NULL, L"open", L"notepad.exe", (L"\"" + path + L"\"").c_str(), NULL, SW_SHOWNORMAL);
+        break;
+    }
+    case BarAction::ResetSettings:
+        ApplyDefaultSettings();
+        plugin->ResetDisplaySettings();
+        m_rcScroll = m_rcScrollMine = 0;
+        m_rulerButtonDown = false;
+        if (!m_sigmetsVisible)
+            m_sigmetInfoIndex = -1;
+        if (!m_zonesVisible)
+            m_zoneInfoIndex = -1;
+        m_kfTick = 0;
+        Say(plugin, L"Настройки", Tr(L"настройки сброшены"));
+        break;
+    case BarAction::ForgetLogin:
+        plugin->SaveIdentity(CGalaxyATMSystemPlugin::SavedLogin());
+        for (std::wstring& value : m_loginValues)
+            value.clear();
+        Say(plugin, L"Настройки", Tr(L"сохранённый вход удалён"));
+        break;
+    case BarAction::OpenConfigFile:
+    {
+        // A .json often has nothing to open it with; Notepad always does.
+        const std::wstring& path = plugin->GetConfig().ConfigPath();
+        if (!path.empty() && (INT_PTR)ShellExecuteW(NULL, L"open", path.c_str(), NULL, NULL, SW_SHOWNORMAL) <= 32)
+            ShellExecuteW(NULL, L"open", L"notepad.exe", (L"\"" + path + L"\"").c_str(), NULL, SW_SHOWNORMAL);
+        break;
+    }
     case BarAction::Measure:
         if (!m_rulerArmed && !m_rulerPlacing)
             m_rulerPressPending = true;
@@ -509,6 +755,54 @@ void CGalaxyATMSystemRadarScreen::RunBarMenuItem(int index, bool inSub)
     }
     m_panelDirty = true;
     RequestRefresh();
+}
+
+// Настройки › Показать текущие настройки: everything the menus set, into the
+// message window.
+void CGalaxyATMSystemRadarScreen::SayCurrentSettings()
+{
+    CGalaxyATMSystemPlugin* plugin = Plugin();
+    const wchar_t* const sender = L"Настройки";
+    const wchar_t* const on = Tr(L"вкл");
+    const wchar_t* const off = Tr(L"выкл");
+
+    Say(plugin, sender, Tr(L"Язык: ") + std::wstring(Lang::English() ? L"English" : L"Русский"));
+    Say(plugin, sender, Tr(L"Единицы: высота ") + AltUnitName(plugin->UnitAlt())
+        + Tr(L", вертикальная скорость ") + Tr(plugin->UnitVs() == VsUnit::FtMin ? L"Футы в минуту" : L"Метры в секунду")
+        + Tr(L", путевая скорость ") + Tr(plugin->UnitGs() == GsUnit::Knots ? L"Узлы" : L"Километры в час")
+        + Tr(L", расстояние ") + Tr(plugin->UnitDist() == DistUnit::NM ? L"Морские мили" : L"Километры"));
+    Say(plugin, sender, std::wstring(Tr(L"Фильтр высот: ")) + (plugin->AltFilterEnabled() ? on : off) + L", "
+        + FlText(plugin->AltFilterFromFL()) + L"-" + FlText(plugin->AltFilterToFL()));
+    Say(plugin, sender, std::wstring(Tr(L"Метки: ")) + (m_formularsVisible ? on : off) + L", "
+        + Tr(kFormularKindLabels[(int)m_formularKindSetting]) + Tr(L", шрифт ") + std::to_wstring(plugin->TagFontSize())
+        + Tr(L", строк ") + std::to_wstring(m_osLines) + Tr(L", скорость ") + YesNo(m_osSpeed));
+    std::wstring vector = m_vecTimeEnabled ? Tr(L"по времени ") + std::to_wstring(m_vecTimeMin) + Tr(L" мин")
+        : m_vecDistEnabled ? Tr(L"по расстоянию ") + std::to_wstring(m_vecDistKm) + Tr(L" км") : std::wstring(off);
+    Say(plugin, sender, Tr(L"Вектор: ") + vector + Tr(L", по плану ") + YesNo(m_vecByPlan)
+        + Tr(L", высота ") + YesNo(m_vecShowLevel));
+    Say(plugin, sender, std::wstring(L"SIGMET ") + (m_sigmetsVisible ? on : off) + Tr(L", зоны ") + (m_zonesVisible ? on : off)
+        + L", STCA " + (m_stcaOn && plugin->GetConfig().StcaEnabled() ? on : off)
+        + Tr(L", пеленгатор ") + (m_rdfVisible ? on : off));
+    Say(plugin, sender, std::wstring(Tr(L"Коды: ВСЕ ")) + YesNo(m_codeAll) + Tr(L", БП ") + YesNo(m_codeBp)
+        + Tr(L", ВВ1 ") + YesNo(m_codeExtra) + (m_codeFilter.empty() ? std::wstring() : L" (" + m_codeFilter + L")"));
+    const wchar_t* button = m_rulerButton == VK_XBUTTON1 ? L"1" : m_rulerButton == VK_XBUTTON2 ? L"2" : off;
+    Say(plugin, sender, Tr(L"Боковая кнопка линейки: ") + std::wstring(button));
+    Say(plugin, sender, std::wstring(Tr(L"Список РЦ: ")) + (m_rcOpen ? on : off) + Tr(L", масштаб ") + std::to_wstring(m_rcScale) + L" %");
+}
+
+// Настройки › Окна › Вернуть окна на место: every window back where it first opens,
+// the sector list back onto the radar.
+void CGalaxyATMSystemRadarScreen::ResetWindowPositions()
+{
+    m_rcPositioned = m_atisPositioned = m_atisLetterPositioned = false;
+    m_collapsedShift = { 0, 0 };
+    if (m_rcFloating)
+    {
+        m_rcFloating = false;
+        m_rcEntry.Close();
+        m_rcFloat.Hide();
+    }
+    Log::Info("menu", "windows back to their places");
 }
 
 void CGalaxyATMSystemRadarScreen::DrawBarMenu(HDC hDC)

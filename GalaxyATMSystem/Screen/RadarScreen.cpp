@@ -39,13 +39,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_timerStartTick = 0;
     m_timerElapsedMs = 0;
 
-    m_vecDistEnabled = false;
-    m_vecDistKm = 10;
-    m_vecTimeEnabled = true;
-    m_vecTimeMin = 2;
-    m_vecByPlan = false;
-    m_vecShowLevel = false;
-
     m_openDropdown = DropdownKind::None;
     m_dropdownListRect = { 0, 0, 0, 0 };
     m_vecDistFieldRect = { 0, 0, 0, 0 };
@@ -55,12 +48,8 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rulerFont = NULL;
     m_rulerFontSource = NULL;
 
-    m_osLines = 3;
-    m_osSpeed = true;
     m_osFontFieldRect = { 0, 0, 0, 0 };
 
-    m_formularsVisible = true;
-    m_formularKindSetting = FormularKindSetting::Auto;
     m_formularFont = NULL;
     m_formularFontSize = 0;
     m_hdgDragging = false;
@@ -71,9 +60,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_hdgDragCancelled = false;
     m_hdgReleaseTicks = 0;
 
-    m_codeAll = false;
-    m_codeBp = false;
-    m_codeExtra = false;
     m_vvGain = 35;
     m_vvDragging = false;
     m_vvSliderRect = { 0, 0, 0, 0 };
@@ -88,9 +74,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rcScrollMine = 0;
     m_rcPane[0] = m_rcPane[1] = { 0, 0, 0, 0 };
     m_rcPaneRows[0] = m_rcPaneRows[1] = 0;
-    m_rcSortKey = 1;
-    m_rcSortAsc = true;
-    m_rcScale = 40;
     m_rcResizing = false;
     m_rcResizeGrab = 0;
     m_rcFont = NULL;
@@ -98,8 +81,6 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_rcRowFont = NULL;
     m_rcCellFont = NULL;
     m_rcFontScale = 0;
-    m_rcFilterBefore = -1;
-    m_rcFilterAfter = -1;
     m_rcFloating = false;
     m_rcFloatPos = { 0, 0 };
     m_rcDragView = NULL;
@@ -115,24 +96,23 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
     m_atisArea = { 0, 0, 0, 0 };
     m_atisPositioned = false;
 
-    m_sigmetsVisible = true;
     m_sigmetInfoIndex = -1;
     m_sigmetInfoAt = { 0, 0 };
     m_sigmetInfoHeld = false;
     m_sigmetInfoWait = 0;
 
-    m_zonesVisible = (g_plugin != NULL) ? g_plugin->GetConfig().ZonesEnabled() : true;
     m_zoneInfoIndex = -1;
     m_zoneInfoAt = { 0, 0 };
     m_zoneInfoHeld = false;
     m_zoneInfoWait = 0;
     m_areaShiftDown = false;
 
-    m_rulerButton = VK_XBUTTON2;
     m_rulerButtonDown = false;
     m_rulerPressPending = false;
     m_rulerArmed = false;
     m_rulerPlacing = false;
+
+    ApplyDefaultSettings();
 
     UINT_PTR id = SetTimer(NULL, 0, 1000, [](HWND, UINT, UINT_PTR idEvent, DWORD)
         {
@@ -161,6 +141,42 @@ CGalaxyATMSystemRadarScreen::CGalaxyATMSystemRadarScreen()
         });
     g_pollTimers[pollId] = this;
     m_pollTimerId = pollId;
+}
+
+// What a new screen starts with, and what Настройки › Сбросить настройки goes back
+// to. Units, altitude filter and font live in the plugin, shared by every screen, so
+// a new screen leaves them as they are; the menu resets those too.
+void CGalaxyATMSystemRadarScreen::ApplyDefaultSettings()
+{
+    m_vecDistEnabled = false;
+    m_vecDistKm = 10;
+    m_vecTimeEnabled = true;
+    m_vecTimeMin = 2;
+    m_vecByPlan = false;
+    m_vecShowLevel = false;
+
+    m_osLines = 3;
+    m_osSpeed = true;
+    m_formularsVisible = true;
+    m_formularKindSetting = FormularKindSetting::Auto;
+
+    m_codeAll = false;
+    m_codeBp = false;
+    m_codeExtra = false;
+    m_codeFilter.clear();
+
+    m_rcSortKey = 1;
+    m_rcSortAsc = true;
+    m_rcScale = 40;
+    m_rcFilterCallsign.clear();
+    m_rcFilterBefore = -1;
+    m_rcFilterAfter = -1;
+
+    m_sigmetsVisible = true;
+    m_zonesVisible = (g_plugin != NULL) ? g_plugin->GetConfig().ZonesEnabled() : true;
+    m_stcaOn = true;
+    m_rdfVisible = true;
+    m_rulerButton = VK_XBUTTON2;
 }
 
 void CGalaxyATMSystemRadarScreen::Shutdown()

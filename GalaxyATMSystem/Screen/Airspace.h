@@ -387,8 +387,105 @@ namespace Galaxy
         return false;
     }
 
-    inline const ULONGLONG kZoneExitRecheckMs = 2000;
     inline const size_t kZoneExitMemoLimit = 1024;
+    // The airspace part of a sector name: "ULLL·ULLI CTA 2·030·060" gives "ULLI CTA 2".
+    inline std::string SectorTitle(const AirspaceSector& s)
+    {
+        const size_t from = s.name.find('\xB7');
+        if (from == std::string::npos)
+            return s.name;
+        const size_t to = s.name.find('\xB7', from + 1);
+        return s.name.substr(from + 1, to == std::string::npos ? std::string::npos : to - from - 1);
+    }
+
+    // Area control and oceanic sectors; the rest (CTR, CTA, TMA, GND ...) belong to an aerodrome.
+    inline bool EnRouteSector(const AirspaceSector& s)
+    {
+        const std::string title = SectorTitle(s);
+        return title.find("ACC") != std::string::npos || title.find("OCA") != std::string::npos;
+    }
+
+    // The home aerodrome sectors around a destination at `at`: those over it, and the others
+    // of the same aerodrome by the first word of their name ("ULLI CTA 2 EAST" with "ULLI CTR").
+    inline const std::vector<const AirspaceSector*>& AerodromeArea(const std::string& ades, const CPosition& at)
+    {
+        static std::map<std::string, std::vector<const AirspaceSector*>> known;
+        auto found = known.find(ades);
+        if (found != known.end())
+            return found->second;
+
+        const auto key = [](const AirspaceSector& s)
+        {
+            const std::string title = SectorTitle(s);
+            return title.substr(0, title.find(' '));
+        };
+        std::vector<const AirspaceSector*>& area = known[ades];
+        std::set<std::string> keys;
+        for (const AirspaceSector& s : AirspaceSectors())
+            if (s.home && !s.owners.empty() && !EnRouteSector(s) && InsideRing(s.ring, at))
+            {
+                area.push_back(&s);
+                keys.insert(key(s));
+            }
+        for (const AirspaceSector& s : AirspaceSectors())
+            if (s.home && !s.owners.empty() && !EnRouteSector(s) && keys.count(key(s)) != 0
+                && std::find(area.begin(), area.end(), &s) == area.end())
+                area.push_back(&s);
+
+        std::string names;
+        for (const AirspaceSector* s : area)
+            names += (names.empty() ? "" : ", ") + SectorTitle(*s);
+        Log::Info("airspace", "aerodrome area of " + ades + ": " + (names.empty() ? std::string("none") : names));
+        return area;
+    }
+
+    inline const ULONGLONG kAerodromeAreaRecheckMs = 2000;
+
+    // The flight is inside the aerodrome area of the aerodrome it lands at, within the levels
+    // of one of its sectors. It is handed to the aerodrome there and has no exit point left.
+    inline bool InDestinationAerodromeArea(CFlightPlan& fp)
+    {
+        struct Memo
+        {
+            bool inside;
+            ULONGLONG tick;
+        };
+        static std::map<std::string, Memo> memo;
+        const ULONGLONG now = GetTickCount64();
+        const std::string callsign = fp.GetCallsign();
+        auto known = memo.find(callsign);
+        if (known != memo.end() && now - known->second.tick < kAerodromeAreaRecheckMs)
+            return known->second.inside;
+        if (memo.size() > kZoneExitMemoLimit)
+            memo.clear();
+
+        bool inside = false;
+        const char* adesName = fp.GetFlightPlanData().GetDestination();
+        const std::string ades = adesName != NULL ? adesName : "";
+        CFlightPlanExtractedRoute route = fp.GetExtractedRoute();
+        const int last = route.GetPointsNumber() - 1;
+        const char* lastName = last >= 0 ? route.GetPointName(last) : NULL;
+        CRadarTarget rt = fp.GetCorrelatedRadarTarget();
+        CRadarTargetPositionData pos = rt.IsValid() ? rt.GetPosition() : fp.GetFPTrackPosition();
+        if (!ades.empty() && lastName != NULL && _stricmp(lastName, ades.c_str()) == 0 && pos.IsValid())
+        {
+            const CPosition p = pos.GetPosition();
+            const int altFt = pos.GetFlightLevel();
+            for (const AirspaceSector* s : AerodromeArea(ades, route.GetPointPosition(last)))
+                if (altFt >= s->bottomFt && altFt < s->topFt && InsideRing(s->ring, p))
+                {
+                    inside = true;
+                    break;
+                }
+        }
+        if (known != memo.end() && known->second.inside != inside)
+            Log::Info("formular", callsign + (inside ? ": in the aerodrome area of " + ades + " - no exit point"
+                : ": out of the aerodrome area of " + ades));
+        memo[callsign] = { inside, now };
+        return inside;
+    }
+
+    inline const ULONGLONG kZoneExitRecheckMs = 2000;
 
     inline std::string ZoneExitPoint(CFlightPlan& fp, CPlugIn* plugin, bool& neverInHomeZone)
     {
@@ -427,19 +524,38 @@ namespace Galaxy
                 return profileFt > 0 ? profileFt : altFt;
             };
 
+            const auto staffed = [&](const AirspaceSector& s) { return online.count(ZoneHolder(s, online)) != 0; };
+
             int from = max(0, route.GetPointsCalculatedIndex());
             const AirspaceSector* zone = here;
-            if (!here->home)
+            if (!here->home || !staffed(*here))
             {
+                // A foreign or unstaffed zone has no exit of its own: take the next staffed home zone
+                // ahead, or the first home zone when none along the route is staffed.
+                const AirspaceSector* firstHome = here->home ? here : NULL;
+                int firstHomeAt = from;
                 zone = NULL;
-                for (; from < route.GetPointsNumber(); from++)
+                for (int i = from; i < route.GetPointsNumber(); i++)
                 {
-                    const AirspaceSector* ahead = SectorAt(route.GetPointPosition(from), levelOver(from));
-                    if (ahead != NULL && ahead->home)
+                    const AirspaceSector* ahead = SectorAt(route.GetPointPosition(i), levelOver(i));
+                    if (ahead == NULL || !ahead->home)
+                        continue;
+                    if (firstHome == NULL)
+                    {
+                        firstHome = ahead;
+                        firstHomeAt = i;
+                    }
+                    if (staffed(*ahead))
                     {
                         zone = ahead;
+                        from = i;
                         break;
                     }
+                }
+                if (zone == NULL)
+                {
+                    zone = firstHome;
+                    from = firstHomeAt;
                 }
                 neverInHomeZone = zone == NULL;
             }

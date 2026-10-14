@@ -18,7 +18,6 @@
 #include "UserName.h"
 #include "TextEntry.h"
 #include "FloatWindow.h"
-#include "RadarCursor.h"
 #include "Apw.h"
 #include "Squawk.h"
 #include "Rdf.h"
@@ -185,6 +184,19 @@ public:
 
     int  TagFontSize() const  { return m_tagFontSize; }
     void SetTagFontSize(int s) { m_tagFontSize = s; }
+
+    // Units, altitude filter and label font back to what the plugin starts with.
+    void ResetDisplaySettings()
+    {
+        m_altFilterEnabled = false;
+        m_altFilterFromFL = 100;
+        m_altFilterToFL = 600;
+        m_tagFontSize = 10;
+        m_unitAlt = AltUnit::FL;
+        m_unitVs = VsUnit::FtMin;
+        m_unitGs = GsUnit::Knots;
+        m_unitDist = DistUnit::Km;
+    }
 
     const ApwResult& ApwForTarget(EuroScopePlugIn::CRadarTarget& target) { return ApwFor(target); }
     std::string AssignedSquawkFor(const EuroScopePlugIn::CFlightPlan& fp) const { return AssignedSquawk(fp); }

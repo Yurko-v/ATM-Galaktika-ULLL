@@ -209,6 +209,7 @@ private:
     void SetVvGainFrom(POINT pt);
 
     void   ApplyZoomFromSlider();
+    void   ZoomToSpanNM(double spanNM);
     void   SyncSliderFromZoom();
     double DisplaySpanNM();
     double DisplayWidthNM();
@@ -655,10 +656,14 @@ private:
     // The drop-down menus of the menu bar (Настройки, Вид, Карта ...). Rows are built
     // afresh for drawing and for a click, so both always see the same list.
     enum class BarAction { None, Command, VecTime, VecDist, VecPlan, VecLevel, VecTimeMin, VecDistKm,
-                           FontSize, OsLines, OsSpeed, AltUnit, VsUnit, GsUnit, DistUnit, AltFilter,
+                           FontSize, OsLines, OsSpeed, AltUnit, VsUnit, GsUnit, DistUnit, UnitPreset, AltFilter,
+                           AltFilterFrom, AltFilterTo, AltFilterFromEdit, AltFilterToEdit,
+                           CodeAll, CodeBp, CodeExtra, CodeFilterEdit, PanelCollapse,
+                           ShowSettings, ResetSettings, ForgetLogin, OpenConfigFile,
                            Measure, ClearRoutes, ClearSketches, ClearTexts, ResetRcFilters, RcSort, RcSortAsc,
                            AtisText, AtisAirport, FetchAll, FetchMetar, FetchSigmet, FetchAtis, FetchAup, FetchNotam,
-                           ShowCommands, ShowAbout, OpenLog, OpenFolder };
+                           ShowCommands, ShowAbout, OpenLog, OpenFolder,
+                           ZoomSpan, ResetWindows, ExportSettings, ImportSettings, OpenSettingsFile };
     struct BarMenuRow
     {
         std::wstring label;
@@ -687,6 +692,14 @@ private:
     void RunBarMenuItem(int row, bool inSub);
     void DrawBarMenu(HDC hDC);
     void TickBarMenu();
+    void SayCurrentSettings();
+    void ApplyDefaultSettings();
+    void ResetWindowPositions();
+    struct SavedSetting { std::string key, description, value; };
+    std::vector<SavedSetting> CurrentSettings();
+    void ApplySettings(const std::function<const char*(const char*)>& get);
+    bool ExportSettings(const std::wstring& path);
+    int  ImportSettings(const std::wstring& path);
     void OpenMapMenu(POINT at, HWND view);
     void CloseMapMenu();
     bool MapMenuItemEnabled(MapMenuItem item);

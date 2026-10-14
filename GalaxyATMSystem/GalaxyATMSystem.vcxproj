@@ -121,7 +121,6 @@
     <ClInclude Include="Rdf.h" />
     <ClInclude Include="Stca.h" />
     <ClInclude Include="TextEntry.h" />
-    <ClInclude Include="RadarCursor.h" />
     <ClInclude Include="FloatWindow.h" />
     <ClInclude Include="GalaxyATMSystem.h" />
     <ClInclude Include="Core\Base.h" />
@@ -161,7 +160,6 @@
     <ClCompile Include="Rdf.cpp" />
     <ClCompile Include="Stca.cpp" />
     <ClCompile Include="TextEntry.cpp" />
-    <ClCompile Include="RadarCursor.cpp" />
     <ClCompile Include="FloatWindow.cpp" />
     <ClCompile Include="Plugin\Feeds.cpp" />
     <ClCompile Include="Plugin\FlightPlanEvents.cpp" />

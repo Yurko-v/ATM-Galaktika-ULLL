@@ -678,6 +678,12 @@ double CGalaxyATMSystemRadarScreen::DisplayWidthNM()
 
 void CGalaxyATMSystemRadarScreen::ApplyZoomFromSlider()
 {
+    ZoomToSpanNM(GainToSpanNM(m_vvGain));
+}
+
+// Zooms about the centre of the view until it is `spanNM` from bottom to top.
+void CGalaxyATMSystemRadarScreen::ZoomToSpanNM(double spanNM)
+{
     CPosition leftDown, rightUp;
     GetDisplayArea(&leftDown, &rightUp);
 
@@ -685,7 +691,7 @@ void CGalaxyATMSystemRadarScreen::ApplyZoomFromSlider()
     if (current <= 0.0)
         return;
 
-    double k = GainToSpanNM(m_vvGain) / current;
+    double k = max(kZoomMinSpanNM, min(kZoomMaxSpanNM, spanNM)) / current;
     if (k <= 0.0 || fabs(k - 1.0) < 0.005)
         return;
 

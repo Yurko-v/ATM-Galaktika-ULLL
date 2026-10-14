@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "Screen/ScreenCommon.h"
 
+#include <fstream>
+
 using namespace Galaxy;
 
 void CGalaxyATMSystemRadarScreen::OnAsrContentToBeClosed(void)
@@ -8,67 +10,81 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentToBeClosed(void)
     delete this;
 }
 
-void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
+// Everything the screen keeps between sessions: written to the ASR by EuroScope, and to
+// a file by Настройки › Файл настроек, so a setup can be carried to another profile.
+std::vector<CGalaxyATMSystemRadarScreen::SavedSetting> CGalaxyATMSystemRadarScreen::CurrentSettings()
 {
+    std::vector<SavedSetting> out;
+    auto put = [&out](const char* key, const char* description, const char* value)
+    {
+        out.push_back({ key, description, value });
+    };
     char buf[64];
     sprintf_s(buf, "%d", m_visible ? 1 : 0);
-    SaveDataToAsr("PanelVisible", "ULLL panel visible", buf);
+    put("PanelVisible", "ULLL panel visible", buf);
 
     sprintf_s(buf, "%d", m_collapsed ? 1 : 0);
-    SaveDataToAsr("PanelCollapsed", "ULLL panel collapsed", buf);
+    put("PanelCollapsed", "ULLL panel collapsed", buf);
 
     sprintf_s(buf, "%d,%d,%d,%d,%d,%d", m_vecDistEnabled ? 1 : 0, m_vecDistKm,
         m_vecTimeEnabled ? 1 : 0, m_vecTimeMin, m_vecByPlan ? 1 : 0, m_vecShowLevel ? 1 : 0);
-    SaveDataToAsr("Vectors", "distEnabled,distKm,timeEnabled,timeMin,byPlan,showLevel", buf);
+    put("Vectors", "distEnabled,distKm,timeEnabled,timeMin,byPlan,showLevel", buf);
 
     sprintf_s(buf, "%d,%d,%d,%d", (int)Plugin()->UnitAlt(), (int)Plugin()->UnitVs(),
         (int)Plugin()->UnitGs(), (int)Plugin()->UnitDist());
-    SaveDataToAsr("Units", "alt,vs,gs,dist", buf);
+    put("Units", "alt,vs,gs,dist", buf);
 
     sprintf_s(buf, "%d,%d,%d", Plugin()->AltFilterEnabled() ? 1 : 0,
         Plugin()->AltFilterFromFL(), Plugin()->AltFilterToFL());
-    SaveDataToAsr("AltFilter", "enabled,fromFL,toFL", buf);
+    put("AltFilter", "enabled,fromFL,toFL", buf);
 
     sprintf_s(buf, "%d,%d,%d", m_osLines, m_osSpeed ? 1 : 0, Plugin()->TagFontSize());
-    SaveDataToAsr("Os", "lines,speed,fontSize", buf);
+    put("Os", "lines,speed,fontSize", buf);
 
-    SaveDataToAsr("FormularKind", "формуляр: auto (по позиции), ctr, app, twr",
+    put("FormularKind", "формуляр: auto (по позиции), ctr, app, twr",
         kFormularKindNames[(int)m_formularKindSetting]);
 
     sprintf_s(buf, "%d", m_rulerButton);
-    SaveDataToAsr("RulerButton", "side mouse button that arms the ruler (0 = off)", buf);
+    put("RulerButton", "side mouse button that arms the ruler (0 = off)", buf);
 
     sprintf_s(buf, "%d", m_sigmetsVisible ? 1 : 0);
-    SaveDataToAsr("Sigmets", "сигмет areas drawn on the radar", buf);
+    put("Sigmets", "сигмет areas drawn on the radar", buf);
 
     sprintf_s(buf, "%d", m_zonesVisible ? 1 : 0);
-    SaveDataToAsr("Zones", "запретные зоны drawn on the radar", buf);
+    put("Zones", "запретные зоны drawn on the radar", buf);
 
     sprintf_s(buf, "%d", m_atisLetterOpen ? 1 : 0);
-    SaveDataToAsr("AtisLetter", "АТИС letter window shown", buf);
+    put("AtisLetter", "АТИС letter window shown", buf);
 
     if (m_atisLetterPositioned)
     {
         sprintf_s(buf, "%d,%d", (int)m_atisLetterArea.left, (int)m_atisLetterArea.top);
-        SaveDataToAsr("AtisLetterPos", "АТИС letter window left,top", buf);
+        put("AtisLetterPos", "АТИС letter window left,top", buf);
     }
 
     sprintf_s(buf, "%d,%d,%d,%d", m_rcOpen ? 1 : 0, m_rcSortKey, m_rcSortAsc ? 1 : 0, m_rcScale);
-    SaveDataToAsr("SectorList", "open,sortKey,sortAscending,scalePercent", buf);
+    put("SectorList", "open,sortKey,sortAscending,scalePercent", buf);
 
     sprintf_s(buf, "%d,%d,%s", m_rcFilterBefore, m_rcFilterAfter, Narrow(m_rcFilterCallsign).c_str());
-    SaveDataToAsr("SectorListFilter", "minutesBefore,minutesAfter (-1 = no limit),callsign", buf);
+    put("SectorListFilter", "minutesBefore,minutesAfter (-1 = no limit),callsign", buf);
 
     sprintf_s(buf, "%d,%ld,%ld", m_rcFloating ? 1 : 0, m_rcFloatPos.x, m_rcFloatPos.y);
-    SaveDataToAsr("SectorListOutside", "outside EuroScope,screenX,screenY", buf);
+    put("SectorListOutside", "outside EuroScope,screenX,screenY", buf);
 
     sprintf_s(buf, "%d,%d,%d,%d", m_codeAll ? 1 : 0, m_codeBp ? 1 : 0,
         m_codeExtra ? 1 : 0, m_vvGain);
-    SaveDataToAsr("CodeBlock", "all,bp,extra,gain", buf);
+    put("CodeBlock", "all,bp,extra,gain", buf);
 
-    SaveDataToAsr("CodeFilter", "ВВ1 code filter", Narrow(m_codeFilter).c_str());
+    put("CodeFilter", "ВВ1 code filter", Narrow(m_codeFilter).c_str());
 
-    SaveDataToAsr("Language", "plugin language: rus, eng", Lang::Name(Lang::Current()));
+    put("Language", "plugin language: rus, eng", Lang::Name(Lang::Current()));
+    return out;
+}
+
+void CGalaxyATMSystemRadarScreen::OnAsrContentToBeSaved(void)
+{
+    for (const SavedSetting& s : CurrentSettings())
+        SaveDataToAsr(s.key.c_str(), s.description.c_str(), s.value.c_str());
 }
 
 void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
@@ -77,16 +93,22 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
     if (!Loaded)
         return;
     AirspaceSectors();
+    ApplySettings([this](const char* key) { return GetDataFromAsr(key); });
+}
 
-    const char* vis = GetDataFromAsr("PanelVisible");
+// Takes what `get` has for each key of CurrentSettings; a key it returns NULL for keeps
+// its value.
+void CGalaxyATMSystemRadarScreen::ApplySettings(const std::function<const char*(const char*)>& get)
+{
+    const char* vis = get("PanelVisible");
     if (vis != NULL)
         m_visible = (atoi(vis) != 0);
 
-    const char* collapsed = GetDataFromAsr("PanelCollapsed");
+    const char* collapsed = get("PanelCollapsed");
     if (collapsed != NULL)
         m_collapsed = (atoi(collapsed) != 0);
 
-    const char* vec = GetDataFromAsr("Vectors");
+    const char* vec = get("Vectors");
     if (vec != NULL)
     {
         int de = 0, dk = 0, te = 0, tm = 0, bp = 0, sl = 0;
@@ -103,7 +125,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* units = GetDataFromAsr("Units");
+    const char* units = get("Units");
     if (units != NULL)
     {
         int a = 0, v = 0, g = 0, d = 0;
@@ -120,7 +142,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* altFilter = GetDataFromAsr("AltFilter");
+    const char* altFilter = get("AltFilter");
     if (altFilter != NULL)
     {
         int en = 0, from = 0, to = 0;
@@ -132,7 +154,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* os = GetDataFromAsr("Os");
+    const char* os = get("Os");
     if (os != NULL)
     {
         int lines = 0, speed = 0, size = 0;
@@ -146,7 +168,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* formularKind = GetDataFromAsr("FormularKind");
+    const char* formularKind = get("FormularKind");
     if (formularKind != NULL)
     {
         for (int i = 0; i < (int)_countof(kFormularKindNames); i++)
@@ -154,7 +176,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
                 m_formularKindSetting = (FormularKindSetting)i;
     }
 
-    const char* codes = GetDataFromAsr("CodeBlock");
+    const char* codes = get("CodeBlock");
     if (codes != NULL)
     {
         int all = 0, bp = 0, extra = 0, gain = 0;
@@ -167,7 +189,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* rulerBtn = GetDataFromAsr("RulerButton");
+    const char* rulerBtn = get("RulerButton");
     if (rulerBtn != NULL)
     {
         int vk = atoi(rulerBtn);
@@ -175,19 +197,19 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
             m_rulerButton = vk;
     }
 
-    const char* sigmets = GetDataFromAsr("Sigmets");
+    const char* sigmets = get("Sigmets");
     if (sigmets != NULL)
         m_sigmetsVisible = (atoi(sigmets) != 0);
 
-    const char* zones = GetDataFromAsr("Zones");
+    const char* zones = get("Zones");
     if (zones != NULL)
         m_zonesVisible = (atoi(zones) != 0);
 
-    const char* atisLetter = GetDataFromAsr("AtisLetter");
+    const char* atisLetter = get("AtisLetter");
     if (atisLetter != NULL)
         m_atisLetterOpen = (atoi(atisLetter) != 0);
 
-    const char* atisLetterPos = GetDataFromAsr("AtisLetterPos");
+    const char* atisLetterPos = get("AtisLetterPos");
     int atisX = 0, atisY = 0;
     if (atisLetterPos != NULL && sscanf_s(atisLetterPos, "%d,%d", &atisX, &atisY) == 2)
     {
@@ -195,17 +217,17 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         m_atisLetterPositioned = true;
     }
 
-    const char* codeFilter = GetDataFromAsr("CodeFilter");
+    const char* codeFilter = get("CodeFilter");
     if (codeFilter != NULL)
         m_codeFilter = Widen(codeFilter);
 
-    const char* language = GetDataFromAsr("Language");
+    const char* language = get("Language");
     if (language != NULL && strcmp(language, Lang::Name(Lang::Id::En)) == 0)
         Lang::Set(Lang::Id::En);
     else if (language != NULL && strcmp(language, Lang::Name(Lang::Id::Ru)) == 0)
         Lang::Set(Lang::Id::Ru);
 
-    const char* rc = GetDataFromAsr("SectorList");
+    const char* rc = get("SectorList");
     if (rc != NULL)
     {
         int open = 0, key = 0, asc = 1, scale = m_rcScale;
@@ -218,7 +240,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* rcFilter = GetDataFromAsr("SectorListFilter");
+    const char* rcFilter = get("SectorListFilter");
     if (rcFilter != NULL)
     {
         int before = -1, after = -1;
@@ -231,7 +253,7 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
         }
     }
 
-    const char* rcOutside = GetDataFromAsr("SectorListOutside");
+    const char* rcOutside = get("SectorListOutside");
     if (rcOutside != NULL)
     {
         int outside = 0;
@@ -242,4 +264,50 @@ void CGalaxyATMSystemRadarScreen::OnAsrContentLoaded(bool Loaded)
             m_rcFloatPos = { x, y };
         }
     }
+}
+
+// The file is the ASR's own key and value per line, each under its description.
+bool CGalaxyATMSystemRadarScreen::ExportSettings(const std::wstring& path)
+{
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file)
+        return false;
+    file << "; Galaxy ATM System " << CGalaxyATMSystemPlugin::Version() << " settings\r\n";
+    for (const SavedSetting& s : CurrentSettings())
+        file << "\r\n; " << s.description << "\r\n" << s.key << "=" << s.value << "\r\n";
+    return (bool)file;
+}
+
+// How many settings the file had; -1 when it cannot be read.
+int CGalaxyATMSystemRadarScreen::ImportSettings(const std::wstring& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+        return -1;
+    std::map<std::string, std::string> values;
+    std::string line;
+    while (std::getline(file, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        const size_t eq = line.find('=');
+        if (line.empty() || line[0] == ';' || eq == std::string::npos || eq == 0)
+            continue;
+        values[line.substr(0, eq)] = line.substr(eq + 1);
+    }
+
+    int found = 0;
+    for (const SavedSetting& s : CurrentSettings())
+        found += values.count(s.key) ? 1 : 0;
+    if (found == 0)
+        return 0;
+    ApplySettings([&values](const char* key) -> const char*
+    {
+        auto it = values.find(key);
+        return it == values.end() ? NULL : it->second.c_str();
+    });
+    if (!m_rcFloating)
+        m_rcFloat.Hide();
+    m_panelDirty = true;
+    return found;
 }

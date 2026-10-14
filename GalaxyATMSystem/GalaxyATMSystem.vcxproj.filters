@@ -75,9 +75,6 @@
     <ClInclude Include="TextEntry.h">
       <Filter>Modules</Filter>
     </ClInclude>
-    <ClInclude Include="RadarCursor.h">
-      <Filter>Modules</Filter>
-    </ClInclude>
     <ClInclude Include="FloatWindow.h">
       <Filter>Modules</Filter>
     </ClInclude>
@@ -178,9 +175,6 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="TextEntry.cpp">
-      <Filter>Modules</Filter>
-    </ClCompile>
-    <ClCompile Include="RadarCursor.cpp">
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="FloatWindow.cpp">

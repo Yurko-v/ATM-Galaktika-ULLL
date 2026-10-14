@@ -24,7 +24,6 @@ void __declspec(dllexport) EuroScopePlugInExit(void)
     for (CGalaxyATMSystemRadarScreen* screen : screens)
         screen->Shutdown();
     CGalaxyATMSystemRadarScreen::ReleaseWheelHook();
-    RadarCursor::DetachAll();
     FloatWindow::ReleaseClass();
     delete g_plugin;
     g_plugin = NULL;
