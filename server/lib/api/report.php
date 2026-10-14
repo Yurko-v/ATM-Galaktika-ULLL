@@ -25,8 +25,11 @@ if ($callsign === null || $position === null || $code === null) {
 
 $cid = require_ksa_caller($position);
 
-// 2000, 7000, emergencies and the like belong to nobody.
-if (in_array($code, app_config()['reserved'], true)) {
+// 2000, 7000, emergencies and the like belong to nobody. Nor does a code from
+// outside the pool - one a neighbouring unit gave: it is not ours to hold, the
+// network snapshot keeps it from being handed out here anyway, and recording it
+// only filled the table with clashes between aircraft all over Europe.
+if (in_array($code, app_config()['reserved'], true) || !in_array($code, pool_codes(), true)) {
     json_out(200, ['status' => 'ignored']);
 }
 

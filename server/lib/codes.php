@@ -49,6 +49,26 @@ function candidate_groups(string $position): array
     return $out;
 }
 
+// Every code the server hands out to anyone: all the positions' ranges and the
+// fallback, reserved codes left out. A code outside it is another unit's
+// business - the network snapshot already keeps it from being handed out here.
+function pool_codes(): array
+{
+    $config = app_config();
+    $reserved = array_flip($config['reserved']);
+    $out = [];
+    foreach (array_merge(array_column($config['ranges'], 'ranges'), [$config['fallback']]) as $ranges) {
+        foreach ($ranges as [$from, $to]) {
+            foreach (codes_in_range($from, $to) as $code) {
+                if (!isset($reserved[$code])) {
+                    $out[$code] = true;
+                }
+            }
+        }
+    }
+    return array_map('strval', array_keys($out));
+}
+
 function distance_km(float $lat1, float $lon1, float $lat2, float $lon2): float
 {
     $r = 6371.0;

@@ -63,6 +63,10 @@ return [
     // this long - room for a reconnect.
     'release_after_min' => 10,
 
+    // Days a given-back code stays in the table, to see who had what. The cron
+    // deletes older rows every minute.
+    'history_days' => 7,
+
     'vatsim_data_url' => 'https://data.vatsim.net/v3/vatsim-data.json',
 
 ];

@@ -17,6 +17,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require __DIR__ . '/../lib/bootstrap.php';
+require __DIR__ . '/../lib/codes.php';
 
 function fail(string $why): void
 {
@@ -104,8 +105,22 @@ $release = $pdo->prepare(
 $release->execute([(int)$config['release_after_min']]);
 $released = $release->rowCount();
 
-// A month of history is plenty to see what happened; the rest goes.
-$pdo->exec('DELETE FROM assignments WHERE released_at IS NOT NULL AND released_at < NOW() - INTERVAL 30 DAY');
+// Codes from outside the pool, active or not: what the plug-in used to report
+// of every code a neighbouring unit gave, and anything left behind by a range
+// since taken out of config.php. None of it was ever the pool's to hold.
+$purged = 0;
+$pool = pool_codes();
+if ($pool) {
+    $in = implode(',', array_fill(0, count($pool), '?'));
+    $st = $pdo->prepare("DELETE FROM assignments WHERE code NOT IN ($in)");
+    $st->execute($pool);
+    $purged += $st->rowCount();
+}
+
+// History is kept for history_days to see what happened; the rest goes.
+$st = $pdo->prepare('DELETE FROM assignments WHERE released_at IS NOT NULL AND released_at < NOW() - INTERVAL ? DAY');
+$st->execute([max(1, (int)($config['history_days'] ?? 7))]);
+$purged += $st->rowCount();
 
 sync_state_set('network_updated', gmdate('Y-m-d H:i:s', $feedTime));
 
@@ -115,4 +130,4 @@ $pdo->exec('DELETE FROM rate_limit WHERE window_start < NOW() - INTERVAL 1 HOUR'
 $pdo->commit();
 
 echo gmdate('Y-m-d H:i:s') . ' vatsim_sync: pilots=' . count($rows)
-    . ' controllers=' . count($controllers) . ' held=' . count($seen) . " released=$released" . PHP_EOL;
+    . ' controllers=' . count($controllers) . ' held=' . count($seen) . " released=$released purged=$purged" . PHP_EOL;

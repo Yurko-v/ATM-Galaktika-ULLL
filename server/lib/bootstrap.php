@@ -270,6 +270,17 @@ function require_ksa_caller(string $position): string
 
     $profile = ksa_profile($cid);
 
+    // A position just handed over: the snapshot can still name the controller
+    // who left it for a minute. One look at the feed before turning anyone away.
+    if ($profile === null || !rating_allows_ksa(profile_rating_id($profile))) {
+        refresh_controllers_if_due();
+        $fresh = caller_cid($position, true);
+        if ($fresh !== null && $fresh !== $cid) {
+            $cid = $fresh;
+            $profile = ksa_profile($cid);
+        }
+    }
+
     if ($profile === null || !rating_allows_ksa(profile_rating_id($profile))) {
         error_log(
             'squawk auth: ' . $position
