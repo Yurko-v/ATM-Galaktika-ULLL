@@ -136,6 +136,9 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
             else if (answer.error == "not_online")
                 text = Tr(L"сервер не видит ") + Widen(MyPosition().c_str())
                     + Tr(L" в сети VATSIM - если вы только что подключились, повторите через минуту");
+            else if (answer.error == "not_registered")
+                text = Tr(L"сервер видит на ") + Widen(MyPosition().c_str())
+                    + Tr(L" незарегистрированного диспетчера - если вы только что приняли позицию, повторите через минуту");
             else if (answer.error == "network_stale")
                 text = Tr(L"сервер не может связаться с VATSIM и не знает, кто запрашивает");
             else if (answer.error == "rate_limited")
@@ -164,6 +167,13 @@ void CGalaxyATMSystemPlugin::ApplySquawkAnswers()
         }
         if (answer.code == fp.GetControllerAssignedData().GetSquawk())
         {
+            // The server hands back the code the aircraft already holds - say so,
+            // or the click looks like it did nothing.
+            if (answer.byUser)
+                DisplayUserMessage("ULLL Squawk", answer.callsign.c_str(),
+                    Narrow(Tr(L"у борта уже код ") + Widen(answer.code.c_str())
+                        + Tr(L" - для другого выберите New code")).c_str(),
+                    true, true, false, false, false);
             SquawkDebugLine(Widen(answer.callsign.c_str()) + L": " + Widen(answer.code.c_str()) + Tr(L" уже в плане"));
             continue;
         }

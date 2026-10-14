@@ -441,6 +441,14 @@ void CGalaxyATMSystemPlugin::OnFlightPlanControllerAssignedDataUpdate(CFlightPla
     if (!IsSquawkCode(code) || !Unlocked() || !SquawkReady(false))
         return;
 
+    // Only a code typed here is ours to report: a tracked aircraft's code was
+    // set by whoever tracks it - their own plug-in reports it, or it is a
+    // neighbouring unit's code the server learns from the network anyway.
+    // Reporting those too flooded the server on every reconnect.
+    std::string tracker;
+    if (TrackedBySomeoneElse(FlightPlan, tracker))
+        return;
+
     auto held = m_squawk.Assignments();
     auto it = held->find(callsign);
     if (it != held->end() && it->second == code)

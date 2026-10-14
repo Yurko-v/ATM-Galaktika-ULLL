@@ -3,6 +3,7 @@
 #include "Net.h"
 #include "Json.h"
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <ctime>
@@ -167,16 +168,25 @@ void SquawkClient::Queue(Request request)
 {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_url.empty() || m_queue.size() >= kMaxQueue)
+        if (m_url.empty() || (m_queue.size() >= kMaxQueue && !request.byUser))
             return;
 
+        // Only another code request already waiting makes this one redundant -
+        // an automatic report queued for the same aircraft does not.
         if (request.kind == SquawkAnswer::Kind::Assign && !request.fresh
-            && m_pending.count(request.callsign) != 0)
+            && std::any_of(m_queue.begin(), m_queue.end(), [&](const Request& r) {
+                return r.kind == SquawkAnswer::Kind::Assign && r.callsign == request.callsign; }))
             return;
 
         m_errors.erase(request.callsign);
         m_pending[request.callsign]++;
-        m_queue.push_back(std::move(request));
+
+        // A click goes ahead of the automatic reports, so the controller is not
+        // left waiting behind a reconnect's worth of them.
+        auto at = m_queue.end();
+        if (request.byUser)
+            at = std::find_if(m_queue.begin(), m_queue.end(), [](const Request& r) { return !r.byUser; });
+        m_queue.insert(at, std::move(request));
     }
     m_wake.notify_all();
 }
