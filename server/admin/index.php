@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 require __DIR__ . '/../../lib/page.php';
+require __DIR__ . '/../../lib/launcher.php';
 
 const ADMIN_IDLE_SEC = 2 * 3600;
 const ADMIN_LOGIN_TRIES_PER_MIN = 5;
@@ -44,9 +45,46 @@ function current_engineer(): ?array
     return $engineer;
 }
 
+// Why an uploaded file did not arrive, for the engineer.
+function upload_error_text(int $error): string
+{
+    switch ($error) {
+        case UPLOAD_ERR_NO_FILE:
+            return 'Выберите файл.';
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:
+            return 'Файл больше, чем принимает сервер (upload_max_filesize = '
+                . ini_get('upload_max_filesize') . ').';
+        case UPLOAD_ERR_PARTIAL:
+            return 'Файл загрузился не полностью — попробуйте ещё раз.';
+        default:
+            return 'Сервер не смог принять файл (ошибка ' . $error . ') — подробности в журнале ошибок.';
+    }
+}
+
+// The release row by the id a form sent, or null.
+function launcher_release(int $id): ?array
+{
+    $st = db()->prepare(
+        'SELECT id, component, version, file, is_current
+         FROM launcher_releases
+         WHERE id = ?'
+    );
+    $st->execute([$id]);
+    $row = $st->fetch();
+    return $row === false ? null : $row;
+}
+
 start_page_session('galaxy_admin');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    // A body over post_max_size leaves $_POST empty, the token with it, and
+    // would otherwise read as a page that has gone stale.
+    if (!$_POST && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+        flash('error', 'Файл больше, чем принимает сервер (post_max_size = ' . ini_get('post_max_size') . ').');
+        back_to_page('#releases');
+    }
+
     $action = (string)($_POST['action'] ?? '');
 
     if (!csrf_ok()) {
@@ -110,6 +148,292 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     if ($engineer === null) {
         flash('error', 'Сеанс закончился — войдите снова.');
         back_to_page();
+    }
+
+    // ---- Launcher releases ------------------------------------------------
+    // The forms below carry no CID, so they are handled before the check on it
+    // further down.
+
+    if ($action === 'release_upload') {
+        $component = clean_launcher_component($_POST['component'] ?? '');
+        $version = clean_launcher_version($_POST['version'] ?? '');
+        $changelog = clean_text($_POST['changelog'] ?? '');
+        $makeCurrent = isset($_POST['make_current']);
+        $upload = $_FILES['file'] ?? null;
+
+        if ($component === null) {
+            flash('error', 'Выберите компонент.');
+            back_to_page('#releases');
+        }
+
+        if ($version === null) {
+            flash('error', 'Версия — латинские буквы, цифры, точка, дефис или подчёркивание, до 32 знаков: например 2026.10.17.');
+            back_to_page('#releases');
+        }
+
+        if (strlen($changelog) > 60000) {
+            flash('error', 'Ченджлог слишком длинный.');
+            back_to_page('#releases');
+        }
+
+        if (!is_array($upload) || !is_int($upload['error'] ?? null)) {
+            flash('error', upload_error_text(UPLOAD_ERR_NO_FILE));
+            back_to_page('#releases');
+        }
+
+        if ($upload['error'] !== UPLOAD_ERR_OK || !is_uploaded_file((string)$upload['tmp_name'])) {
+            flash('error', upload_error_text($upload['error'] === UPLOAD_ERR_OK ? UPLOAD_ERR_NO_FILE : $upload['error']));
+            back_to_page('#releases');
+        }
+
+        $ext = strtolower(pathinfo((string)$upload['name'], PATHINFO_EXTENSION));
+
+        if (!in_array($ext, LAUNCHER_EXTENSIONS, true)) {
+            flash('error', 'Принимаются только файлы .' . implode(' и .', LAUNCHER_EXTENSIONS) . '.');
+            back_to_page('#releases');
+        }
+
+        $tmp = (string)$upload['tmp_name'];
+        $size = (int)filesize($tmp);
+
+        if ($size <= 0) {
+            flash('error', 'Файл пустой.');
+            back_to_page('#releases');
+        }
+
+        $st = db()->prepare(
+            'SELECT id FROM launcher_releases WHERE component = ? AND version = ?'
+        );
+        $st->execute([$component, $version]);
+
+        if ($st->fetchColumn() !== false) {
+            flash('error', LAUNCHER_COMPONENTS[$component] . ' ' . $version . ' уже выложен — удалите его, чтобы залить заново, или поднимите версию.');
+            back_to_page('#releases');
+        }
+
+        $dir = launcher_files_dir();
+
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+
+        if (!is_dir($dir) || !is_writable($dir)) {
+            error_log('squawk admin: launcher files folder ' . $dir . ' is missing or not writable');
+            flash('error', 'Папка для файлов лаунчера недоступна для записи — подробности в журнале ошибок.');
+            back_to_page('#releases');
+        }
+
+        // The name is built here, never taken from the upload: the component
+        // and the version are both checked against fixed patterns above.
+        $file = $component . '-' . $version . '.' . $ext;
+        $path = $dir . '/' . $file;
+        $sha256 = hash_file('sha256', $tmp);
+
+        if (!is_string($sha256) || !move_uploaded_file($tmp, $path)) {
+            error_log('squawk admin: could not store launcher file ' . $path);
+            flash('error', 'Не удалось сохранить файл — подробности в журнале ошибок.');
+            back_to_page('#releases');
+        }
+
+        @chmod($path, 0644);
+
+        $pdo = db();
+
+        try {
+            $pdo->beginTransaction();
+
+            if ($makeCurrent) {
+                $pdo->prepare(
+                    'UPDATE launcher_releases SET is_current = 0 WHERE component = ?'
+                )->execute([$component]);
+            }
+
+            $pdo->prepare(
+                'INSERT INTO launcher_releases
+                    (component, version, file, sha256, size, changelog, created_at, is_current)
+                 VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)'
+            )->execute([
+                $component,
+                $version,
+                $file,
+                $sha256,
+                $size,
+                $changelog,
+                $makeCurrent ? 1 : 0,
+            ]);
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            // No row points at the file, so nothing would ever offer it.
+            @unlink($path);
+            throw $e;
+        }
+
+        error_log(
+            'squawk admin: ' . $engineer['cid'] . ' uploaded ' . $file
+            . ' (' . $size . ' bytes, sha256 ' . $sha256 . ')'
+            . ($makeCurrent ? ' as current' : '')
+        );
+
+        flash(
+            'ok',
+            'Выложен ' . LAUNCHER_COMPONENTS[$component] . ' ' . $version
+            . ' — ' . launcher_size_label($size) . ', sha256 ' . substr($sha256, 0, 12) . '…'
+            . ($makeCurrent ? ' Теперь это текущий выпуск.' : ' Текущим не сделан.')
+        );
+
+        back_to_page('#releases');
+    }
+
+    if ($action === 'release_current') {
+        $release = launcher_release((int)($_POST['id'] ?? 0));
+
+        if ($release === null) {
+            flash('error', 'Такого выпуска уже нет.');
+            back_to_page('#releases');
+        }
+
+        // One statement: this release on, every other of its component off.
+        db()->prepare(
+            'UPDATE launcher_releases SET is_current = (id = ?) WHERE component = ?'
+        )->execute([(int)$release['id'], $release['component']]);
+
+        error_log(
+            'squawk admin: ' . $engineer['cid'] . ' made ' . $release['file'] . ' current'
+        );
+
+        flash('ok', 'Текущий выпуск: ' . LAUNCHER_COMPONENTS[$release['component']] . ' ' . $release['version'] . '.');
+        back_to_page('#releases');
+    }
+
+    if ($action === 'release_delete') {
+        $release = launcher_release((int)($_POST['id'] ?? 0));
+
+        if ($release === null) {
+            flash('error', 'Такого выпуска уже нет.');
+            back_to_page('#releases');
+        }
+
+        db()->prepare('DELETE FROM launcher_releases WHERE id = ?')
+            ->execute([(int)$release['id']]);
+
+        $path = launcher_files_dir() . '/' . basename((string)$release['file']);
+
+        if (is_file($path)) {
+            @unlink($path);
+        }
+
+        error_log(
+            'squawk admin: ' . $engineer['cid'] . ' deleted ' . $release['file']
+        );
+
+        flash(
+            'ok',
+            'Удалён ' . LAUNCHER_COMPONENTS[$release['component']] . ' ' . $release['version'] . '.'
+            . ((int)$release['is_current'] === 1
+                ? ' Это был текущий выпуск — сделайте текущим другой, иначе лаунчер не увидит компонент.'
+                : '')
+        );
+
+        back_to_page('#releases');
+    }
+
+    // ---- Launcher news ----------------------------------------------------
+
+    if ($action === 'news_save') {
+        $id = (int)($_POST['id'] ?? 0);
+        $title = preg_replace('/\s+/u', ' ', clean_text($_POST['title'] ?? ''));
+        $body = clean_text($_POST['body'] ?? '');
+        $level = clean_news_level($_POST['level'] ?? '');
+        $pinned = isset($_POST['pinned']) ? 1 : 0;
+        $published = isset($_POST['published']) ? 1 : 0;
+        $back = $id > 0 ? '?news=' . $id . '#news' : '#news';
+
+        if ($title === null || $title === '' || mb_strlen($title, 'UTF-8') > 200) {
+            flash('error', 'Заголовок — от 1 до 200 знаков.');
+            back_to_page($back);
+        }
+
+        if ($body === '' || strlen($body) > 60000) {
+            flash('error', 'Текст новости пустой или слишком длинный.');
+            back_to_page($back);
+        }
+
+        if ($level === null) {
+            flash('error', 'Выберите тип новости.');
+            back_to_page($back);
+        }
+
+        if ($id > 0) {
+            // Looked up first: an UPDATE that changes nothing counts no rows
+            // either, and says nothing about whether the news is still there.
+            $st = db()->prepare('SELECT COUNT(*) FROM launcher_news WHERE id = ?');
+            $st->execute([$id]);
+
+            if ((int)$st->fetchColumn() === 0) {
+                flash('error', 'Такой новости уже нет.');
+                back_to_page('#news');
+            }
+
+            db()->prepare(
+                'UPDATE launcher_news
+                 SET title = ?, body = ?, level = ?, pinned = ?, published = ?
+                 WHERE id = ?'
+            )->execute([$title, $body, $level, $pinned, $published, $id]);
+
+            flash('ok', 'Новость сохранена.');
+        } else {
+            db()->prepare(
+                'INSERT INTO launcher_news (title, body, level, pinned, published, created_at)
+                 VALUES (?, ?, ?, ?, ?, NOW())'
+            )->execute([$title, $body, $level, $pinned, $published]);
+
+            flash('ok', $published ? 'Новость опубликована.' : 'Новость сохранена скрытой.');
+        }
+
+        error_log(
+            'squawk admin: ' . $engineer['cid'] . ' saved launcher news '
+            . ($id > 0 ? '#' . $id : '(new)')
+        );
+
+        back_to_page('#news');
+    }
+
+    if ($action === 'news_publish' || $action === 'news_pin') {
+        $column = $action === 'news_publish' ? 'published' : 'pinned';
+
+        $st = db()->prepare(
+            'UPDATE launcher_news SET ' . $column . ' = 1 - ' . $column . ' WHERE id = ?'
+        );
+        $st->execute([(int)($_POST['id'] ?? 0)]);
+
+        flash(
+            $st->rowCount() > 0 ? 'ok' : 'error',
+            $st->rowCount() > 0 ? 'Новость обновлена.' : 'Такой новости уже нет.'
+        );
+
+        back_to_page('#news');
+    }
+
+    if ($action === 'news_delete') {
+        $id = (int)($_POST['id'] ?? 0);
+
+        $st = db()->prepare('DELETE FROM launcher_news WHERE id = ?');
+        $st->execute([$id]);
+
+        flash(
+            'ok',
+            $st->rowCount() > 0 ? 'Новость удалена.' : 'Такой новости уже нет.'
+        );
+
+        error_log(
+            'squawk admin: ' . $engineer['cid'] . ' deleted launcher news #' . $id
+        );
+
+        back_to_page('#news');
     }
 
     $cid = trim((string)($_POST['cid'] ?? ''));
@@ -251,6 +575,41 @@ if ($engineer !== null) {
 
 $csrf = (string)$_SESSION['csrf'];
 $ratingOptions = ksa_rating_options();
+
+// The launcher's releases and news. A database the two tables have not been
+// added to yet still opens the page - with a note in place of both sections.
+$launcherReady = false;
+$releases = [];
+$news = [];
+$newsEdit = null;
+
+if ($engineer !== null) {
+    try {
+        $releases = db()->query(
+            'SELECT id, component, version, file, sha256, size, changelog, created_at, is_current
+             FROM launcher_releases
+             ORDER BY created_at DESC, id DESC'
+        )->fetchAll();
+
+        $news = db()->query(
+            'SELECT id, title, body, level, pinned, published, created_at, updated_at
+             FROM launcher_news
+             ORDER BY pinned DESC, created_at DESC, id DESC'
+        )->fetchAll();
+
+        $launcherReady = true;
+    } catch (PDOException $e) {
+        error_log('squawk admin: launcher tables unavailable - ' . $e->getMessage());
+    }
+
+    $editId = (int)($_GET['news'] ?? 0);
+
+    foreach ($news as $item) {
+        if ((int)$item['id'] === $editId) {
+            $newsEdit = $item;
+        }
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -393,6 +752,116 @@ $ratingOptions = ksa_rating_options();
             .user-row .actions .acts {
                 align-items: center;
             }
+
+            /* Launcher releases and news. */
+            .card {
+                scroll-margin-top: 24px;
+            }
+
+            .card h3 {
+                font-size: 18px;
+                font-weight: 500;
+                margin: 28px 0 16px;
+                color: var(--text-primary);
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 0 16px;
+            }
+
+            textarea {
+                display: block;
+                width: 100%;
+                min-height: 140px;
+                padding: 14px 22px;
+                font: inherit;
+                background: var(--background-section-light);
+                color: var(--text-primary);
+                border: 1px solid transparent;
+                border-radius: var(--radius-s);
+                resize: vertical;
+                transition: background-color .2s ease-in-out, border-color .2s ease-in-out;
+            }
+
+            textarea:hover {
+                background: var(--background-surface-accent);
+            }
+
+            textarea:focus {
+                outline: none;
+                background: var(--background-page);
+                border-color: var(--stroke-primary);
+                box-shadow: 0 0 0 3px rgba(129,144,168,.18);
+            }
+
+            input[type="file"] {
+                height: auto;
+                padding: 13px 22px;
+                cursor: pointer;
+            }
+
+            .check {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                margin: 0 20px 16px 22px;
+                color: var(--text-primary);
+                font-weight: 400;
+                font-size: 15px;
+                cursor: pointer;
+            }
+
+            .check input {
+                width: auto;
+                height: auto;
+            }
+
+            .form-actions {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 12px;
+                margin-top: 8px;
+            }
+
+            .mono {
+                font-family: ui-monospace, Consolas, monospace;
+                font-size: 13px;
+            }
+
+            details summary {
+                cursor: pointer;
+                color: var(--text-secondary);
+                font-size: 14px;
+            }
+
+            details pre {
+                max-width: 480px;
+                margin: 8px 0 0;
+                white-space: pre-wrap;
+                font: 13px/19px ui-monospace, Consolas, monospace;
+                color: var(--text-secondary);
+            }
+
+            .chip.warn {
+                background: rgba(255,204,0,.22);
+                color: var(--text-primary);
+            }
+
+            .chip.maint {
+                background: rgba(179,93,64,.12);
+                color: var(--text-error);
+            }
+
+            tr.is-hidden td {
+                opacity: .55;
+            }
+
+            tr.is-hidden td.actions {
+                opacity: 1;
+            }
         </style>
     </head>
     <body>
@@ -422,7 +891,10 @@ $ratingOptions = ksa_rating_options();
         <?php else: ?>
             <div class="shell">
                 <?= page_header(
-                    '<a class="nav-link" href="../register/">Страница регистрации</a>'
+                    '<a class="nav-link" href="#users">Пользователи</a>'
+                    . '<a class="nav-link" href="#releases">Выпуски</a>'
+                    . '<a class="nav-link" href="#news">Новости</a>'
+                    . '<a class="nav-link" href="../register/">Страница регистрации</a>'
                     . '<form method="post">'
                     . '<input type="hidden" name="action" value="logout">'
                     . '<input type="hidden" name="csrf" value="' . h($csrf) . '">'
@@ -439,7 +911,7 @@ $ratingOptions = ksa_rating_options();
                             <?= h($flash[1]) ?>
                         </div>
                     <?php endif; ?>
-                    <div class="card">
+                    <div class="card" id="users">
                         <div class="top">
                             <h2>Пользователи <span class="count"><?= count($rows) ?></span></h2>
                             <div class="search">
@@ -537,6 +1009,231 @@ $ratingOptions = ksa_rating_options();
                             </div>
                         <?php endif; ?>
                     </div>
+                    <?php if (!$launcherReady): ?>
+                        <div class="card" id="releases">
+                            <h2>Лаунчер</h2>
+                            <p class="empty" id="news">
+                                Таблиц лаунчера в базе ещё нет — импортируйте <span class="mono">schema.sql</span>
+                                ещё раз (README, «Лаунчер»): он добавит только недостающие таблицы.
+                            </p>
+                        </div>
+                    <?php else: ?>
+                        <div class="card" id="releases">
+                            <div class="top">
+                                <h2>Выпуски <span class="count"><?= count($releases) ?></span></h2>
+                            </div>
+                            <form method="post" enctype="multipart/form-data">
+                                <input type="hidden" name="action" value="release_upload">
+                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                <div class="grid">
+                                    <div class="field">
+                                        <label for="release-component">Компонент</label>
+                                        <select id="release-component" name="component" required>
+                                            <?php foreach (LAUNCHER_COMPONENTS as $component => $label): ?>
+                                                <option value="<?= h($component) ?>"><?= h($label) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <label for="release-version">Версия</label>
+                                        <input id="release-version" name="version" required maxlength="32" pattern="[0-9A-Za-z][0-9A-Za-z._\-]{0,31}" placeholder="<?= h(gmdate('Y.m.d')) ?>" autocomplete="off">
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="release-file">Файл (.<?= h(implode(', .', LAUNCHER_EXTENSIONS)) ?>)</label>
+                                    <input id="release-file" type="file" name="file" required accept=".<?= h(implode(',.', LAUNCHER_EXTENSIONS)) ?>">
+                                </div>
+                                <div class="field">
+                                    <label for="release-changelog">Ченджлог (Markdown)</label>
+                                    <textarea id="release-changelog" name="changelog" placeholder="- Что изменилось"></textarea>
+                                </div>
+                                <label class="check"><input type="checkbox" name="make_current" value="1" checked>Сразу сделать текущим</label>
+                                <div class="form-actions">
+                                    <button type="submit">Выложить</button>
+                                </div>
+                                <p class="hint">
+                                    sha256 и размер посчитает сервер. Файл сохранится как
+                                    <span class="mono">&lt;компонент&gt;-&lt;версия&gt;.&lt;расширение&gt;</span>
+                                    и будет доступен по адресу <span class="mono"><?= h(launcher_file_url('')) ?></span>…
+                                    Сервер принимает файлы до <?= h((string)ini_get('upload_max_filesize')) ?>.
+                                </p>
+                            </form>
+                            <?php if ($releases): ?>
+                                <h3>Все выпуски</h3>
+                                <div class="table-wrap">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Компонент</th>
+                                                <th>Версия</th>
+                                                <th>Файл</th>
+                                                <th>sha256</th>
+                                                <th>Выложен, UTC</th>
+                                                <th>Текущий</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($releases as $release): ?>
+                                                <?php $releaseName = LAUNCHER_COMPONENTS[$release['component']] . ' ' . $release['version']; ?>
+                                                <tr>
+                                                    <td><?= h(LAUNCHER_COMPONENTS[$release['component']]) ?></td>
+                                                    <td>
+                                                        <?= h($release['version']) ?>
+                                                        <?php if ($release['changelog'] !== ''): ?>
+                                                            <details>
+                                                                <summary>Ченджлог</summary>
+                                                                <pre><?= h($release['changelog']) ?></pre>
+                                                            </details>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                    <td>
+                                                        <a href="<?= h(launcher_file_url($release['file'])) ?>" rel="noopener"><?= h($release['file']) ?></a><br>
+                                                        <span class="hint"><?= h(launcher_size_label((int)$release['size'])) ?></span>
+                                                    </td>
+                                                    <td class="mono" title="<?= h($release['sha256']) ?>"><?= h(substr($release['sha256'], 0, 12)) ?>…</td>
+                                                    <td class="when"><?= h(substr((string)$release['created_at'], 0, 16)) ?></td>
+                                                    <td>
+                                                        <?php if ((int)$release['is_current'] === 1): ?>
+                                                            <span class="chip on">текущий</span>
+                                                        <?php else: ?>
+                                                            <span class="chip off">нет</span>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                    <td class="actions">
+                                                        <div class="acts">
+                                                            <?php if ((int)$release['is_current'] !== 1): ?>
+                                                                <form method="post">
+                                                                    <input type="hidden" name="action" value="release_current">
+                                                                    <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                                                    <input type="hidden" name="id" value="<?= h((string)$release['id']) ?>">
+                                                                    <button type="submit" class="small secondary">Сделать текущим</button>
+                                                                </form>
+                                                            <?php endif; ?>
+                                                            <form method="post" class="js-confirm" data-question="Удалить <?= h($releaseName) ?> вместе с файлом?<?= (int)$release['is_current'] === 1 ? ' Это текущий выпуск — лаунчер перестанет его видеть.' : '' ?>">
+                                                                <input type="hidden" name="action" value="release_delete">
+                                                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                                                <input type="hidden" name="id" value="<?= h((string)$release['id']) ?>">
+                                                                <button type="submit" class="small danger">Удалить</button>
+                                                            </form>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            <?php else: ?>
+                                <p class="hint">Пока ничего не выложено — лаунчер получит пустой список компонентов.</p>
+                            <?php endif; ?>
+                        </div>
+                        <div class="card" id="news">
+                            <div class="top">
+                                <h2>Новости <span class="count"><?= count($news) ?></span></h2>
+                            </div>
+                            <form method="post">
+                                <input type="hidden" name="action" value="news_save">
+                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                <input type="hidden" name="id" value="<?= h((string)($newsEdit['id'] ?? 0)) ?>">
+                                <?php if ($newsEdit !== null): ?>
+                                    <h3>Правка новости от <?= h(substr((string)$newsEdit['created_at'], 0, 16)) ?> UTC</h3>
+                                <?php endif; ?>
+                                <div class="grid">
+                                    <div class="field">
+                                        <label for="news-title">Заголовок</label>
+                                        <input id="news-title" name="title" required maxlength="200" value="<?= h($newsEdit['title'] ?? '') ?>" autocomplete="off">
+                                    </div>
+                                    <div class="field">
+                                        <label for="news-level">Тип</label>
+                                        <select id="news-level" name="level">
+                                            <?php foreach (LAUNCHER_NEWS_LEVELS as $level => $label): ?>
+                                                <option value="<?= h($level) ?>" <?= ($newsEdit['level'] ?? 'info') === $level ? 'selected' : '' ?>><?= h($label) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="news-body">Текст (Markdown)</label>
+                                    <textarea id="news-body" name="body" required><?= h($newsEdit['body'] ?? '') ?></textarea>
+                                </div>
+                                <label class="check"><input type="checkbox" name="published" value="1" <?= $newsEdit === null || (int)$newsEdit['published'] === 1 ? 'checked' : '' ?>>Опубликована</label>
+                                <label class="check"><input type="checkbox" name="pinned" value="1" <?= $newsEdit !== null && (int)$newsEdit['pinned'] === 1 ? 'checked' : '' ?>>Закреплена</label>
+                                <div class="form-actions">
+                                    <button type="submit"><?= $newsEdit === null ? 'Добавить' : 'Сохранить' ?></button>
+                                    <?php if ($newsEdit !== null): ?>
+                                        <a class="nav-link" href="?#news">Отмена</a>
+                                    <?php endif; ?>
+                                </div>
+                            </form>
+                            <?php if ($news): ?>
+                                <h3>Все новости</h3>
+                                <div class="table-wrap">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Заголовок</th>
+                                                <th>Тип</th>
+                                                <th>Создана, UTC</th>
+                                                <th>Видна</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($news as $item): ?>
+                                                <?php $isPublished = (int)$item['published'] === 1; ?>
+                                                <?php $isPinned = (int)$item['pinned'] === 1; ?>
+                                                <tr class="<?= $isPublished ? '' : 'is-hidden' ?>">
+                                                    <td>
+                                                        <?= $isPinned ? '<span class="chip on">закреплена</span> ' : '' ?><?= h($item['title']) ?>
+                                                        <details>
+                                                            <summary>Текст</summary>
+                                                            <pre><?= h($item['body']) ?></pre>
+                                                        </details>
+                                                    </td>
+                                                    <td>
+                                                        <span class="chip <?= $item['level'] === 'info' ? 'on' : h($item['level']) ?>"><?= h(LAUNCHER_NEWS_LEVELS[$item['level']] ?? $item['level']) ?></span>
+                                                    </td>
+                                                    <td class="when"><?= h(substr((string)$item['created_at'], 0, 16)) ?></td>
+                                                    <td>
+                                                        <?php if ($isPublished): ?>
+                                                            <span class="chip on">да</span>
+                                                        <?php else: ?>
+                                                            <span class="chip off">скрыта</span>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                    <td class="actions">
+                                                        <div class="acts">
+                                                            <a class="nav-link" href="?news=<?= h((string)$item['id']) ?>#news">Изменить</a>
+                                                            <form method="post">
+                                                                <input type="hidden" name="action" value="news_publish">
+                                                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                                                <input type="hidden" name="id" value="<?= h((string)$item['id']) ?>">
+                                                                <button type="submit" class="small secondary"><?= $isPublished ? 'Скрыть' : 'Показать' ?></button>
+                                                            </form>
+                                                            <form method="post">
+                                                                <input type="hidden" name="action" value="news_pin">
+                                                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                                                <input type="hidden" name="id" value="<?= h((string)$item['id']) ?>">
+                                                                <button type="submit" class="small secondary"><?= $isPinned ? 'Открепить' : 'Закрепить' ?></button>
+                                                            </form>
+                                                            <form method="post" class="js-confirm" data-question="Удалить новость «<?= h($item['title']) ?>»?">
+                                                                <input type="hidden" name="action" value="news_delete">
+                                                                <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+                                                                <input type="hidden" name="id" value="<?= h((string)$item['id']) ?>">
+                                                                <button type="submit" class="small danger">Удалить</button>
+                                                            </form>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            <?php else: ?>
+                                <p class="hint">Новостей пока нет.</p>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
                     <script>
                         document.querySelectorAll('.js-edit').forEach(function (button) {
                             button.addEventListener('click', function () {

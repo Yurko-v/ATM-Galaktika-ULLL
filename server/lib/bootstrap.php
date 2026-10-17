@@ -61,11 +61,13 @@ function db(): PDO
     return $pdo;
 }
 
-function json_out(int $status, array $body): void
+// $cache is the Cache-Control header: never cached, unless an endpoint whose
+// answer is the same for everyone says otherwise.
+function json_out(int $status, array $body, string $cache = 'no-store'): void
 {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store');
+    header('Cache-Control: ' . $cache);
     echo json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }

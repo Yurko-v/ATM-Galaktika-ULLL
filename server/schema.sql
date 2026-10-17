@@ -103,3 +103,40 @@ CREATE TABLE IF NOT EXISTS sync_state (
     value VARCHAR(64) NOT NULL,
     PRIMARY KEY (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- What the launcher can download: one row per uploaded file, put up from the
+-- admin page (lib/launcher.php). file is the name under launcher_files_dir,
+-- "<component>-<version>.<ext>"; sha256 and size are worked out by the server
+-- on upload. The row with is_current = 1 is the one api/launcher_manifest.php
+-- offers for its component - at most one per component, kept so by the admin
+-- page; a component without one is left out of the manifest.
+CREATE TABLE IF NOT EXISTS launcher_releases (
+    id         INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+    component  ENUM('plugin', 'fonts', 'launcher') NOT NULL,
+    version    VARCHAR(32)     NOT NULL,
+    file       VARCHAR(100)    NOT NULL,
+    sha256     CHAR(64)        NOT NULL,
+    size       BIGINT UNSIGNED NOT NULL,
+    changelog  TEXT            NOT NULL,
+    created_at DATETIME        NOT NULL,
+    is_current TINYINT(1)      NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_component_version (component, version),
+    KEY idx_current (is_current, component),
+    KEY idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- The launcher's news feed (api/launcher_news.php). body is Markdown, drawn by
+-- the launcher. Only published rows go out, pinned ones first.
+CREATE TABLE IF NOT EXISTS launcher_news (
+    id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    title      VARCHAR(200) NOT NULL,
+    body       TEXT         NOT NULL,
+    level      ENUM('info', 'warn', 'maint') NOT NULL DEFAULT 'info',
+    pinned     TINYINT(1)   NOT NULL DEFAULT 0,
+    published  TINYINT(1)   NOT NULL DEFAULT 1,
+    created_at DATETIME     NOT NULL,
+    updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_feed (published, pinned, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

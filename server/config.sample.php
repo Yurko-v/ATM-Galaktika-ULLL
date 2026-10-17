@@ -69,4 +69,20 @@ return [
 
     'vatsim_data_url' => 'https://data.vatsim.net/v3/vatsim-data.json',
 
+    // ---- Launcher (README, «Лаунчер») --------------------------------------
+    // Where the admin page puts the files it is given: public_html/launcher/files
+    // beside this config.php - the folder deploy.sh creates and never cleans.
+    'launcher_files_dir' => __DIR__ . '/public_html/launcher/files',
+
+    // The address those files are downloaded from. Empty: worked out from the
+    // request, http(s)://<this site>/launcher/files/. Set it only when they are
+    // served from somewhere else.
+    'launcher_files_url' => '',
+
+    // The controllers' manual the launcher links to; empty for none.
+    'launcher_manual_url' => '',
+
+    // Where the launcher fetches the sector from - it is not kept here.
+    'launcher_sector_page' => 'https://files.aero-nav.com/ULLL',
+
 ];
